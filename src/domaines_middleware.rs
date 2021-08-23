@@ -2,32 +2,23 @@
 //! Sous-domaines : Core.Backup, Core.CatalogueApplications, Core.MaitreDesComptes, Core.Pki, Core.Topologie
 
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
-use async_trait::async_trait;
 use futures::stream::FuturesUnordered;
-use lapin::message::Delivery;
-use log::{debug, error, info, warn};
-use mongodb::{bson::{doc, to_bson}, Client, Database};
-use serde_json::{json, Value};
-use tokio::{join, sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, sleep, timeout}, try_join};
-use tokio::task::JoinHandle;
+use log::{debug, error, warn};
+use tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
 use tokio_stream::StreamExt;
 
-use millegrilles::certificats::{EnveloppeCertificat, ValidateurX509};
-use millegrilles::configuration::charger_configuration_avec_db;
+use millegrilles::certificats::ValidateurX509;
 use millegrilles::constantes::*;
-use millegrilles::formatteur_messages::FormatteurMessage;
-use millegrilles::mongo_dao::{ChampIndex, IndexOptions, initialiser as initialiser_mongodb, MongoDao, MongoDaoImpl};
-use TypeMessageOut as TypeMessageIn;
+use millegrilles::mongo_dao::MongoDao;
 
-use millegrilles::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl};
+use millegrilles::generateur_messages::GenerateurMessages;
 use millegrilles::middleware::{EmetteurCertificat, preparer_middleware_pki};
-use millegrilles::rabbitmq_dao::{Callback, ConfigQueue, ConfigRoutingExchange, EventMq, executer_mq, QueueType, TypeMessageOut};
-use millegrilles::recepteur_messages::{ErreurVerification, MessageCertificat, MessageValide, MessageValideAction, recevoir_messages, TypeMessage};
+use millegrilles::rabbitmq_dao::{Callback, ConfigQueue, ConfigRoutingExchange, EventMq, QueueType};
+use millegrilles::recepteur_messages::TypeMessage;
 use crate::sousdomaine_pki::{consommer_messages as consommer_pki, preparer_index_mongodb as preparer_index_mongodb_pki};
 use millegrilles::transactions::resoumettre_transactions;
-use millegrilles::verificateur::{verifier_hachage, verifier_signature};
 
 const DUREE_ATTENTE: u64 = 20000;
 
@@ -44,7 +35,10 @@ pub async fn build() {
             // tx.blocking_send(event).expect("Event connexion MQ");
             let tx_ref = tx.clone();
             let _ = tokio::spawn(async move{
-                tx_ref.send(event).await;
+                match tx_ref.send(event).await {
+                    Ok(_) => (),
+                    Err(e) => error!("Erreur queuing via callback : {:?}", e)
+                }
             });
         }));
 
@@ -219,7 +213,7 @@ async fn entretien(middleware: Arc<impl GenerateurMessages + ValidateurX509 + Em
                 }
 
             },
-            Err(to) => {
+            Err(_) => {
                 debug!("Timeout, entretien est du");
             }
         }
@@ -234,12 +228,12 @@ async fn entretien(middleware: Arc<impl GenerateurMessages + ValidateurX509 + Em
         }
     }
 
-    panic!("Forcer fermeture");
+    // panic!("Forcer fermeture");
 
 }
 
 async fn consommer(
-    middleware: Arc<impl ValidateurX509 + GenerateurMessages + MongoDao>,
+    _middleware: Arc<impl ValidateurX509 + GenerateurMessages + MongoDao>,
     mut rx: Receiver<TypeMessage>,
     map_senders: HashMap<String, Sender<TypeMessage>>
 ) {
@@ -259,7 +253,7 @@ async fn consommer(
                     None => error!("Message de domaine inconnu {}, on le drop", m.domaine),
                 }
             },
-            TypeMessage::Certificat(m) => { /* Rien a faire */ },
+            TypeMessage::Certificat(_) => { /* Rien a faire */ },
         }
     }
 }

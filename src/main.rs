@@ -2,7 +2,7 @@ mod domaines_middleware;
 mod sousdomaine_pki;
 
 use crate::domaines_middleware::build;
-use log::{debug, error, info};
+use log::{info};
 
 fn main() {
     env_logger::init();

@@ -1,22 +1,20 @@
 use std::convert::TryFrom;
-use std::error::Error;
 use std::sync::Arc;
 
-use bson::{Bson, Document};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use bson::Document;
+use chrono::{DateTime, Utc};
 use log::{debug, error, info, warn};
-use mongodb::{bson::{doc, to_bson}, Client, Database};
-use serde_json::{json, Map, Value};
+use mongodb::bson::doc;
 use tokio::sync::mpsc::Receiver;
 
-use millegrilles::certificats::{charger_enveloppe, EnveloppeCertificat, ValidateurX509};
+use millegrilles::certificats::{charger_enveloppe, ValidateurX509};
 use millegrilles::constantes::*;
 use millegrilles::formatteur_messages::MessageJson;
 use millegrilles::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 
 use millegrilles::generateur_messages::GenerateurMessages;
 use millegrilles::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
-use millegrilles::rabbitmq_dao::{MessageOut, TypeMessageOut};
+use millegrilles::rabbitmq_dao::{TypeMessageOut};
 use millegrilles::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction, transmettre_evenement_persistance};
 
@@ -98,23 +96,23 @@ pub async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiv
     }
 }
 
-pub async fn consommer_triggers(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
-    while let Some(message) = rx.recv().await {
-        debug!("Message PKI recu : {:?}", message);
-
-        let resultat: Result<(), String> = match message {
-            TypeMessage::ValideAction(inner) => {warn!("Recu MessageValide sur thread triggers"); todo!()},
-            TypeMessage::Valide(_inner) => {warn!("Recu MessageValide sur thread triggers"); todo!()},
-            TypeMessage::Certificat(_inner) => {warn!("Recu MessageCertificat sur thread triggers"); todo!()},
-        };
-
-        match resultat {
-            Ok(()) => (),
-            Err(e) => warn!("Erreur traitement, message dropped : {}", e),
-        }
-
-    }
-}
+// pub async fn consommer_triggers(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
+//     while let Some(message) = rx.recv().await {
+//         debug!("Message PKI recu : {:?}", message);
+//
+//         let resultat: Result<(), String> = match message {
+//             TypeMessage::ValideAction(inner) => {warn!("Recu MessageValide sur thread triggers"); todo!()},
+//             TypeMessage::Valide(_inner) => {warn!("Recu MessageValide sur thread triggers"); todo!()},
+//             TypeMessage::Certificat(_inner) => {warn!("Recu MessageCertificat sur thread triggers"); todo!()},
+//         };
+//
+//         match resultat {
+//             Ok(()) => (),
+//             Err(e) => warn!("Erreur traitement, message dropped : {}", e),
+//         }
+//
+//     }
+// }
 
 async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), String> {
 
@@ -304,7 +302,7 @@ pub async fn sauvegarder_transaction(middleware: &(impl ValidateurX509 + Generat
     let db = middleware.get_database()?;
     let collection = db.collection("Pki.rust");
     match collection.insert_one(contenu_doc, None).await {
-        Ok(r) => {
+        Ok(_) => {
             debug!("Transaction sauvegardee dans collection de reception");
             Ok(())
         },
@@ -349,7 +347,7 @@ async fn traiter_commande_sauvegarder_certificat(middleware: &(impl ValidateurX5
     Ok(Some(MessageJson::ok()))
 }
 
-async fn traiter_transaction(domaine: &str, middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String> {
+async fn traiter_transaction(_domaine: &str, middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String> {
     let transaction = charger_transaction(middleware, &m).await?;
     debug!("Traitement transaction, chargee : {:?}", transaction);
 
@@ -375,13 +373,13 @@ async fn sauvegarder_certificat(middleware: &(impl ValidateurX509 + GenerateurMe
     let contenu = transaction.get_contenu();
     let certificat = match contenu.get_str("pem") {
         Ok(c) => Ok(c),
-        Err(e) => Err("Champ PEM manquant de transaction nouveauCertificat"),
+        Err(e) => Err(format!("Champ PEM manquant de transaction nouveauCertificat: {:?}", e)),
     }?;
 
     // Utiliser validateur.charger_enveloppe. Va automatiquement sauvegarder le certificat (si manquant).
     let enveloppe = match charger_enveloppe(certificat, Some(middleware.store())) {
         Ok(e) => Ok(e),
-        Err(e) => Err(format!("Erreur preparation enveloppe pour sauvegarder certificat")),
+        Err(e) => Err(format!("Erreur preparation enveloppe pour sauvegarder certificat : {:?}", e)),
     }?;
     let collection_doc_pki = middleware.get_collection(PKI_COLLECTION_CERTIFICAT_NOM)?;
     upsert_certificat(&enveloppe, collection_doc_pki, Some(false)).await?;
