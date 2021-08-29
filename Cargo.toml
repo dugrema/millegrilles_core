@@ -9,7 +9,7 @@ edition = "2018"
 log = { version = "0.4.14", features = ["max_level_debug", "release_max_level_info"] }
 env_logger = "0.9.0"
 
-millegrilles = { path = "millegrilles_common_rust" }
+millegrilles_common_rust = { path = "millegrilles_common_rust" }
 
 async-trait = "0.1.51"
 tokio = { version = "1.9.0", features = ["full"] }

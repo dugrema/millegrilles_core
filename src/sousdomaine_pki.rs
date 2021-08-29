@@ -7,16 +7,16 @@ use log::{debug, error, info, warn};
 use mongodb::bson::doc;
 use tokio::sync::mpsc::Receiver;
 
-use millegrilles::certificats::{charger_enveloppe, ValidateurX509};
-use millegrilles::constantes::*;
-use millegrilles::formatteur_messages::MessageJson;
-use millegrilles::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
+use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509};
+use millegrilles_common_rust::constantes::*;
+use millegrilles_common_rust::formatteur_messages::MessageJson;
+use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 
-use millegrilles::generateur_messages::GenerateurMessages;
-use millegrilles::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
-use millegrilles::rabbitmq_dao::{TypeMessageOut};
-use millegrilles::recepteur_messages::{MessageValideAction, TypeMessage};
-use millegrilles::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction, transmettre_evenement_persistance};
+use millegrilles_common_rust::generateur_messages::GenerateurMessages;
+use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
+use millegrilles_common_rust::rabbitmq_dao::{TypeMessageOut};
+use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
+use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction, transmettre_evenement_persistance};
 
 pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
 
@@ -73,6 +73,23 @@ pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), St
         PKI_COLLECTION_CERTIFICAT_NOM,
         champs_index_fingerprint_pk,
         Some(options_unique_fingerprint_pk)
+    ).await?;
+
+
+    // Index backup transactions
+    let options_unique_transactions = IndexOptions {
+        nom_index: Some(String::from("backup_transactions")),
+        unique: false
+    };
+    let champs_index_transactions = vec!(
+        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_TRANSACTION_TRAITEE), direction: 1},
+        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_BACKUP_FLAG), direction: 1},
+        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
+    );
+    middleware.create_index(
+        PKI_COLLECTION_TRANSACTIONS_NOM,
+        champs_index_transactions,
+        Some(options_unique_transactions)
     ).await?;
 
     Ok(())
