@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use futures::stream::FuturesUnordered;
-use log::{debug, error, warn};
+use log::{debug, info, error, warn};
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
@@ -18,6 +18,7 @@ use tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationT
 use tokio_stream::StreamExt;
 
 use crate::sousdomaine_pki::{consommer_messages as consommer_pki, preparer_index_mongodb as preparer_index_mongodb_pki};
+use tokio::time::sleep;
 
 const DUREE_ATTENTE: u64 = 20000;
 
@@ -211,7 +212,13 @@ where
                             }
                         }
                     },
-                    None => (),
+                    None => {
+                        warn!("MQ n'est pas disponible, on ferme");
+                        break
+                        // let duration = DurationTokio::from_millis(DUREE_ATTENTE);
+                        // let result = sleep(duration).await;
+                        // info!("MQ n'est pas disponible, tentative de reconnexion");
+                    },
                 }
 
             },

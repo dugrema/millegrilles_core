@@ -16,7 +16,7 @@ use millegrilles_common_rust::transactions::{charger_transaction, EtatTransactio
 use mongodb::bson::doc;
 use tokio::sync::mpsc::Receiver;
 use serde::Serialize;
-use serde_json::{Value, Map};
+use serde_json::{Value, Map, json};
 
 pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
 
@@ -392,8 +392,7 @@ where
     let enveloppe = middleware.charger_enveloppe(&pems_str, None).await?;
     debug!("Commande de sauvegarde de certificat {} traitee", enveloppe.fingerprint);
 
-    todo!("Fix OK")
-    // Ok(Some(MessageMilleGrille::ok()))
+    Ok(Some(json!({"ok": true})))
 }
 
 async fn traiter_transaction(_domaine: &str, middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String> {
