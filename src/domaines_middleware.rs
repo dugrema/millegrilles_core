@@ -6,19 +6,18 @@ use std::sync::{Arc, Mutex};
 
 use futures::stream::FuturesUnordered;
 use log::{debug, error, warn};
+use millegrilles_common_rust::certificats::ValidateurX509;
+use millegrilles_common_rust::constantes::*;
+use millegrilles_common_rust::generateur_messages::GenerateurMessages;
+use millegrilles_common_rust::middleware::{EmetteurCertificat, preparer_middleware_pki};
+use millegrilles_common_rust::mongo_dao::MongoDao;
+use millegrilles_common_rust::rabbitmq_dao::{Callback, ConfigQueue, ConfigRoutingExchange, EventMq, QueueType};
+use millegrilles_common_rust::recepteur_messages::TypeMessage;
+use millegrilles_common_rust::transactions::resoumettre_transactions;
 use tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
 use tokio_stream::StreamExt;
 
-use millegrilles_common_rust::certificats::ValidateurX509;
-use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::mongo_dao::MongoDao;
-
-use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{EmetteurCertificat, preparer_middleware_pki};
-use millegrilles_common_rust::rabbitmq_dao::{Callback, ConfigQueue, ConfigRoutingExchange, EventMq, QueueType};
-use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use crate::sousdomaine_pki::{consommer_messages as consommer_pki, preparer_index_mongodb as preparer_index_mongodb_pki};
-use millegrilles_common_rust::transactions::resoumettre_transactions;
 
 const DUREE_ATTENTE: u64 = 20000;
 
@@ -156,7 +155,10 @@ async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String
     Ok(())
 }
 
-async fn entretien(middleware: Arc<impl GenerateurMessages + ValidateurX509 + EmetteurCertificat + MongoDao>, mut rx: Receiver<EventMq>) {
+async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
+where
+    M: GenerateurMessages + ValidateurX509 + EmetteurCertificat + MongoDao,
+{
 
     let mut certificat_emis = false;
 

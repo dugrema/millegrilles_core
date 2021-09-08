@@ -4,19 +4,19 @@ use std::sync::Arc;
 use bson::Document;
 use chrono::{DateTime, Utc};
 use log::{debug, error, info, warn};
-use mongodb::bson::doc;
-use tokio::sync::mpsc::Receiver;
-
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509};
 use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::formatteur_messages::MessageJson;
-use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
-
+use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, MessageSerialise};
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
-use millegrilles_common_rust::rabbitmq_dao::{TypeMessageOut};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
+use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction, transmettre_evenement_persistance};
+use mongodb::bson::doc;
+use tokio::sync::mpsc::Receiver;
+use serde::Serialize;
+use serde_json::{Value, Map};
 
 pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
 
@@ -169,7 +169,10 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
     Ok(())
 }
 
-async fn consommer_requete(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), message: MessageValideAction) -> Result<Option<MessageJson>, String> {
+async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<Value>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
     debug!("Consommer requete : {:?}", &message.message);
     match message.domaine.as_str() {
         PKI_DOMAINE_NOM => match message.action.as_str() {
@@ -188,7 +191,10 @@ async fn consommer_requete(middleware: &(impl ValidateurX509 + GenerateurMessage
     }
 }
 
-async fn consommer_commande(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String>{
+async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
     debug!("Consommer commande : {:?}", &m.message);
     match m.action.as_str() {
         PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware, m).await,
@@ -196,26 +202,38 @@ async fn consommer_commande(middleware: &(impl ValidateurX509 + GenerateurMessag
     }
 }
 
-async fn consommer_transaction(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String> {
+async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
     debug!("Consommer transaction : {:?}", &m.message);
     match m.action.as_str() {
-        PKI_TRANSACTION_NOUVEAU_CERTIFICAT => sauvegarder_transaction(middleware, m).await,
+        PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
+            sauvegarder_transaction(middleware, m).await?;
+            Ok(None)
+        },
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action)),
     }
 }
 
-async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String> {
+async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<Value>, String> {
     debug!("Consommer evenement : {:?}", &m.message);
     match m.action.as_str() {
-        EVENEMENT_TRANSACTION_PERSISTEE => traiter_transaction(PKI_DOMAINE_NOM, middleware, m).await,
+        EVENEMENT_TRANSACTION_PERSISTEE => {
+            traiter_transaction(PKI_DOMAINE_NOM, middleware, m).await?;
+            Ok(None)
+        },
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action)),
     }
 }
 
-async fn requete_certificat(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String> {
+async fn requete_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
     let fingerprint = match m.domaine.as_str() {
         PKI_DOMAINE_NOM => {
-            match m.message.get_message().get(PKI_DOCUMENT_CHAMP_FINGERPRINT) {
+            match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT) {
                 Some(fp) => match fp.as_str() {
                     Some(fp) => Ok(fp),
                     None =>Err("Fingerprint manquant pour requete de certificat"),
@@ -234,13 +252,13 @@ async fn requete_certificat(middleware: &(impl ValidateurX509 + GenerateurMessag
 
     let reponse = formatter_message_certificat(enveloppe.as_ref());
     Ok(Some(reponse))
-    // repondre_enveloppe(middleware, &m, enveloppe.as_ref()).await;
-    //
-    // Ok(None)
 }
 
-async fn requete_certificat_par_pk(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String> {
-    let fingerprint_pk = match m.message.get_message().get(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK) {
+async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    let fingerprint_pk = match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK) {
         Some(inner) => match inner.as_str() {
             Some(inner) => Ok(inner),
             None => Err("Erreur fingerprint pk mauvais format"),
@@ -280,11 +298,23 @@ async fn requete_certificat_par_pk(middleware: &(impl ValidateurX509 + Generateu
     Ok(Some(reponse))
 }
 
-pub async fn sauvegarder_transaction(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String> {
-
+pub async fn sauvegarder_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<(), String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
     debug!("Sauvegarder transaction avec document {:?}", &m.message);
-    let message_copie = m.message.get_message().to_owned();
-    let mut contenu_doc = match Document::try_from(message_copie) {
+    let msg = m.message.get_msg();
+
+    // Serialiser le message en serde::Value - permet de convertir en Document bson
+    let val = match serde_json::to_value(msg) {
+        Ok(v) => match v.as_object() {
+            Some(o) => o.to_owned(),
+            None => Err(format!("Erreur sauvegarde transaction, mauvais type objet JSON"))?,
+        },
+        Err(e) => Err(format!("Erreur sauvegarde transaction, conversion : {:?}", e))?,
+    };
+
+    let mut contenu_doc = match Document::try_from(val) {
         Ok(c) => Ok(c),
         Err(e) => {
             error!("Erreur conversion json -> bson\n{:?}", e.to_string());
@@ -294,14 +324,13 @@ pub async fn sauvegarder_transaction(middleware: &(impl ValidateurX509 + Generat
     debug!("Transaction en format bson : {:?}", contenu_doc);
 
     let date_courante = chrono::Utc::now();
-    let entete = m.message.get_message().get("en-tete").expect("en-tete");
-    let uuid_transaction = entete.get("uuid_transaction").expect("uuid_transaction");
-    let estampille = entete.get("estampille").expect("estampille");
-    let estampille_date = lire_date_epoch(estampille.as_i64().expect("estampille date"));
+    let entete = &msg.entete;
+    let uuid_transaction = entete.uuid_transaction.as_str();
+    let estampille = &entete.estampille;
 
     let params_evenements = doc! {
         "document_persiste": date_courante,
-        "_estampille": estampille_date,
+        "_estampille": estampille.get_datetime(),
         "transaction_complete": false,
         "backup_flag": false,
         "signature_verifiee": date_courante,
@@ -331,18 +360,20 @@ pub async fn sauvegarder_transaction(middleware: &(impl ValidateurX509 + Generat
 
     transmettre_evenement_persistance(
         middleware,
-        uuid_transaction.as_str().expect("uuid_transaction str"),
+        uuid_transaction,
         "Core",
         m.reply_q.clone(),
         m.correlation_id.clone()
     ).await?;
 
-    Ok(None)
+    Ok(())
 }
 
-async fn traiter_commande_sauvegarder_certificat(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String> {
-
-    let pems = match m.message.get_message().get("chaine_pem") {
+async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    let pems = match m.message.get_msg().contenu.get("chaine_pem") {
         Some(c) => match c.as_array() {
             Some(c) => Ok(c),
             None => Err("chaine_pem n'est pas une array"),
@@ -361,10 +392,11 @@ async fn traiter_commande_sauvegarder_certificat(middleware: &(impl ValidateurX5
     let enveloppe = middleware.charger_enveloppe(&pems_str, None).await?;
     debug!("Commande de sauvegarde de certificat {} traitee", enveloppe.fingerprint);
 
-    Ok(Some(MessageJson::ok()))
+    todo!("Fix OK")
+    // Ok(Some(MessageMilleGrille::ok()))
 }
 
-async fn traiter_transaction(_domaine: &str, middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageJson>, String> {
+async fn traiter_transaction(_domaine: &str, middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String> {
     let transaction = charger_transaction(middleware, &m).await?;
     debug!("Traitement transaction, chargee : {:?}", transaction);
 
@@ -384,7 +416,7 @@ async fn traiter_transaction(_domaine: &str, middleware: &(impl ValidateurX509 +
     reponse
 }
 
-async fn sauvegarder_certificat(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), transaction: impl Transaction) -> Result<Option<MessageJson>, String> {
+async fn sauvegarder_certificat(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), transaction: impl Transaction) -> Result<Option<MessageMilleGrille>, String> {
     debug!("Sauvegarder certificat recu via transaction");
 
     let contenu = transaction.get_contenu();
