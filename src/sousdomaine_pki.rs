@@ -14,9 +14,13 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction, transmettre_evenement_persistance};
 use mongodb::bson::doc;
-use tokio::sync::mpsc::Receiver;
 use serde::Serialize;
-use serde_json::{Value, Map, json};
+use serde_json::{json, Map, Value};
+use tokio::sync::mpsc::Receiver;
+use tokio_stream::StreamExt;
+use std::error::Error;
+use mongodb::options::{FindOptions, Hint};
+use mongodb::Cursor;
 
 pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
 
@@ -103,6 +107,7 @@ pub async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiv
             TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
             TypeMessage::Valide(_inner) => {warn!("Recu MessageValide sur thread consommation"); todo!()},
             TypeMessage::Certificat(_inner) => {warn!("Recu MessageCertificat sur thread consommation"); todo!()},
+            TypeMessage::Regeneration => {continue}, // Rien a faire, on boucle
         };
 
         match resultat {
@@ -112,24 +117,6 @@ pub async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiv
 
     }
 }
-
-// pub async fn consommer_triggers(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
-//     while let Some(message) = rx.recv().await {
-//         debug!("Message PKI recu : {:?}", message);
-//
-//         let resultat: Result<(), String> = match message {
-//             TypeMessage::ValideAction(inner) => {warn!("Recu MessageValide sur thread triggers"); todo!()},
-//             TypeMessage::Valide(_inner) => {warn!("Recu MessageValide sur thread triggers"); todo!()},
-//             TypeMessage::Certificat(_inner) => {warn!("Recu MessageCertificat sur thread triggers"); todo!()},
-//         };
-//
-//         match resultat {
-//             Ok(()) => (),
-//             Err(e) => warn!("Erreur traitement, message dropped : {}", e),
-//         }
-//
-//     }
-// }
 
 async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), String> {
 
@@ -267,7 +254,7 @@ where
     }?;
 
     let db = middleware.get_database()?;
-    let collection = db.collection(PKI_COLLECTION_CERTIFICAT_NOM);
+    let collection = db.collection::<Document>(PKI_COLLECTION_CERTIFICAT_NOM);
     let filtre = doc! {
         PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: fingerprint_pk,
     };
@@ -395,7 +382,10 @@ where
     Ok(Some(json!({"ok": true})))
 }
 
-async fn traiter_transaction(_domaine: &str, middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String> {
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
     let transaction = charger_transaction(middleware, &m).await?;
     debug!("Traitement transaction, chargee : {:?}", transaction);
 
@@ -415,7 +405,10 @@ async fn traiter_transaction(_domaine: &str, middleware: &(impl ValidateurX509 +
     reponse
 }
 
-async fn sauvegarder_certificat(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), transaction: impl Transaction) -> Result<Option<MessageMilleGrille>, String> {
+async fn sauvegarder_certificat<M>(middleware: &M, transaction: impl Transaction) -> Result<Option<MessageMilleGrille>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
     debug!("Sauvegarder certificat recu via transaction");
 
     let contenu = transaction.get_contenu();
@@ -438,4 +431,111 @@ async fn sauvegarder_certificat(middleware: &(impl ValidateurX509 + GenerateurMe
 fn lire_date_epoch(date_epoch: i64) -> DateTime<Utc> {
     let date_naive = chrono::NaiveDateTime::from_timestamp(date_epoch, 0);
     DateTime::from_utc(date_naive, Utc)
+}
+
+async fn regenerer<M>(middleware: &M, nom_collection_transactions: &str, noms_collections_docs: Vec<String>) -> Result<(), Box<dyn Error>>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    // Supprimer contenu des collections
+    for nom_collection in noms_collections_docs {
+        let collection = middleware.get_collection(nom_collection.as_str())?;
+        let resultat_delete = collection.delete_many(doc! {}, None).await?;
+        debug!("Delete collection {} documents : {:?}", nom_collection, resultat_delete);
+    }
+
+    // Creer curseur sur les transactions en ordre de traitement
+    let mut resultat_transactions = {
+        let filtre = doc! {
+            TRANSACTION_CHAMP_TRANSACTION_TRAITEE: {"$exists": true},
+        };
+        let sort = doc! {
+            TRANSACTION_CHAMP_TRANSACTION_TRAITEE: 1,
+        };
+
+        let options = FindOptions::builder()
+            .sort(sort)
+            .hint(Hint::Name(String::from("backup_transactions")))
+            .build();
+
+        let collection_transactions = middleware.get_collection(nom_collection_transactions)?;
+        collection_transactions.find(filtre, options).await
+    }?;
+
+    middleware.set_regeneration(); // Desactiver emission de messages
+
+    // Executer toutes les transactions du curseur en ordre
+    let resultat = regenerer_transactions(middleware, &mut resultat_transactions).await;
+
+    middleware.reset_regeneration(); // Reactiver emission de messages
+
+    resultat
+}
+
+async fn regenerer_transactions<M>(middleware: &M, curseur: &mut Cursor<Document>) -> Result<(), Box<dyn Error>>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    while let Some(result) = curseur.next().await {
+        let transaction = result?;
+        debug!("Transaction a charger : {:?}", transaction);
+
+        let message = MessageSerialise::from_serializable(transaction)?;
+
+        let (uuid_transaction, domaine, action) = match message.get_entete().domaine.as_ref() {
+            Some(inner_d) => {
+                let entete = message.get_entete();
+                let uuid_transaction = entete.uuid_transaction.to_owned();
+                let mut d_split = inner_d.split(".");
+                let domaine: String = d_split.next().expect("Domaine manquant de la RK").into();
+                let action: String = d_split.last().expect("Action manquante de la RK").into();
+                (uuid_transaction, domaine, action)
+            },
+            None => {
+                warn!("Transaction sans domaine - invalide: {:?}", message);
+                continue  // Skip
+            }
+        };
+
+        let transaction_prep = MessageValideAction {
+            message,
+            reply_q: None,
+            correlation_id: Some(uuid_transaction.to_owned()),
+            routing_key: String::from("regeneration"),
+            domaine,
+            action,
+            exchange: None,
+            type_message: TypeMessageOut::Transaction,
+        };
+
+        traiter_transaction("Pki", middleware, transaction_prep).await?;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod test_integration {
+    // use millegrilles_common_rust::certificats::certificats_tests::{CERT_DOMAINES, CERT_FICHIERS, charger_enveloppe_privee_env, prep_enveloppe};
+    use millegrilles_common_rust::middleware::preparer_middleware_pki;
+    use crate::test_setup::setup;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn grouper_transactions() {
+        setup("grouper_transactions");
+        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+        futures.push(tokio::spawn(async move {
+
+            debug!("Test!!!");
+            let mut colls = Vec::new();
+            colls.push(String::from("Pki.rust/certificat"));
+            regenerer(middleware.as_ref(), "Pki.rust", colls)
+                .await.expect("regenerer");
+
+        }));
+        // Execution async du test
+        futures.next().await.expect("resultat").expect("ok");
+    }
 }

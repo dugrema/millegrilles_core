@@ -262,7 +262,8 @@ async fn consommer(
                     None => error!("Message de domaine inconnu {}, on le drop", m.domaine),
                 }
             },
-            TypeMessage::Certificat(_) => { /* Rien a faire */ },
+            TypeMessage::Certificat(_) => (),  // Rien a faire
+            TypeMessage::Regeneration => (),   // Rien a faire
         }
     }
 }
