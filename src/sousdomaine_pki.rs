@@ -1,6 +1,7 @@
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use async_trait::async_trait;
 use bson::Document;
 use chrono::{DateTime, Utc};
 use log::{debug, error, info, warn};
@@ -8,7 +9,7 @@ use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, MessageSerialise};
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
+use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat, regenerer};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -17,10 +18,10 @@ use mongodb::bson::doc;
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use tokio::sync::mpsc::Receiver;
-use tokio_stream::StreamExt;
 use std::error::Error;
 use mongodb::options::{FindOptions, Hint};
 use mongodb::Cursor;
+use millegrilles_common_rust::TraiterTransaction;
 
 pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
 
@@ -433,85 +434,13 @@ fn lire_date_epoch(date_epoch: i64) -> DateTime<Utc> {
     DateTime::from_utc(date_naive, Utc)
 }
 
-async fn regenerer<M>(middleware: &M, nom_collection_transactions: &str, noms_collections_docs: Vec<String>) -> Result<(), Box<dyn Error>>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    // Supprimer contenu des collections
-    for nom_collection in noms_collections_docs {
-        let collection = middleware.get_collection(nom_collection.as_str())?;
-        let resultat_delete = collection.delete_many(doc! {}, None).await?;
-        debug!("Delete collection {} documents : {:?}", nom_collection, resultat_delete);
+/// Implementer methode pour regenerer transactions
+struct TraiterTransactionPki {}
+#[async_trait]
+impl TraiterTransaction for TraiterTransactionPki {
+    async fn traiter_transaction<M>(&self, domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String> where M: ValidateurX509 + GenerateurMessages + MongoDao {
+        traiter_transaction(domaine, middleware, m).await
     }
-
-    // Creer curseur sur les transactions en ordre de traitement
-    let mut resultat_transactions = {
-        let filtre = doc! {
-            TRANSACTION_CHAMP_TRANSACTION_TRAITEE: {"$exists": true},
-        };
-        let sort = doc! {
-            TRANSACTION_CHAMP_TRANSACTION_TRAITEE: 1,
-        };
-
-        let options = FindOptions::builder()
-            .sort(sort)
-            .hint(Hint::Name(String::from("backup_transactions")))
-            .build();
-
-        let collection_transactions = middleware.get_collection(nom_collection_transactions)?;
-        collection_transactions.find(filtre, options).await
-    }?;
-
-    middleware.set_regeneration(); // Desactiver emission de messages
-
-    // Executer toutes les transactions du curseur en ordre
-    let resultat = regenerer_transactions(middleware, &mut resultat_transactions).await;
-
-    middleware.reset_regeneration(); // Reactiver emission de messages
-
-    resultat
-}
-
-async fn regenerer_transactions<M>(middleware: &M, curseur: &mut Cursor<Document>) -> Result<(), Box<dyn Error>>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
-{
-    while let Some(result) = curseur.next().await {
-        let transaction = result?;
-        debug!("Transaction a charger : {:?}", transaction);
-
-        let message = MessageSerialise::from_serializable(transaction)?;
-
-        let (uuid_transaction, domaine, action) = match message.get_entete().domaine.as_ref() {
-            Some(inner_d) => {
-                let entete = message.get_entete();
-                let uuid_transaction = entete.uuid_transaction.to_owned();
-                let mut d_split = inner_d.split(".");
-                let domaine: String = d_split.next().expect("Domaine manquant de la RK").into();
-                let action: String = d_split.last().expect("Action manquante de la RK").into();
-                (uuid_transaction, domaine, action)
-            },
-            None => {
-                warn!("Transaction sans domaine - invalide: {:?}", message);
-                continue  // Skip
-            }
-        };
-
-        let transaction_prep = MessageValideAction {
-            message,
-            reply_q: None,
-            correlation_id: Some(uuid_transaction.to_owned()),
-            routing_key: String::from("regeneration"),
-            domaine,
-            action,
-            exchange: None,
-            type_message: TypeMessageOut::Transaction,
-        };
-
-        traiter_transaction("Pki", middleware, transaction_prep).await?;
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -519,6 +448,8 @@ mod test_integration {
     // use millegrilles_common_rust::certificats::certificats_tests::{CERT_DOMAINES, CERT_FICHIERS, charger_enveloppe_privee_env, prep_enveloppe};
     use millegrilles_common_rust::middleware::preparer_middleware_pki;
     use crate::test_setup::setup;
+
+    use tokio_stream::StreamExt;
 
     use super::*;
 
@@ -528,11 +459,17 @@ mod test_integration {
         let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
         futures.push(tokio::spawn(async move {
 
-            debug!("Test!!!");
+            let debut_traitement = Utc::now();
+            debug!("Debut regeneration : {:?}", debut_traitement);
             let mut colls = Vec::new();
             colls.push(String::from("Pki.rust/certificat"));
-            regenerer(middleware.as_ref(), "Pki.rust", colls)
+            let processor = TraiterTransactionPki{};
+            regenerer(middleware.as_ref(), "Pki.rust", colls, &processor)
                 .await.expect("regenerer");
+
+            let fin_traitemeent = Utc::now();
+            let duree = fin_traitemeent - debut_traitement;
+            debug!("Duree regeneration : {:?}", duree);
 
         }));
         // Execution async du test
