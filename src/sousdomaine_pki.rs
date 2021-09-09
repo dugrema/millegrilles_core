@@ -21,7 +21,7 @@ use tokio::sync::mpsc::Receiver;
 use std::error::Error;
 use mongodb::options::{FindOptions, Hint};
 use mongodb::Cursor;
-use millegrilles_common_rust::TraiterTransaction;
+use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction};
 
 pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
 
@@ -197,7 +197,7 @@ where
     debug!("Consommer transaction : {:?}", &m.message);
     match m.action.as_str() {
         PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
-            sauvegarder_transaction(middleware, m).await?;
+            sauvegarder_transaction(middleware, m, "Pki", "Pki.rust").await?;
             Ok(None)
         },
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action)),
@@ -286,77 +286,6 @@ where
     Ok(Some(reponse))
 }
 
-pub async fn sauvegarder_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<(), String>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
-{
-    debug!("Sauvegarder transaction avec document {:?}", &m.message);
-    let msg = m.message.get_msg();
-
-    // Serialiser le message en serde::Value - permet de convertir en Document bson
-    let val = match serde_json::to_value(msg) {
-        Ok(v) => match v.as_object() {
-            Some(o) => o.to_owned(),
-            None => Err(format!("Erreur sauvegarde transaction, mauvais type objet JSON"))?,
-        },
-        Err(e) => Err(format!("Erreur sauvegarde transaction, conversion : {:?}", e))?,
-    };
-
-    let mut contenu_doc = match Document::try_from(val) {
-        Ok(c) => Ok(c),
-        Err(e) => {
-            error!("Erreur conversion json -> bson\n{:?}", e.to_string());
-            Err(format!("Erreur sauvegarde transaction, conversion json -> bson : {:?}", e))
-        },
-    }?;
-    debug!("Transaction en format bson : {:?}", contenu_doc);
-
-    let date_courante = chrono::Utc::now();
-    let entete = &msg.entete;
-    let uuid_transaction = entete.uuid_transaction.as_str();
-    let estampille = &entete.estampille;
-
-    let params_evenements = doc! {
-        "document_persiste": date_courante,
-        "_estampille": estampille.get_datetime(),
-        "transaction_complete": false,
-        "backup_flag": false,
-        "signature_verifiee": date_courante,
-    };
-
-    debug!("evenements tags : {:?}", params_evenements);
-
-    // let mut contenu_doc_mut = contenu_doc.as_document_mut().expect("mut");
-    contenu_doc.insert("_evenements", params_evenements);
-
-    contenu_doc.remove("_certificat");
-
-    debug!("Inserer nouvelle transaction\n:{:?}", contenu_doc);
-
-    let db = middleware.get_database()?;
-    let collection = db.collection("Pki.rust");
-    match collection.insert_one(contenu_doc, None).await {
-        Ok(_) => {
-            debug!("Transaction sauvegardee dans collection de reception");
-            Ok(())
-        },
-        Err(e) => {
-            error!("Erreur sauvegarde transaction dans MongoDb : {:?}", e);
-            Err(format!("Erreur sauvegarde transaction dans MongoDb : {:?}", e))
-        }
-    }?;
-
-    transmettre_evenement_persistance(
-        middleware,
-        uuid_transaction,
-        "Core",
-        m.reply_q.clone(),
-        m.correlation_id.clone()
-    ).await?;
-
-    Ok(())
-}
-
 async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -427,11 +356,6 @@ where
     upsert_certificat(&enveloppe, collection_doc_pki, Some(false)).await?;
 
     Ok(None)
-}
-
-fn lire_date_epoch(date_epoch: i64) -> DateTime<Utc> {
-    let date_naive = chrono::NaiveDateTime::from_timestamp(date_epoch, 0);
-    DateTime::from_utc(date_naive, Utc)
 }
 
 /// Implementer methode pour regenerer transactions
