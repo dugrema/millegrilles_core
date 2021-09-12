@@ -21,7 +21,7 @@ use tokio::sync::mpsc::Receiver;
 use std::error::Error;
 use mongodb::options::{FindOptions, Hint};
 use mongodb::Cursor;
-use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction};
+use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction};
 
 pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
 
@@ -316,7 +316,11 @@ async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let transaction = charger_transaction(middleware, &m).await?;
+    let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
+    };
+    let transaction = charger_transaction(middleware, &trigger).await?;
     debug!("Traitement transaction, chargee : {:?}", transaction);
 
     let uuid_transaction = transaction.get_uuid_transaction().to_owned();
