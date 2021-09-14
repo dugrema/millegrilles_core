@@ -17,7 +17,7 @@ use millegrilles_common_rust::transactions::{charger_transaction, EtatTransactio
 use mongodb::bson::doc;
 use serde_json::{json, Value};
 use std::error::Error;
-use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue};
+use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue, VerificateurPermissions};
 use std::collections::HashMap;
 use tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 
@@ -241,7 +241,7 @@ async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<T
     }
 }
 
-async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), String> {
+async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), Box<dyn Error>> {
 
     let correlation_id = match &message.correlation_id {
         Some(inner) => Some(inner.clone()),
@@ -256,7 +256,7 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
         TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
         TypeMessageOut::Commande => consommer_commande(middleware.as_ref(), message).await,
         TypeMessageOut::Transaction => consommer_transaction(middleware.as_ref(), message).await,
-        TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message")),
+        TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
         TypeMessageOut::Evenement => consommer_evenement(middleware.as_ref(), message).await,
     }?;
 
@@ -282,7 +282,7 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
     Ok(())
 }
 
-async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<Value>, String>
+async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -304,18 +304,18 @@ where
     }
 }
 
-async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer commande : {:?}", &m.message);
     match m.action.as_str() {
         PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware, m).await,
-        _ => Err(format!("Commande Pki inconnue : {}, message dropped", m.action)),
+        _ => Err(format!("Commande Pki inconnue : {}, message dropped", m.action))?,
     }
 }
 
-async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -325,22 +325,26 @@ where
             sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
-        _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action)),
+        _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
     }
 }
 
-async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<Value>, String> {
+async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>> {
     debug!("Consommer evenement : {:?}", &m.message);
     match m.action.as_str() {
         EVENEMENT_TRANSACTION_PERSISTEE => {
             traiter_transaction(PKI_DOMAINE_NOM, middleware, m).await?;
             Ok(None)
         },
-        _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action)),
+        EVENEMENT_CEDULE => {
+            traiter_cedule(middleware, m).await?;
+            Ok(None)
+        }
+        _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
 
-async fn requete_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+async fn requete_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -367,7 +371,7 @@ where
     Ok(Some(reponse))
 }
 
-async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -411,7 +415,7 @@ where
     Ok(Some(reponse))
 }
 
-async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, String>
+async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -490,6 +494,21 @@ where
     upsert_certificat(&enveloppe, collection_doc_pki, Some(false)).await?;
 
     Ok(None)
+}
+
+async fn traiter_cedule<M>(middleware: &M, trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
+where M: ValidateurX509 {
+    let message = trigger.message;
+
+    // Valider certificat. Doit etre de niveau 4.secure
+    match message.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+    }?;
+
+    debug!("Certificat ceduleur est valide, on peut executer les taches");
+
+    Ok(())
 }
 
 /// Implementer methode pour regenerer transactions
