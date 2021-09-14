@@ -18,6 +18,7 @@ use tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationT
 use tokio_stream::StreamExt;
 
 use crate::corepki::{preparer_threads as preparer_threads_corepki, preparer_queues as preparer_q_corepki};
+use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
 
 const DUREE_ATTENTE: u64 = 20000;
 
@@ -77,6 +78,9 @@ pub async fn build() {
         ) = preparer_threads_corepki(middleware.clone()).await.expect("core pki");
         futures.extend(futures_pki);        // Deplacer vers futures globaux
         map_senders.extend(routing_pki);    // Deplacer vers mapping global
+
+        let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
+        futures.extend(ceduleur);
 
         // Wiring global
 

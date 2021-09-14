@@ -1,8 +1,8 @@
-mod domaines_middleware;
+mod domaines_core;
 mod corepki;
 mod ceduleur;
 
-use crate::domaines_middleware::build;
+use crate::domaines_core::build;
 use log::{info};
 
 fn main() {
