@@ -1,5 +1,5 @@
 //! Core de millegrilles installe sur un noeud 3.protege.
-//! Sous-domaines : Core.Backup, Core.CatalogueApplications, Core.MaitreDesComptes, Core.Pki, Core.Topologie
+//! Sous-domaines : CoreBackup, CoreCatalogueApplications, CoreMaitreDesComptes, CorePki, CoreTopologie
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -17,10 +17,15 @@ use millegrilles_common_rust::transactions::resoumettre_transactions;
 use tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
 use tokio_stream::StreamExt;
 
-use crate::sousdomaine_pki::{consommer_messages as consommer_pki, preparer_index_mongodb as preparer_index_mongodb_pki};
+use crate::sousdomaine_pki::{consommer_messages as consommer_pki, preparer_index_mongodb as preparer_index_mongodb_pki, NOM_DOMAINE as NOM_DOMAINE_PKI};
 use tokio::time::sleep;
 
 const DUREE_ATTENTE: u64 = 20000;
+
+const NOM_DOMAINE_CORE: &str = "Core";
+const NOM_Q_TRIGGERS_PKI: &str = "CorePki/triggers";
+const NOM_Q_TRIGGERS_CORE: &str = "Core/triggers";
+const NOM_Q_CERTIFICATS: &str = "certificat";
 
 pub async fn build() {
     // Preparer configuration
@@ -64,11 +69,19 @@ pub async fn build() {
     let (tx_pki_triggers, rx_pki_triggers) = mpsc::channel::<TypeMessage>(5);
 
     let mut map_senders: HashMap<String, Sender<TypeMessage>> = HashMap::new();
-    map_senders.insert(String::from("Pki"), tx_pki_messages.clone());
-    map_senders.insert(String::from("Core"), tx_pki_messages.clone());
-    map_senders.insert(String::from("certificat"), tx_pki_messages.clone());
-    map_senders.insert(String::from("Pki/triggers"), tx_pki_triggers.clone());
-    map_senders.insert(String::from("Core/triggers"), tx_pki_triggers.clone());
+    // map_senders.insert(String::from("Pki"), tx_pki_messages.clone());
+    // map_senders.insert(String::from("Core"), tx_pki_messages.clone());
+    // map_senders.insert(String::from("certificat"), tx_pki_messages.clone());
+    // map_senders.insert(String::from("Pki/triggers"), tx_pki_triggers.clone());
+    // map_senders.insert(String::from("Core/triggers"), tx_pki_triggers.clone());
+
+    map_senders.insert(String::from("Pki"), tx_pki_messages.clone());  // Legacy
+    map_senders.insert(String::from(NOM_DOMAINE_PKI), tx_pki_messages.clone());
+    // map_senders.insert(String::from(NOM_DOMAINE_CORE), tx_pki_messages.clone());
+    map_senders.insert(String::from(NOM_Q_CERTIFICATS), tx_pki_messages.clone());
+    map_senders.insert(String::from(NOM_Q_TRIGGERS_PKI), tx_pki_triggers.clone());
+    // map_senders.insert(String::from(NOM_Q_TRIGGERS_CORE), tx_pki_triggers.clone());
+
     futures.push(tokio::spawn(consommer( middleware.clone(), rx_messages_verifies, map_senders.clone())));
     futures.push(tokio::spawn(consommer( middleware.clone(), rx_triggers, map_senders)));
 
@@ -96,28 +109,28 @@ fn preparer_config_queues() -> Vec<QueueType> {
     // RK 1.public (inclus 2.prive et 3.protege)
     for niveau in niveaux_securite_public {
         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Pki.infoCertificat"), exchange: niveau.clone()});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Core.infoCertificat"), exchange: niveau.clone()});
+        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.infoCertificat"), exchange: niveau.clone()});
         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.certificat.*"), exchange: niveau.clone()});
     }
 
     // RK 2.prive (inclus 3.protege)
     for niveau in niveaux_securite_prive {
         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Pki.certificatParPk"), exchange: niveau.clone()});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Core.certificatParPk"), exchange: niveau.clone()});
+        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.certificatParPk"), exchange: niveau.clone()});
     }
 
     // RK 3.protege seulement
     rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.Pki.certificat".into(), exchange: Securite::L3Protege});
-    rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.Core.certificat".into(), exchange: Securite::L3Protege});
+    rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.CorePki.certificat".into(), exchange: Securite::L3Protege});
     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.Pki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.Core.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
+    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.CorePki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
 
     let mut queues = Vec::new();
 
     // Queue de messages volatils (requete, commande, evenements)
     queues.push(QueueType::ExchangeQueue (
         ConfigQueue {
-            nom_queue: "Core/volatils".into(),
+            nom_queue: "CorePki/volatils".into(),
             routing_keys: rk_volatils,
             ttl: 300000.into(),
             durable: false,
@@ -126,18 +139,14 @@ fn preparer_config_queues() -> Vec<QueueType> {
 
     let mut rk_transactions = Vec::new();
     rk_transactions.push(ConfigRoutingExchange {
-        routing_key: format!("transaction.Pki.{}", PKI_TRANSACTION_NOUVEAU_CERTIFICAT).into(),
-        exchange: Securite::L3Protege}
-    );
-    rk_transactions.push(ConfigRoutingExchange {
-        routing_key: format!("transaction.Core.{}", PKI_TRANSACTION_NOUVEAU_CERTIFICAT).into(),
+        routing_key: format!("transaction.CorePki.{}", PKI_TRANSACTION_NOUVEAU_CERTIFICAT).into(),
         exchange: Securite::L3Protege}
     );
 
     // Queue de transactions
     queues.push(QueueType::ExchangeQueue (
         ConfigQueue {
-            nom_queue: "Core/transactions".into(),
+            nom_queue: "CorePki/transactions".into(),
             routing_keys: rk_transactions,
             ttl: None,
             durable: true,
@@ -145,7 +154,7 @@ fn preparer_config_queues() -> Vec<QueueType> {
     ));
 
     // Queue de triggers pour Pki
-    queues.push(QueueType::Triggers ("Core".into()));
+    queues.push(QueueType::Triggers ("CorePki".into()));
 
     queues
 }

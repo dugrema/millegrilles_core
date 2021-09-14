@@ -23,11 +23,38 @@ use mongodb::options::{FindOptions, Hint};
 use mongodb::Cursor;
 use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl};
 
+// Constantes
+pub const NOM_DOMAINE: &str = PKI_DOMAINE_NOM;  //"CorePki";
+pub const NOM_COLLECTION_TRANSACTIONS: &str = "CorePki";
+pub const NOM_COLLECTION_CERTIFICATS: &str = PKI_COLLECTION_CERTIFICAT_NOM;  // "CorePki/certificat";
+
+pub const PKI_DOMAINE_CERTIFICAT_NOM: &str = "certificat";
+// pub const PKI_COLLECTION_TRANSACTIONS_NOM: &str = "Pki.rust";
+// pub const PKI_COLLECTION_CERTIFICAT_NOM: &str = "Pki.rust/certificat";
+
+pub const PKI_EVENEMENT_CERTIFICAT: &str = "certificat.infoCertificat";
+
+pub const PKI_REQUETE_CERTIFICAT: &str = "infoCertificat";
+pub const PKI_REQUETE_CERTIFICAT_PAR_PK: &str = "certificatParPk";
+
+pub const PKI_COMMANDE_SAUVEGARDER_CERTIFICAT: &str = "certificat";
+pub const PKI_COMMANDE_NOUVEAU_CERTIFICAT: &str = "nouveauCertificat";
+
+// pub const PKI_TRANSACTION_NOUVEAU_CERTIFICAT: &str = PKI_COMMANDE_NOUVEAU_CERTIFICAT;
+
+// pub const PKI_DOCUMENT_CHAMP_FINGERPRINT: &str = "fingerprint";
+pub const PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
+// pub const PKI_DOCUMENT_CHAMP_CERTIFICAT: &str = "certificat";
+
+
+/// Creer index MongoDB
 pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
 
-    // Index transactions
+    // Transactions
+
+    // Index transactions par uuid-transaction
     let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from("uuid_transaction")),
+        nom_index: Some(String::from(TRANSACTION_CHAMP_UUID_TRANSACTION)),
         unique: true
     };
     let champs_index_transactions = vec!(
@@ -39,8 +66,9 @@ pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), St
         Some(options_unique_transactions)
     ).await?;
 
+    // Index transactions completes
     let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from("transaction_complete")),
+        nom_index: Some(String::from(TRANSACTION_CHAMP_COMPLETE)),
         unique: false
     };
     let champs_index_transactions = vec!(
@@ -52,9 +80,27 @@ pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), St
         Some(options_unique_transactions)
     ).await?;
 
+    // Index backup transactions
+    let options_unique_transactions = IndexOptions {
+        nom_index: Some(String::from(BACKUP_CHAMP_BACKUP_TRANSACTIONS)),
+        unique: false
+    };
+    let champs_index_transactions = vec!(
+        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_TRANSACTION_TRAITEE), direction: 1},
+        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_BACKUP_FLAG), direction: 1},
+        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
+    );
+    middleware.create_index(
+        PKI_COLLECTION_TRANSACTIONS_NOM,
+        champs_index_transactions,
+        Some(options_unique_transactions)
+    ).await?;
+
+    // Documents
+
     // Index certificats fingerprint
     let options_unique_fingerprint = IndexOptions {
-        nom_index: Some(String::from("fingerprint")),
+        nom_index: Some(String::from(PKI_DOCUMENT_CHAMP_FINGERPRINT)),
         unique: true
     };
     let champs_index_fingerprint = vec!(
@@ -68,7 +114,7 @@ pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), St
 
     // Index certificats fingerprint_pk
     let options_unique_fingerprint_pk = IndexOptions {
-        nom_index: Some(String::from("fingerprint_pk")),
+        nom_index: Some(String::from(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK)),
         unique: true
     };
     let champs_index_fingerprint_pk = vec!(
@@ -78,23 +124,6 @@ pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), St
         PKI_COLLECTION_CERTIFICAT_NOM,
         champs_index_fingerprint_pk,
         Some(options_unique_fingerprint_pk)
-    ).await?;
-
-
-    // Index backup transactions
-    let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from("backup_transactions")),
-        unique: false
-    };
-    let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_TRANSACTION_TRAITEE), direction: 1},
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_BACKUP_FLAG), direction: 1},
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
-    );
-    middleware.create_index(
-        PKI_COLLECTION_TRANSACTIONS_NOM,
-        champs_index_transactions,
-        Some(options_unique_transactions)
     ).await?;
 
     Ok(())
@@ -141,9 +170,12 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
     match resultat {
         Some(reponse) => {
             let reply_q = match reply_q {
-                Some(reply_q) => Ok(reply_q),
-                None => Err("Reply Q manquante pour reponse"),
-            }?;
+                Some(reply_q) => reply_q,
+                None => {
+                    debug!("Reply Q manquante pour reponse a {:?}", correlation_id);
+                    return Ok(())
+                },
+            };
             let correlation_id = match correlation_id {
                 Some(correlation_id) => Ok(correlation_id),
                 None => Err("Correlation id manquant pour reponse"),
@@ -197,7 +229,7 @@ where
     debug!("Consommer transaction : {:?}", &m.message);
     match m.action.as_str() {
         PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
-            sauvegarder_transaction(middleware, m, "Pki.rust").await?;
+            sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action)),
@@ -398,9 +430,9 @@ mod test_integration {
             let debut_traitement = Utc::now();
             debug!("Debut regeneration : {:?}", debut_traitement);
             let mut colls = Vec::new();
-            colls.push(String::from("Pki.rust/certificat"));
+            colls.push(String::from(NOM_COLLECTION_CERTIFICATS));
             let processor = TraiterTransactionPki{};
-            regenerer(middleware.as_ref(), "Pki.rust", &colls, &processor)
+            regenerer(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS, &colls, &processor)
                 .await.expect("regenerer");
 
             let fin_traitemeent = Utc::now();
