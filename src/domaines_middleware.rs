@@ -17,28 +17,33 @@ use millegrilles_common_rust::transactions::resoumettre_transactions;
 use tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
 use tokio_stream::StreamExt;
 
-use crate::sousdomaine_pki::{consommer_messages as consommer_pki, preparer_index_mongodb as preparer_index_mongodb_pki, NOM_DOMAINE as NOM_DOMAINE_PKI};
+// use crate::corepki::{consommer_messages as consommer_pki, preparer_index_mongodb as preparer_index_mongodb_pki, NOM_DOMAINE as NOM_DOMAINE_PKI};
+use crate::corepki::{NOM_DOMAINE as NOM_DOMAINE_PKI, preparer_threads as preparer_threads_corepki, preparer_queues as preparer_q_corepki};
 use tokio::time::sleep;
+use std::error::Error;
+use millegrilles_common_rust::MiddlewareDbPki;
+use tokio::task::JoinHandle;
 
 const DUREE_ATTENTE: u64 = 20000;
 
-const NOM_DOMAINE_CORE: &str = "Core";
-const NOM_Q_TRIGGERS_PKI: &str = "CorePki/triggers";
-const NOM_Q_TRIGGERS_CORE: &str = "Core/triggers";
-const NOM_Q_CERTIFICATS: &str = "certificat";
+// const NOM_DOMAINE_CORE: &str = "Core";
+// const NOM_Q_TRIGGERS_PKI: &str = "CorePki/triggers";
+// const NOM_Q_TRIGGERS_CORE: &str = "Core/triggers";
+// const NOM_Q_CERTIFICATS: &str = "certificat";
 
 pub async fn build() {
-    // Preparer configuration
-    let queues = preparer_config_queues();
 
-    let (tx, rx) = mpsc::channel(1);
+    // Recuperer configuration des Q de tous les domaines
+    let mut queues: Vec<QueueType> = preparer_q_corepki();
+    queues.extend(preparer_q_corepki());
 
+    // Listeners de connexion MQ
+    let (tx_entretien, rx_entretien) = mpsc::channel(1);
     let listeners = {
         let mut callbacks: Callback<EventMq> = Callback::new();
         callbacks.register(Box::new(move |event| {
-            debug!("Ceci est un test de callback sur connexion, event : {:?}", event);
-            // tx.blocking_send(event).expect("Event connexion MQ");
-            let tx_ref = tx.clone();
+            debug!("Callback sur connexion a MQ, event : {:?}", event);
+            let tx_ref = tx_entretien.clone();
             let _ = tokio::spawn(async move{
                 match tx_ref.send(event).await {
                     Ok(_) => (),
@@ -50,6 +55,7 @@ pub async fn build() {
         Some(Mutex::new(callbacks))
     };
 
+    // Preparer middleware avec acces direct aux tables Pki (le domaine est local)
     let (
         middleware,
         rx_messages_verifies,
@@ -58,112 +64,154 @@ pub async fn build() {
     ) = preparer_middleware_pki(queues, listeners);
 
     debug!("Creer index sous mongo");
-    preparer_index_mongodb(middleware.as_ref()).await.expect("Index mongo");
+    //preparer_index_mongodb(middleware.as_ref()).await.expect("Index mongo");
     debug!("Index mongodb crees");
 
     // Demarrer threads
+    // let mut futures = FuturesUnordered::new();
+
+    // // Thread consommation
+    // let (tx_pki_messages, rx_pki_messages) = mpsc::channel::<TypeMessage>(20);
+    // let (tx_pki_triggers, rx_pki_triggers) = mpsc::channel::<TypeMessage>(5);
+    //
     let mut futures = FuturesUnordered::new();
+    {
+        let mut map_senders: HashMap<String, Sender<TypeMessage>> = HashMap::new();
 
-    // Thread consommation
-    let (tx_pki_messages, rx_pki_messages) = mpsc::channel::<TypeMessage>(20);
-    let (tx_pki_triggers, rx_pki_triggers) = mpsc::channel::<TypeMessage>(5);
+        // Domaines
 
-    let mut map_senders: HashMap<String, Sender<TypeMessage>> = HashMap::new();
-    // map_senders.insert(String::from("Pki"), tx_pki_messages.clone());
-    // map_senders.insert(String::from("Core"), tx_pki_messages.clone());
-    // map_senders.insert(String::from("certificat"), tx_pki_messages.clone());
-    // map_senders.insert(String::from("Pki/triggers"), tx_pki_triggers.clone());
-    // map_senders.insert(String::from("Core/triggers"), tx_pki_triggers.clone());
+        // Preparer domaine CorePki
+        let (
+            routing_pki,
+            futures_pki
+        ) = preparer_threads_corepki(middleware.clone()).await.expect("core pki");
+        futures.extend(futures_pki);        // Deplacer vers futures globaux
+        map_senders.extend(routing_pki);    // Deplacer vers mapping global
 
-    map_senders.insert(String::from("Pki"), tx_pki_messages.clone());  // Legacy
-    map_senders.insert(String::from(NOM_DOMAINE_PKI), tx_pki_messages.clone());
-    // map_senders.insert(String::from(NOM_DOMAINE_CORE), tx_pki_messages.clone());
-    map_senders.insert(String::from(NOM_Q_CERTIFICATS), tx_pki_messages.clone());
-    map_senders.insert(String::from(NOM_Q_TRIGGERS_PKI), tx_pki_triggers.clone());
-    // map_senders.insert(String::from(NOM_Q_TRIGGERS_CORE), tx_pki_triggers.clone());
+        // Wiring global
 
-    futures.push(tokio::spawn(consommer( middleware.clone(), rx_messages_verifies, map_senders.clone())));
-    futures.push(tokio::spawn(consommer( middleware.clone(), rx_triggers, map_senders)));
+        // Creer consommateurs MQ globaux pour rediriger messages recus vers Q internes appropriees
+        futures.push(tokio::spawn(
+            consommer( middleware.clone(), rx_messages_verifies, map_senders.clone())
+        ));
+        futures.push(tokio::spawn(
+            consommer( middleware.clone(), rx_triggers, map_senders)
+        ));
+    }
+
+
+    // map_senders.insert(String::from("Pki"), tx_pki_messages.clone());  // Legacy
+    // map_senders.insert(String::from(NOM_DOMAINE_PKI), tx_pki_messages.clone());
+    // map_senders.insert(String::from(NOM_Q_CERTIFICATS), tx_pki_messages.clone());
+    // map_senders.insert(String::from(NOM_Q_TRIGGERS_PKI), tx_pki_triggers.clone());
+
+    // futures.push(tokio::spawn(consommer( middleware.clone(), rx_messages_verifies, map_senders.clone())));
+    // futures.push(tokio::spawn(consommer( middleware.clone(), rx_triggers, map_senders)));
 
     // Thread d'entretien
-    futures.push(tokio::spawn(entretien(middleware.clone(), rx)));
+    futures.push(tokio::spawn(entretien(middleware.clone(), rx_entretien)));
 
     // Thread ecoute et validation des messages
     for f in future_recevoir_messages {
         futures.push(f);
     }
 
-    futures.push(tokio::spawn(consommer_pki(middleware.clone(), rx_pki_messages)));
-    futures.push(tokio::spawn(consommer_pki(middleware.clone(), rx_pki_triggers)));
+    // futures.push(tokio::spawn(consommer_pki(middleware.clone(), rx_pki_messages)));
+    // futures.push(tokio::spawn(consommer_pki(middleware.clone(), rx_pki_triggers)));
 
     debug!("domaines_middleware: Demarrage traitement domaines middleware");
     let arret = futures.next().await;
     debug!("domaines_middleware: Fermeture du contexte, task daemon terminee : {:?}", arret);
 }
 
-fn preparer_config_queues() -> Vec<QueueType> {
-    let mut rk_volatils = Vec::new();
-    let niveaux_securite_public = vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege);
-    let niveaux_securite_prive = vec!(Securite::L2Prive, Securite::L3Protege);
+// /// Initialise le domaine CorePki.
+// pub async fn preparer_corepki(middleware: Arc<MiddlewareDbPki>) -> Result<(HashMap<String, Sender<TypeMessage>>, FuturesUnordered<JoinHandle<()>>), Box<dyn Error>> {
+//
+//     // Preparer les index MongoDB
+//     preparer_index_mongodb_pki(middleware.as_ref()).await?;
+//
+//     // Channels pour traiter messages Pki
+//     let (tx_pki_messages, rx_pki_messages) = mpsc::channel::<TypeMessage>(20);
+//     let (tx_pki_triggers, rx_pki_triggers) = mpsc::channel::<TypeMessage>(5);
+//
+//     // Routing map pour le domaine CorePki (et legacy Pki). Recoit aussi domaine virtuel "certificat".
+//     let mut routing_pki: HashMap<String, Sender<TypeMessage>> = HashMap::new();
+//     routing_pki.insert(String::from("Pki"), tx_pki_messages.clone());  // Legacy
+//     routing_pki.insert(String::from(NOM_DOMAINE_PKI), tx_pki_messages.clone());
+//     routing_pki.insert(String::from(NOM_Q_CERTIFICATS), tx_pki_messages.clone());
+//     routing_pki.insert(String::from(NOM_Q_TRIGGERS_PKI), tx_pki_triggers.clone());
+//
+//     // Thread consommation
+//     let mut futures = FuturesUnordered::new();
+//     futures.push(tokio::spawn(consommer_pki(middleware.clone(), rx_pki_messages)));
+//     futures.push(tokio::spawn(consommer_pki(middleware.clone(), rx_pki_triggers)));
+//
+//     Ok((routing_pki, futures))
+// }
+//
+// fn preparer_config_queues() -> Vec<QueueType> {
+//     let mut rk_volatils = Vec::new();
+//     let niveaux_securite_public = vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege);
+//     let niveaux_securite_prive = vec!(Securite::L2Prive, Securite::L3Protege);
+//
+//     // RK 1.public (inclus 2.prive et 3.protege)
+//     for niveau in niveaux_securite_public {
+//         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Pki.infoCertificat"), exchange: niveau.clone()});
+//         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.infoCertificat"), exchange: niveau.clone()});
+//         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.certificat.*"), exchange: niveau.clone()});
+//     }
+//
+//     // RK 2.prive (inclus 3.protege)
+//     for niveau in niveaux_securite_prive {
+//         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Pki.certificatParPk"), exchange: niveau.clone()});
+//         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.certificatParPk"), exchange: niveau.clone()});
+//     }
+//
+//     // RK 3.protege seulement
+//     rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.Pki.certificat".into(), exchange: Securite::L3Protege});
+//     rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.CorePki.certificat".into(), exchange: Securite::L3Protege});
+//     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.Pki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
+//     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.CorePki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
+//
+//     let mut queues = Vec::new();
+//
+//     // Queue de messages volatils (requete, commande, evenements)
+//     queues.push(QueueType::ExchangeQueue (
+//         ConfigQueue {
+//             nom_queue: "CorePki/volatils".into(),
+//             routing_keys: rk_volatils,
+//             ttl: 300000.into(),
+//             durable: false,
+//         }
+//     ));
+//
+//     let mut rk_transactions = Vec::new();
+//     rk_transactions.push(ConfigRoutingExchange {
+//         routing_key: format!("transaction.CorePki.{}", PKI_TRANSACTION_NOUVEAU_CERTIFICAT).into(),
+//         exchange: Securite::L3Protege}
+//     );
+//
+//     // Queue de transactions
+//     queues.push(QueueType::ExchangeQueue (
+//         ConfigQueue {
+//             nom_queue: "CorePki/transactions".into(),
+//             routing_keys: rk_transactions,
+//             ttl: None,
+//             durable: true,
+//         }
+//     ));
+//
+//     // Queue de triggers pour Pki
+//     queues.push(QueueType::Triggers ("CorePki".into()));
+//
+//     queues
+// }
 
-    // RK 1.public (inclus 2.prive et 3.protege)
-    for niveau in niveaux_securite_public {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Pki.infoCertificat"), exchange: niveau.clone()});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.infoCertificat"), exchange: niveau.clone()});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.certificat.*"), exchange: niveau.clone()});
-    }
-
-    // RK 2.prive (inclus 3.protege)
-    for niveau in niveaux_securite_prive {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Pki.certificatParPk"), exchange: niveau.clone()});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.certificatParPk"), exchange: niveau.clone()});
-    }
-
-    // RK 3.protege seulement
-    rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.Pki.certificat".into(), exchange: Securite::L3Protege});
-    rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.CorePki.certificat".into(), exchange: Securite::L3Protege});
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.Pki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.CorePki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
-
-    let mut queues = Vec::new();
-
-    // Queue de messages volatils (requete, commande, evenements)
-    queues.push(QueueType::ExchangeQueue (
-        ConfigQueue {
-            nom_queue: "CorePki/volatils".into(),
-            routing_keys: rk_volatils,
-            ttl: 300000.into(),
-            durable: false,
-        }
-    ));
-
-    let mut rk_transactions = Vec::new();
-    rk_transactions.push(ConfigRoutingExchange {
-        routing_key: format!("transaction.CorePki.{}", PKI_TRANSACTION_NOUVEAU_CERTIFICAT).into(),
-        exchange: Securite::L3Protege}
-    );
-
-    // Queue de transactions
-    queues.push(QueueType::ExchangeQueue (
-        ConfigQueue {
-            nom_queue: "CorePki/transactions".into(),
-            routing_keys: rk_transactions,
-            ttl: None,
-            durable: true,
-        }
-    ));
-
-    // Queue de triggers pour Pki
-    queues.push(QueueType::Triggers ("CorePki".into()));
-
-    queues
-}
-
-async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
-    preparer_index_mongodb_pki(middleware).await?;
-
-    Ok(())
-}
+// async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
+//     // preparer_index_mongodb_pki(middleware).await?;
+//
+//     Ok(())
+// }
 
 async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
 where
