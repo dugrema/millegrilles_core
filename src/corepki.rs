@@ -449,8 +449,15 @@ where
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
+
     let transaction = charger_transaction(middleware, &trigger).await?;
     debug!("Traitement transaction, chargee : {:?}", transaction);
+
+    // Valider certificat. Doit etre de niveau 4.secure
+    match transaction.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+    }?;
 
     let uuid_transaction = transaction.get_uuid_transaction().to_owned();
 
