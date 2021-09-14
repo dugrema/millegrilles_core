@@ -1366,6 +1366,7 @@ dependencies = [
  "tokio-amqp",
  "tokio-stream",
  "tokio-util",
+ "url",
  "uuid",
  "x509-parser",
  "xz2",
@@ -2763,6 +2764,7 @@ dependencies = [
  "idna",
  "matches",
  "percent-encoding",
+ "serde",
 ]
 
 [[package]]

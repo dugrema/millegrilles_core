@@ -9,7 +9,7 @@ use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, MessageSerialise};
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat, regenerer};
+use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -21,7 +21,7 @@ use tokio::sync::mpsc::Receiver;
 use std::error::Error;
 use mongodb::options::{FindOptions, Hint};
 use mongodb::Cursor;
-use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction};
+use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl};
 
 pub async fn preparer_index_mongodb(middleware: &impl MongoDao) -> Result<(), String> {
 
@@ -108,7 +108,7 @@ pub async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiv
             TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
             TypeMessage::Valide(_inner) => {warn!("Recu MessageValide sur thread consommation"); todo!()},
             TypeMessage::Certificat(_inner) => {warn!("Recu MessageCertificat sur thread consommation"); todo!()},
-            TypeMessage::Regeneration => {continue}, // Rien a faire, on boucle
+            TypeMessage::Regeneration => continue, // Rien a faire, on boucle
         };
 
         match resultat {
@@ -197,7 +197,7 @@ where
     debug!("Consommer transaction : {:?}", &m.message);
     match m.action.as_str() {
         PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
-            sauvegarder_transaction(middleware, m, "Pki", "Pki.rust").await?;
+            sauvegarder_transaction(middleware, m, "Pki.rust").await?;
             Ok(None)
         },
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action)),
@@ -325,10 +325,7 @@ where
 
     let uuid_transaction = transaction.get_uuid_transaction().to_owned();
 
-    let reponse = match transaction.get_action() {
-        PKI_TRANSACTION_NOUVEAU_CERTIFICAT => sauvegarder_certificat(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
-    };
+    let reponse = aiguillage_transaction(middleware, transaction).await;
 
     if reponse.is_ok() {
         // Marquer transaction completee
@@ -337,6 +334,14 @@ where
     }
 
     reponse
+}
+
+async fn aiguillage_transaction<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+where M: ValidateurX509 + GenerateurMessages + MongoDao {
+    match transaction.get_action() {
+        PKI_TRANSACTION_NOUVEAU_CERTIFICAT => sauvegarder_certificat(middleware, transaction).await,
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
+    }
 }
 
 async fn sauvegarder_certificat<M>(middleware: &M, transaction: impl Transaction) -> Result<Option<MessageMilleGrille>, String>
@@ -366,8 +371,10 @@ where
 struct TraiterTransactionPki {}
 #[async_trait]
 impl TraiterTransaction for TraiterTransactionPki {
-    async fn traiter_transaction<M>(&self, domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String> where M: ValidateurX509 + GenerateurMessages + MongoDao {
-        traiter_transaction(domaine, middleware, m).await
+    async fn traiter_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    {
+        aiguillage_transaction(middleware, transaction).await
     }
 }
 
@@ -380,10 +387,11 @@ mod test_integration {
     use tokio_stream::StreamExt;
 
     use super::*;
+    use millegrilles_common_rust::regenerer;
 
     #[tokio::test]
-    async fn grouper_transactions() {
-        setup("grouper_transactions");
+    async fn regenerer_transactions_integration() {
+        setup("regenerer_transactions_integration");
         let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
         futures.push(tokio::spawn(async move {
 
@@ -392,7 +400,7 @@ mod test_integration {
             let mut colls = Vec::new();
             colls.push(String::from("Pki.rust/certificat"));
             let processor = TraiterTransactionPki{};
-            regenerer(middleware.as_ref(), "Pki.rust", colls, &processor)
+            regenerer(middleware.as_ref(), "Pki.rust", &colls, &processor)
                 .await.expect("regenerer");
 
             let fin_traitemeent = Utc::now();
