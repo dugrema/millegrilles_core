@@ -54,17 +54,7 @@ pub async fn build() {
         future_recevoir_messages
     ) = preparer_middleware_pki(queues, listeners);
 
-    debug!("Creer index sous mongo");
-    //preparer_index_mongodb(middleware.as_ref()).await.expect("Index mongo");
-    debug!("Index mongodb crees");
-
-    // Demarrer threads
-    // let mut futures = FuturesUnordered::new();
-
-    // // Thread consommation
-    // let (tx_pki_messages, rx_pki_messages) = mpsc::channel::<TypeMessage>(20);
-    // let (tx_pki_triggers, rx_pki_triggers) = mpsc::channel::<TypeMessage>(5);
-    //
+    // Preparer les green threads de tous les domaines/processus
     let mut futures = FuturesUnordered::new();
     {
         let mut map_senders: HashMap<String, Sender<TypeMessage>> = HashMap::new();
@@ -79,6 +69,7 @@ pub async fn build() {
         futures.extend(futures_pki);        // Deplacer vers futures globaux
         map_senders.extend(routing_pki);    // Deplacer vers mapping global
 
+        // Preparer ceduleur (emet triggers a toutes les minutes)
         let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
         futures.extend(ceduleur);
 
@@ -91,27 +82,16 @@ pub async fn build() {
         futures.push(tokio::spawn(
             consommer( middleware.clone(), rx_triggers, map_senders)
         ));
+
+        // Thread d'entretien
+        futures.push(tokio::spawn(entretien(middleware.clone(), rx_entretien)));
+
+        // Thread ecoute et validation des messages
+        for f in future_recevoir_messages {
+            futures.push(f);
+        }
+
     }
-
-
-    // map_senders.insert(String::from("Pki"), tx_pki_messages.clone());  // Legacy
-    // map_senders.insert(String::from(NOM_DOMAINE_PKI), tx_pki_messages.clone());
-    // map_senders.insert(String::from(NOM_Q_CERTIFICATS), tx_pki_messages.clone());
-    // map_senders.insert(String::from(NOM_Q_TRIGGERS_PKI), tx_pki_triggers.clone());
-
-    // futures.push(tokio::spawn(consommer( middleware.clone(), rx_messages_verifies, map_senders.clone())));
-    // futures.push(tokio::spawn(consommer( middleware.clone(), rx_triggers, map_senders)));
-
-    // Thread d'entretien
-    futures.push(tokio::spawn(entretien(middleware.clone(), rx_entretien)));
-
-    // Thread ecoute et validation des messages
-    for f in future_recevoir_messages {
-        futures.push(f);
-    }
-
-    // futures.push(tokio::spawn(consommer_pki(middleware.clone(), rx_pki_messages)));
-    // futures.push(tokio::spawn(consommer_pki(middleware.clone(), rx_pki_triggers)));
 
     debug!("domaines_middleware: Demarrage traitement domaines middleware");
     let arret = futures.next().await;

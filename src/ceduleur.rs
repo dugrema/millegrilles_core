@@ -17,7 +17,7 @@ use millegrilles_common_rust::transactions::{charger_transaction, EtatTransactio
 use mongodb::bson::doc;
 use serde_json::{json, Value};
 use std::error::Error;
-use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue};
+use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue, MessageCedule};
 use std::collections::HashMap;
 use tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use tokio::time::{Duration, sleep_until, Instant};
@@ -64,6 +64,22 @@ fn calculer_delai_prochaines_minute() -> Instant {
 async fn emettre_trigger<M>(middleware: &M) -> Result<(), Box<dyn Error>>
 where M: GenerateurMessages
 {
-    debug!("Emettre trigger cedule");
+
+    let message = MessageCedule::now();
+    debug!("Emettre trigger cedule {:?}", message);
+
+    let mut exchanges = Vec::new();
+    exchanges.push(Securite::L1Public);
+    exchanges.push(Securite::L2Prive);
+    exchanges.push(Securite::L3Protege);
+    exchanges.push(Securite::L4Secure);
+
+    middleware.emettre_evenement(
+        "global",
+        "cedule",
+        None, &message,
+        Some(exchanges)
+    ).await?;
+
     Ok(())
 }
