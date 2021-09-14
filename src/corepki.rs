@@ -1,57 +1,47 @@
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use tokio::task::JoinHandle;
 use futures::stream::FuturesUnordered;
 use async_trait::async_trait;
 use bson::Document;
-use chrono::{DateTime, Utc};
 use log::{debug, error, info, warn};
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509};
 use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, MessageSerialise};
+use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
-use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction, transmettre_evenement_persistance};
+use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction};
 use mongodb::bson::doc;
-use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use std::error::Error;
-use mongodb::options::{FindOptions, Hint};
-use mongodb::Cursor;
 use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue};
 use std::collections::HashMap;
-use tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
+use tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 
 // Constantes
 pub const NOM_DOMAINE: &str = PKI_DOMAINE_NOM;  //"CorePki";
-pub const NOM_COLLECTION_TRANSACTIONS: &str = "CorePki";
-pub const NOM_COLLECTION_CERTIFICATS: &str = PKI_COLLECTION_CERTIFICAT_NOM;  // "CorePki/certificat";
+const NOM_COLLECTION_TRANSACTIONS: &str = "CorePki";
 
-pub const PKI_DOMAINE_CERTIFICAT_NOM: &str = "certificat";
+const PKI_DOMAINE_CERTIFICAT_NOM: &str = "certificat";
 // pub const PKI_COLLECTION_TRANSACTIONS_NOM: &str = "Pki.rust";
 // pub const PKI_COLLECTION_CERTIFICAT_NOM: &str = "Pki.rust/certificat";
 
-pub const PKI_EVENEMENT_CERTIFICAT: &str = "certificat.infoCertificat";
+const PKI_REQUETE_CERTIFICAT: &str = "infoCertificat";
+const PKI_REQUETE_CERTIFICAT_PAR_PK: &str = "certificatParPk";
 
-pub const PKI_REQUETE_CERTIFICAT: &str = "infoCertificat";
-pub const PKI_REQUETE_CERTIFICAT_PAR_PK: &str = "certificatParPk";
-
-pub const PKI_COMMANDE_SAUVEGARDER_CERTIFICAT: &str = "certificat";
-pub const PKI_COMMANDE_NOUVEAU_CERTIFICAT: &str = "nouveauCertificat";
+const PKI_COMMANDE_SAUVEGARDER_CERTIFICAT: &str = "certificat";
+const PKI_COMMANDE_NOUVEAU_CERTIFICAT: &str = "nouveauCertificat";
 
 // pub const PKI_TRANSACTION_NOUVEAU_CERTIFICAT: &str = PKI_COMMANDE_NOUVEAU_CERTIFICAT;
 
 // pub const PKI_DOCUMENT_CHAMP_FINGERPRINT: &str = "fingerprint";
-pub const PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
+const PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
 // pub const PKI_DOCUMENT_CHAMP_CERTIFICAT: &str = "certificat";
 
-const NOM_DOMAINE_CORE: &str = "Core";
 const NOM_Q_TRIGGERS_PKI: &str = "CorePki/triggers";
-const NOM_Q_TRIGGERS_CORE: &str = "Core/triggers";
 const NOM_Q_CERTIFICATS: &str = "certificat";
 
 
@@ -73,7 +63,7 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<(HashM
     routing_pki.insert(String::from(NOM_Q_TRIGGERS_PKI), tx_pki_triggers.clone());
 
     // Thread consommation
-    let mut futures = FuturesUnordered::new();
+    let futures = FuturesUnordered::new();
     futures.push(tokio::spawn(consommer_messages(middleware.clone(), rx_pki_messages)));
     futures.push(tokio::spawn(consommer_messages(middleware.clone(), rx_pki_triggers)));
 
@@ -513,6 +503,7 @@ mod test_integration {
 
     use super::*;
     use millegrilles_common_rust::regenerer;
+    use chrono::Utc;
 
     #[tokio::test]
     async fn regenerer_transactions_integration() {
