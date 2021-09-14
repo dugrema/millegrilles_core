@@ -41,8 +41,11 @@ const PKI_COMMANDE_NOUVEAU_CERTIFICAT: &str = "nouveauCertificat";
 const PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
 // pub const PKI_DOCUMENT_CHAMP_CERTIFICAT: &str = "certificat";
 
+const NOM_Q_TRANSACTIONS_PKI: &str = "CorePki/transactions";
+const NOM_Q_TRANSACTIONS_VOLATILS: &str = "CorePki/volatils";
 const NOM_Q_TRIGGERS_PKI: &str = "CorePki/triggers";
-const NOM_Q_CERTIFICATS: &str = "certificat";
+
+const NOM_DOMAINE_CERTIFICATS: &str = "certificat";
 
 
 /// Initialise le domaine CorePki.
@@ -56,11 +59,18 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<(HashM
     let (tx_pki_triggers, rx_pki_triggers) = mpsc::channel::<TypeMessage>(5);
 
     // Routing map pour le domaine CorePki (et legacy Pki). Recoit aussi domaine virtuel "certificat".
+    // Fonctionne avec le nom de la Q (e.g. CorPki/transactions) ou le domaine (certificat, Pki, etc. dans routing key)
     let mut routing_pki: HashMap<String, Sender<TypeMessage>> = HashMap::new();
+
+    // Mapping par Q nommee
+    routing_pki.insert(String::from(NOM_Q_TRANSACTIONS_PKI), tx_pki_messages.clone());  // Legacy
+    routing_pki.insert(String::from(NOM_Q_TRANSACTIONS_VOLATILS), tx_pki_messages.clone());  // Legacy
+    routing_pki.insert(String::from(NOM_Q_TRIGGERS_PKI), tx_pki_triggers.clone());
+
+    // Mapping par domaine (routing key)
     routing_pki.insert(String::from("Pki"), tx_pki_messages.clone());  // Legacy
     routing_pki.insert(String::from(NOM_DOMAINE), tx_pki_messages.clone());
-    routing_pki.insert(String::from(NOM_Q_CERTIFICATS), tx_pki_messages.clone());
-    routing_pki.insert(String::from(NOM_Q_TRIGGERS_PKI), tx_pki_triggers.clone());
+    routing_pki.insert(String::from(NOM_DOMAINE_CERTIFICATS), tx_pki_messages.clone());
 
     // Thread consommation
     let futures = FuturesUnordered::new();
@@ -99,7 +109,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     // Queue de messages volatils (requete, commande, evenements)
     queues.push(QueueType::ExchangeQueue (
         ConfigQueue {
-            nom_queue: "CorePki/volatils".into(),
+            nom_queue: NOM_Q_TRANSACTIONS_VOLATILS.into(),
             routing_keys: rk_volatils,
             ttl: 300000.into(),
             durable: false,
@@ -115,7 +125,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     // Queue de transactions
     queues.push(QueueType::ExchangeQueue (
         ConfigQueue {
-            nom_queue: "CorePki/transactions".into(),
+            nom_queue: NOM_Q_TRANSACTIONS_PKI.into(),
             routing_keys: rk_transactions,
             ttl: None,
             durable: true,
@@ -123,7 +133,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     ));
 
     // Queue de triggers pour Pki
-    queues.push(QueueType::Triggers ("CorePki".into()));
+    queues.push(QueueType::Triggers (NOM_DOMAINE.into()));
 
     queues
 }

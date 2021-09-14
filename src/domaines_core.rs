@@ -284,13 +284,31 @@ async fn consommer(
             },
             TypeMessage::ValideAction(m) => {
                 let contenu = &m.message;
-                let rk = &m.routing_key;
-                let action = &m.action;
-                debug!("domaines_middleware.consommer: Traiter message valide (action: {}, rk: {}): {:?}", action, rk, contenu);
+                let rk = m.routing_key.as_str();
+                let action = m.action.as_str();
+                let domaine = m.domaine.as_str();
+                let nom_q = m.q.as_str();
+                debug!("domaines_middleware.consommer: Traiter message valide (action: {}, rk: {}, q: {}): {:?}", action, rk, nom_q, contenu);
 
-                match map_senders.get(m.domaine.as_str()) {
-                    Some(sender) => {sender.send(message).await.expect("send message vers sous-domaine")},
-                    None => error!("Message de domaine inconnu {}, on le drop", m.domaine),
+                // Tenter de mapper avec le nom de la Q (ne fonctionnera pas pour la Q de reponse)
+                let sender = match map_senders.get(nom_q) {
+                    Some(sender) => sender,
+                    None => {
+                        match map_senders.get(domaine) {
+                            Some(sender) => sender,
+                            None => {
+                                error!("Message de queue ({}) et domaine ({}) inconnu, on le drop", nom_q, domaine);
+                                continue  // On skip
+                            },
+                        }
+                    }
+                };
+
+                match sender.send(message).await {
+                    Ok(()) => (),
+                    Err(e) => {
+                        error!("Erreur consommer message {:?}", e)
+                    }
                 }
             },
             TypeMessage::Certificat(_) => (),  // Rien a faire
