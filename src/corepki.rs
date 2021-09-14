@@ -287,6 +287,9 @@ where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer requete : {:?}", &message.message);
+
+    // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
+
     match message.domaine.as_str() {
         PKI_DOMAINE_NOM => match message.action.as_str() {
             PKI_REQUETE_CERTIFICAT => requete_certificat(middleware, message).await,
@@ -309,6 +312,13 @@ where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer commande : {:?}", &m.message);
+
+    // Autorisation : doit etre de niveau 4.secure
+    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+    }?;
+
     match m.action.as_str() {
         PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware, m).await,
         _ => Err(format!("Commande Pki inconnue : {}, message dropped", m.action))?,
@@ -320,6 +330,13 @@ where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer transaction : {:?}", &m.message);
+
+    // Autorisation : doit etre de niveau 4.secure
+    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+    }?;
+
     match m.action.as_str() {
         PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
             sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
@@ -331,6 +348,13 @@ where
 
 async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>> {
     debug!("Consommer evenement : {:?}", &m.message);
+
+    // Autorisation : doit etre de niveau 4.secure
+    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+    }?;
+
     match m.action.as_str() {
         EVENEMENT_TRANSACTION_PERSISTEE => {
             traiter_transaction(PKI_DOMAINE_NOM, middleware, m).await?;
@@ -453,12 +477,6 @@ where
     let transaction = charger_transaction(middleware, &trigger).await?;
     debug!("Traitement transaction, chargee : {:?}", transaction);
 
-    // Valider certificat. Doit etre de niveau 4.secure
-    match transaction.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
-        true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
-    }?;
-
     let uuid_transaction = transaction.get_uuid_transaction().to_owned();
 
     let reponse = aiguillage_transaction(middleware, transaction).await;
@@ -506,12 +524,6 @@ where
 async fn traiter_cedule<M>(middleware: &M, trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
 where M: ValidateurX509 {
     let message = trigger.message;
-
-    // Valider certificat. Doit etre de niveau 4.secure
-    match message.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
-        true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
-    }?;
 
     debug!("Certificat ceduleur est valide, on peut executer les taches");
 
