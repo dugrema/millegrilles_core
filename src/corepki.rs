@@ -17,9 +17,11 @@ use millegrilles_common_rust::transactions::{charger_transaction, EtatTransactio
 use mongodb::bson::doc;
 use serde_json::{json, Value};
 use std::error::Error;
-use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue, VerificateurPermissions};
+use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue, VerificateurPermissions, Chiffreur, FormatteurMessage, restaurer};
 use std::collections::HashMap;
 use tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
+
+use millegrilles_common_rust::backup::backup;
 
 // Constantes
 pub const NOM_DOMAINE: &str = PKI_DOMAINE_NOM;  //"CorePki";
@@ -254,7 +256,7 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
 
     let resultat = match message.type_message {
         TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
-        TypeMessageOut::Commande => consommer_commande(middleware.as_ref(), message).await,
+        TypeMessageOut::Commande => consommer_commande(middleware.clone(), message).await,
         TypeMessageOut::Transaction => consommer_transaction(middleware.as_ref(), message).await,
         TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
         TypeMessageOut::Evenement => consommer_evenement(middleware.as_ref(), message).await,
@@ -307,9 +309,7 @@ where
     }
 }
 
-async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
+async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
 {
     debug!("Consommer commande : {:?}", &m.message);
 
@@ -320,9 +320,34 @@ where
     }?;
 
     match m.action.as_str() {
-        PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware, m).await,
+        // Commandes standard
+        COMMANDE_BACKUP_HORAIRE => backup(middleware.as_ref(), PKI_DOMAINE_NOM, PKI_COLLECTION_TRANSACTIONS_NOM, true).await,
+        COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
+
+        // Commandes specifiques au domaine
+        PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
+
+        // Commandes inconnues
         _ => Err(format!("Commande Pki inconnue : {}, message dropped", m.action))?,
     }
+}
+
+async fn restaurer_transactions(middleware: Arc<MiddlewareDbPki>) -> Result<Option<Value>, Box<dyn Error>> {
+    let noms_collections_docs = vec! [
+        String::from(PKI_COLLECTION_CERTIFICAT_NOM)
+    ];
+
+    let processor = ProcesseurTransactions::new();
+
+    restaurer(
+        middleware.clone(),
+        PKI_DOMAINE_NOM,
+        PKI_COLLECTION_TRANSACTIONS_NOM,
+        &noms_collections_docs,
+        &processor
+    ).await?;
+
+    Ok(None)
 }
 
 async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
@@ -478,9 +503,7 @@ where
     debug!("Traitement transaction, chargee : {:?}", transaction);
 
     let uuid_transaction = transaction.get_uuid_transaction().to_owned();
-
     let reponse = aiguillage_transaction(middleware, transaction).await;
-
     if reponse.is_ok() {
         // Marquer transaction completee
         debug!("Transaction traitee {}, marquer comme completee", uuid_transaction);
@@ -488,6 +511,21 @@ where
     }
 
     reponse
+}
+
+struct ProcesseurTransactions {}
+impl ProcesseurTransactions {
+    pub fn new() -> Self {
+        ProcesseurTransactions {}
+    }
+}
+#[async_trait]
+impl TraiterTransaction for ProcesseurTransactions {
+    async fn traiter_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    {
+        aiguillage_transaction(middleware, transaction).await
+    }
 }
 
 async fn aiguillage_transaction<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
