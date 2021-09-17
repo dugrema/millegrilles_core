@@ -17,7 +17,7 @@ use millegrilles_common_rust::transactions::{charger_transaction, EtatTransactio
 use mongodb::bson::doc;
 use serde_json::{json, Value};
 use std::error::Error;
-use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue, VerificateurPermissions, Chiffreur, FormatteurMessage, restaurer};
+use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue, VerificateurPermissions, Chiffreur, FormatteurMessage, restaurer, reset_backup_flag};
 use std::collections::HashMap;
 use tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 
@@ -276,7 +276,7 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
                 None => Err("Correlation id manquant pour reponse"),
             }?;
             info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
-            middleware.repondre(&reponse, &reply_q, &correlation_id).await?;
+            middleware.repondre(reponse, &reply_q, &correlation_id).await?;
         },
         None => (),  // Aucune reponse
     }
@@ -284,7 +284,7 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
     Ok(())
 }
 
-async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
+async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -309,7 +309,7 @@ where
     }
 }
 
-async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
+async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 {
     debug!("Consommer commande : {:?}", &m.message);
 
@@ -323,6 +323,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
         // Commandes standard
         COMMANDE_BACKUP_HORAIRE => backup(middleware.as_ref(), PKI_DOMAINE_NOM, PKI_COLLECTION_TRANSACTIONS_NOM, true).await,
         COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
+        COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), PKI_COLLECTION_TRANSACTIONS_NOM).await,
 
         // Commandes specifiques au domaine
         PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
@@ -332,7 +333,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
     }
 }
 
-async fn restaurer_transactions(middleware: Arc<MiddlewareDbPki>) -> Result<Option<Value>, Box<dyn Error>> {
+async fn restaurer_transactions(middleware: Arc<MiddlewareDbPki>) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
     let noms_collections_docs = vec! [
         String::from(PKI_COLLECTION_CERTIFICAT_NOM)
     ];
@@ -350,7 +351,7 @@ async fn restaurer_transactions(middleware: Arc<MiddlewareDbPki>) -> Result<Opti
     Ok(None)
 }
 
-async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
+async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -371,7 +372,7 @@ where
     }
 }
 
-async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>> {
+async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
@@ -393,7 +394,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     }
 }
 
-async fn requete_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
+async fn requete_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -416,11 +417,12 @@ where
         None => Err(format!("Certificat inconnu : {}", fingerprint)),
     }?;
 
-    let reponse = formatter_message_certificat(enveloppe.as_ref());
+    let reponse_value = formatter_message_certificat(enveloppe.as_ref());
+    let reponse = middleware.formatter_reponse(reponse_value, None)?;
     Ok(Some(reponse))
 }
 
-async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
+async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -460,11 +462,12 @@ where
     // Certificat trouve, repondre
     debug!("requete_certificat_par_pk repondre fingerprint {:?} pour fingerprint_pk {}", fingerprint, fingerprint_pk);
     // repondre_enveloppe(middleware, &m, enveloppe.as_ref()).await?;
-    let reponse = formatter_message_certificat(enveloppe.as_ref());
+    let reponse_value = formatter_message_certificat(enveloppe.as_ref());
+    let reponse = middleware.formatter_reponse(reponse_value, None)?;
     Ok(Some(reponse))
 }
 
-async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<Value>, Box<dyn Error>>
+async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -487,7 +490,8 @@ where
     let enveloppe = middleware.charger_enveloppe(&pems_str, None).await?;
     debug!("Commande de sauvegarde de certificat {} traitee", enveloppe.fingerprint);
 
-    Ok(Some(json!({"ok": true})))
+    let reponse = middleware.formatter_reponse(json!({"ok": true}), None)?;
+    Ok(Some(reponse))
 }
 
 async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
