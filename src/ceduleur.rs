@@ -13,7 +13,7 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
+use millegrilles_common_rust::middleware::{formatter_message_certificat, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb::bson::doc;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
@@ -27,7 +27,9 @@ use millegrilles_common_rust::serde_json::{json, Value};
 
 /// Emet un message signe avec le temps epoch courant a toutes les minutes.
 /// Permet aux modules de facilement executer des taches cedulees.
-pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<FuturesUnordered<JoinHandle<()>>, Box<dyn Error>> {
+pub async fn preparer_threads<M>(middleware: Arc<M>) -> Result<FuturesUnordered<JoinHandle<()>>, Box<dyn Error>>
+    where M: GenerateurMessages + 'static
+{
 
     // Thread consommation
     let futures = FuturesUnordered::new();
@@ -37,7 +39,9 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<Future
 }
 
 /// Thread qui emet le temps epoch courant a toutes les minutes
-async fn thread_emettre_heure(middleware: Arc<MiddlewareDbPki>) {
+async fn thread_emettre_heure<M>(middleware: Arc<M>)
+    where M: GenerateurMessages
+{
 
     loop {
         let instant = calculer_delai_prochaines_minute();

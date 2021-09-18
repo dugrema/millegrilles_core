@@ -13,7 +13,7 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
+use millegrilles_common_rust::middleware::{formatter_message_certificat, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -23,12 +23,17 @@ use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction};
+use crate::validateur_pki_mongo::MiddlewareDbPki;
 
 // Constantes
-pub const NOM_DOMAINE: &str = PKI_DOMAINE_NOM;  //"CorePki";
-const NOM_COLLECTION_TRANSACTIONS: &str = "CorePki";
+pub const DOMAINE_NOM: &str = "CorePki";
+pub const DOMAINE_LEGACY_NOM: &str = "Pki";
+// pub const PKI_DOMAINE_CERTIFICAT_NOM: &str = "certificat";
+//pub  const PKI_COLLECTION_TRANSACTIONS_NOM: &str = PKI_DOMAINE_NOM;
+pub const COLLECTION_CERTIFICAT_NOM: &str = "CorePki/certificat";
+pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
-const PKI_DOMAINE_CERTIFICAT_NOM: &str = "certificat";
+const DOMAINE_CERTIFICAT_NOM: &str = "certificat";
 // pub const PKI_COLLECTION_TRANSACTIONS_NOM: &str = "Pki.rust";
 // pub const PKI_COLLECTION_CERTIFICAT_NOM: &str = "Pki.rust/certificat";
 
@@ -72,13 +77,19 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<(HashM
 
     // Mapping par domaine (routing key)
     routing_pki.insert(String::from("Pki"), tx_pki_messages.clone());  // Legacy
-    routing_pki.insert(String::from(NOM_DOMAINE), tx_pki_messages.clone());
+    routing_pki.insert(String::from(DOMAINE_NOM), tx_pki_messages.clone());
     routing_pki.insert(String::from(NOM_DOMAINE_CERTIFICATS), tx_pki_messages.clone());
 
     // Thread consommation
     let futures = FuturesUnordered::new();
     futures.push(spawn(consommer_messages(middleware.clone(), rx_pki_messages)));
     futures.push(spawn(consommer_messages(middleware.clone(), rx_pki_triggers)));
+
+    // todo Thread entretien
+        // match emettre_presence_domaine(self, PKI_DOMAINE_NOM).await {
+        //     Ok(()) => (),
+        //     Err(e) => warn!("Erreur emission presence du domaine : {}", e),
+        // };
 
     Ok((routing_pki, futures))
 }
@@ -136,7 +147,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     ));
 
     // Queue de triggers pour Pki
-    queues.push(QueueType::Triggers (NOM_DOMAINE.into()));
+    queues.push(QueueType::Triggers (DOMAINE_NOM.into()));
 
     queues
 }
@@ -157,7 +168,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_ENTETE_UUID_TRANSACTION), direction: 1}
     );
     middleware.create_index(
-        PKI_COLLECTION_TRANSACTIONS_NOM,
+        NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
     ).await?;
@@ -171,7 +182,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1}
     );
     middleware.create_index(
-        PKI_COLLECTION_TRANSACTIONS_NOM,
+        NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
     ).await?;
@@ -187,7 +198,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
     );
     middleware.create_index(
-        PKI_COLLECTION_TRANSACTIONS_NOM,
+        NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
     ).await?;
@@ -203,7 +214,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(PKI_DOCUMENT_CHAMP_FINGERPRINT), direction: 1},
     );
     middleware.create_index(
-        PKI_COLLECTION_CERTIFICAT_NOM,
+        COLLECTION_CERTIFICAT_NOM,
         champs_index_fingerprint,
         Some(options_unique_fingerprint)
     ).await?;
@@ -217,7 +228,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK), direction: 1}
     );
     middleware.create_index(
-        PKI_COLLECTION_CERTIFICAT_NOM,
+        COLLECTION_CERTIFICAT_NOM,
         champs_index_fingerprint_pk,
         Some(options_unique_fingerprint_pk)
     ).await?;
@@ -294,7 +305,7 @@ where
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
 
     match message.domaine.as_str() {
-        PKI_DOMAINE_LEGACY_NOM | PKI_DOMAINE_NOM => match message.action.as_str() {
+        DOMAINE_LEGACY_NOM | DOMAINE_NOM => match message.action.as_str() {
             PKI_REQUETE_CERTIFICAT => requete_certificat(middleware, message).await,
             PKI_REQUETE_CERTIFICAT_PAR_PK => requete_certificat_par_pk(middleware, message).await,
             _ => {
@@ -302,7 +313,7 @@ where
                 Ok(None)
             },
         },
-        PKI_DOMAINE_CERTIFICAT_NOM => requete_certificat(middleware, message).await,
+        DOMAINE_CERTIFICAT_NOM => requete_certificat(middleware, message).await,
         _ => {
             error!("Message requete domaine inconnu : '{}'. Message dropped.", message.domaine);
             Ok(None)
@@ -322,9 +333,9 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
 
     match m.action.as_str() {
         // Commandes standard
-        COMMANDE_BACKUP_HORAIRE => backup(middleware.as_ref(), PKI_DOMAINE_NOM, PKI_COLLECTION_TRANSACTIONS_NOM, true).await,
+        COMMANDE_BACKUP_HORAIRE => backup(middleware.as_ref(), DOMAINE_NOM, NOM_COLLECTION_TRANSACTIONS, true).await,
         COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
-        COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), PKI_COLLECTION_TRANSACTIONS_NOM).await,
+        COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
 
         // Commandes specifiques au domaine
         PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
@@ -336,15 +347,15 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
 
 async fn restaurer_transactions(middleware: Arc<MiddlewareDbPki>) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
     let noms_collections_docs = vec! [
-        String::from(PKI_COLLECTION_CERTIFICAT_NOM)
+        String::from(COLLECTION_CERTIFICAT_NOM)
     ];
 
     let processor = ProcesseurTransactions::new();
 
     restaurer(
         middleware.clone(),
-        PKI_DOMAINE_NOM,
-        PKI_COLLECTION_TRANSACTIONS_NOM,
+        DOMAINE_NOM,
+        NOM_COLLECTION_TRANSACTIONS,
         &noms_collections_docs,
         &processor
     ).await?;
@@ -384,7 +395,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
 
     match m.action.as_str() {
         EVENEMENT_TRANSACTION_PERSISTEE => {
-            traiter_transaction(PKI_DOMAINE_NOM, middleware, m).await?;
+            traiter_transaction(DOMAINE_NOM, middleware, m).await?;
             Ok(None)
         },
         EVENEMENT_CEDULE => {
@@ -400,7 +411,7 @@ where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     let fingerprint = match m.domaine.as_str() {
-        PKI_DOMAINE_NOM => {
+        DOMAINE_NOM => {
             match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT) {
                 Some(fp) => match fp.as_str() {
                     Some(fp) => Ok(fp),
@@ -409,7 +420,7 @@ where
                 None => Err("Fingerprint manquant pour requete de certificat"),
             }
         },
-        PKI_DOMAINE_CERTIFICAT_NOM => Ok(m.action.as_str()),
+        DOMAINE_CERTIFICAT_NOM => Ok(m.action.as_str()),
         _ => Err("Mauvais type de requete de certificat")
     }?;
 
@@ -436,7 +447,7 @@ where
     }?;
 
     let db = middleware.get_database()?;
-    let collection = db.collection::<Document>(PKI_COLLECTION_CERTIFICAT_NOM);
+    let collection = db.collection::<Document>(COLLECTION_CERTIFICAT_NOM);
     let filtre = doc! {
         PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: fingerprint_pk,
     };
@@ -504,7 +515,7 @@ where
         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
 
-    let transaction = charger_transaction(middleware, &trigger).await?;
+    let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;
     debug!("Traitement transaction, chargee : {:?}", transaction);
 
     let uuid_transaction = transaction.get_uuid_transaction().to_owned();
@@ -512,7 +523,7 @@ where
     if reponse.is_ok() {
         // Marquer transaction completee
         debug!("Transaction traitee {}, marquer comme completee", uuid_transaction);
-        marquer_transaction(middleware, &uuid_transaction, EtatTransaction::Complete).await?;
+        marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
     }
 
     reponse
@@ -558,7 +569,7 @@ where
         Ok(e) => Ok(e),
         Err(e) => Err(format!("Erreur preparation enveloppe pour sauvegarder certificat : {:?}", e)),
     }?;
-    let collection_doc_pki = middleware.get_collection(PKI_COLLECTION_CERTIFICAT_NOM)?;
+    let collection_doc_pki = middleware.get_collection(COLLECTION_CERTIFICAT_NOM)?;
     upsert_certificat(&enveloppe, collection_doc_pki, Some(false)).await?;
 
     Ok(None)
@@ -597,6 +608,7 @@ mod test_integration {
     use crate::test_setup::setup;
 
     use super::*;
+    use crate::validateur_pki_mongo::preparer_middleware_pki;
 
     #[tokio::test]
     async fn regenerer_transactions_integration() {

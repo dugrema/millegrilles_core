@@ -10,7 +10,7 @@ use millegrilles_common_rust::chrono as chrono;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{EmetteurCertificat, preparer_middleware_pki};
+use millegrilles_common_rust::middleware::EmetteurCertificat;
 use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
@@ -20,7 +20,8 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::resoumettre_transactions;
 
 use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
-use crate::corepki::{preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki};
+use crate::corepki::{preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki, NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS};
+use crate::validateur_pki_mongo::preparer_middleware_pki;
 
 const DUREE_ATTENTE: u64 = 20000;
 
@@ -110,7 +111,7 @@ where
 
     // Liste de collections de transactions pour tous les domaines geres par Core
     let collections_transaction = vec! [
-        PKI_COLLECTION_TRANSACTIONS_NOM,
+        PKI_NOM_COLLECTION_TRANSACTIONS,
     ];
 
     let mut prochain_entretien_transactions = chrono::Utc::now();
