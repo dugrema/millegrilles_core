@@ -294,7 +294,7 @@ where
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
 
     match message.domaine.as_str() {
-        PKI_DOMAINE_NOM => match message.action.as_str() {
+        PKI_DOMAINE_LEGACY_NOM | PKI_DOMAINE_NOM => match message.action.as_str() {
             PKI_REQUETE_CERTIFICAT => requete_certificat(middleware, message).await,
             PKI_REQUETE_CERTIFICAT_PAR_PK => requete_certificat_par_pk(middleware, message).await,
             _ => {
@@ -304,7 +304,7 @@ where
         },
         PKI_DOMAINE_CERTIFICAT_NOM => requete_certificat(middleware, message).await,
         _ => {
-            error!("Message requete domaine inconnu : {}. Message dropped.", message.domaine);
+            error!("Message requete domaine inconnu : '{}'. Message dropped.", message.domaine);
             Ok(None)
         },
     }
