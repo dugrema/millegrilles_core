@@ -1,28 +1,29 @@
+use std::collections::HashMap;
+use std::error::Error;
+use std::ops::Add;
 use std::sync::Arc;
 
-use tokio::task::JoinHandle;
+use chrono::{Timelike, Utc};
 use futures::stream::FuturesUnordered;
-use async_trait::async_trait;
-use bson::Document;
 use log::{debug, error, info, warn};
+use millegrilles_common_rust::{ConfigQueue, ConfigRoutingExchange, MessageCedule, QueueType, sauvegarder_transaction, TraiterTransaction, TransactionImpl, TriggerTransaction};
+use millegrilles_common_rust::async_trait::async_trait;
+use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::{formatter_message_certificat, MiddlewareDbPki, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
+use millegrilles_common_rust::mongodb::bson::doc;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
+use millegrilles_common_rust::tokio::spawn;
+use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
+use millegrilles_common_rust::tokio::task::JoinHandle;
+use millegrilles_common_rust::tokio::time::{Duration, Instant, sleep_until};
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction};
-use mongodb::bson::doc;
 use serde_json::{json, Value};
-use std::error::Error;
-use millegrilles_common_rust::{TraiterTransaction, sauvegarder_transaction, TriggerTransaction, TransactionImpl, QueueType, ConfigRoutingExchange, ConfigQueue, MessageCedule};
-use std::collections::HashMap;
-use tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
-use tokio::time::{Duration, sleep_until, Instant};
-use std::ops::Add;
-use chrono::{Utc, Timelike};
 
 /// Emet un message signe avec le temps epoch courant a toutes les minutes.
 /// Permet aux modules de facilement executer des taches cedulees.
@@ -30,7 +31,7 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<Future
 
     // Thread consommation
     let futures = FuturesUnordered::new();
-    futures.push(tokio::spawn(thread_emettre_heure(middleware.clone())));
+    futures.push(spawn(thread_emettre_heure(middleware.clone())));
 
     Ok(futures)
 }

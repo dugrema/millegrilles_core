@@ -14,8 +14,9 @@ use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::transactions::resoumettre_transactions;
-use tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
-use tokio_stream::StreamExt;
+use millegrilles_common_rust::tokio::spawn;
+use millegrilles_common_rust::tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
+use millegrilles_common_rust::tokio_stream::StreamExt;
 
 use crate::corepki::{preparer_threads as preparer_threads_corepki, preparer_queues as preparer_q_corepki};
 use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
@@ -35,7 +36,7 @@ pub async fn build() {
         callbacks.register(Box::new(move |event| {
             debug!("Callback sur connexion a MQ, event : {:?}", event);
             let tx_ref = tx_entretien.clone();
-            let _ = tokio::spawn(async move{
+            let _ = spawn(async move{
                 match tx_ref.send(event).await {
                     Ok(_) => (),
                     Err(e) => error!("Erreur queuing via callback : {:?}", e)
@@ -76,15 +77,15 @@ pub async fn build() {
         // ** Wiring global **
 
         // Creer consommateurs MQ globaux pour rediriger messages recus vers Q internes appropriees
-        futures.push(tokio::spawn(
+        futures.push(spawn(
             consommer( middleware.clone(), rx_messages_verifies, map_senders.clone())
         ));
-        futures.push(tokio::spawn(
+        futures.push(spawn(
             consommer( middleware.clone(), rx_triggers, map_senders)
         ));
 
         // ** Thread d'entretien **
-        futures.push(tokio::spawn(entretien(middleware.clone(), rx_entretien)));
+        futures.push(spawn(entretien(middleware.clone(), rx_entretien)));
 
         // Thread ecoute et validation des messages
         for f in future_recevoir_messages {
