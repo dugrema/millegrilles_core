@@ -1343,7 +1343,6 @@ dependencies = [
  "async-std",
  "async-tar",
  "async-trait",
- "bson",
  "bytes 1.1.0",
  "chrono",
  "env_logger",
