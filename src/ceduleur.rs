@@ -4,7 +4,6 @@ use std::ops::Add;
 use std::sync::Arc;
 
 use log::{debug, error, info, warn};
-use millegrilles_common_rust::{ConfigQueue, ConfigRoutingExchange, MessageCedule, QueueType, sauvegarder_transaction, TraiterTransaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509};
@@ -13,17 +12,18 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{formatter_message_certificat, upsert_certificat};
+use millegrilles_common_rust::messages_generiques::MessageCedule;
+use millegrilles_common_rust::middleware::{formatter_message_certificat, sauvegarder_transaction, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb::bson::doc;
-use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
+use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
+use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, Instant, sleep_until};
-use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction};
-use millegrilles_common_rust::serde_json::{json, Value};
+use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 
 /// Emet un message signe avec le temps epoch courant a toutes les minutes.
 /// Permet aux modules de facilement executer des taches cedulees.
@@ -73,11 +73,12 @@ where M: GenerateurMessages
     let message = MessageCedule::now();
     debug!("Emettre trigger cedule {:?}", message);
 
-    let mut exchanges = Vec::new();
-    exchanges.push(Securite::L1Public);
-    exchanges.push(Securite::L2Prive);
-    exchanges.push(Securite::L3Protege);
-    exchanges.push(Securite::L4Secure);
+    let exchanges = vec![
+        Securite::L1Public,
+        Securite::L2Prive,
+        Securite::L3Protege,
+        Securite::L4Secure
+    ];
 
     middleware.emettre_evenement(
         "global",
