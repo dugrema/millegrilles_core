@@ -1376,15 +1376,9 @@ dependencies = [
 name = "millegrilles_core"
 version = "1.45.0"
 dependencies = [
- "chrono",
  "env_logger",
- "futures 0.3.16",
- "futures-util",
  "log",
  "millegrilles_common_rust",
- "serde",
- "serde_json",
- "uuid",
 ]
 
 [[package]]
