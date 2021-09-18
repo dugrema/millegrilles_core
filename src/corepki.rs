@@ -3,26 +3,29 @@ use std::error::Error;
 use std::sync::Arc;
 
 use log::{debug, error, info, warn};
-use millegrilles_common_rust::{Chiffreur, ConfigQueue, ConfigRoutingExchange, FormatteurMessage, QueueType, reset_backup_flag, restaurer, sauvegarder_transaction, TraiterTransaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::async_trait::async_trait;
+use millegrilles_common_rust::backup::{reset_backup_flag, restaurer};
 use millegrilles_common_rust::backup::backup;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::chiffrage::Chiffreur;
 use millegrilles_common_rust::constantes::*;
+use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{formatter_message_certificat, upsert_certificat};
+use millegrilles_common_rust::middleware::{formatter_message_certificat, sauvegarder_transaction, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
-use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
+use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
-use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, Transaction};
+use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
+
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 
 // Constantes
@@ -606,9 +609,9 @@ mod test_integration {
     use chrono::Utc;
 
     use crate::test_setup::setup;
+    use crate::validateur_pki_mongo::preparer_middleware_pki;
 
     use super::*;
-    use crate::validateur_pki_mongo::preparer_middleware_pki;
 
     #[tokio::test]
     async fn regenerer_transactions_integration() {
