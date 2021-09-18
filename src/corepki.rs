@@ -457,7 +457,11 @@ where
     let document_certificat = match collection.find_one(filtre, None).await {
         Ok(inner) => match inner {
             Some(inner) => Ok(inner),
-            None => Err(format!("Certificat par pk introuvable fingerprint pk : {}", fingerprint_pk)),
+            None => {
+                let reponse_value = json!({"resultat": false});
+                let reponse = middleware.formatter_reponse(reponse_value, None)?;
+                return Ok(Some(reponse));
+            },
         },
         Err(e) => Err(format!("Erreur chargement certificat par pk pour fingerprint pk : {}, {:?}", fingerprint_pk, e)),
     }?;
@@ -603,7 +607,7 @@ mod test_integration {
     use millegrilles_common_rust::chrono::Utc;
     // use millegrilles_common_rust::certificats::certificats_tests::{CERT_DOMAINES, CERT_FICHIERS, charger_enveloppe_privee_env, prep_enveloppe};
     use millegrilles_common_rust::middleware::preparer_middleware_pki;
-    use millegrilles_common_rust::regenerer;
+    // use millegrilles_common_rust::regenerer;
     use millegrilles_common_rust::tokio_stream::StreamExt;
 
     use chrono::Utc;
@@ -612,6 +616,7 @@ mod test_integration {
     use crate::validateur_pki_mongo::preparer_middleware_pki;
 
     use super::*;
+    use millegrilles_common_rust::transactions::regenerer;
 
     #[tokio::test]
     async fn regenerer_transactions_integration() {
