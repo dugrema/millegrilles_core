@@ -2,6 +2,7 @@ mod domaines_core;
 mod corepki;
 mod ceduleur;
 mod validateur_pki_mongo;
+mod corecatalogues;
 
 use crate::domaines_core::build;
 use log::{info};

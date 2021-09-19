@@ -21,6 +21,7 @@ use millegrilles_common_rust::transactions::resoumettre_transactions;
 
 use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
 use crate::corepki::{preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki, NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS};
+use crate::corecatalogues::{preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues, NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
 
 const DUREE_ATTENTE: u64 = 20000;
@@ -30,6 +31,7 @@ pub async fn build() {
     // Recuperer configuration des Q de tous les domaines
     let mut queues: Vec<QueueType> = preparer_q_corepki();
     queues.extend(preparer_q_corepki());
+    queues.extend(preparer_q_catalogues());
 
     // Listeners de connexion MQ
     let (tx_entretien, rx_entretien) = mpsc::channel(1);
@@ -72,6 +74,14 @@ pub async fn build() {
         futures.extend(futures_pki);        // Deplacer vers futures globaux
         map_senders.extend(routing_pki);    // Deplacer vers mapping global
 
+        // Preparer domaine CorePki
+        let (
+            routing_catalogues,
+            futures_catalogues
+        ) = preparer_threads_corecatalogues(middleware.clone()).await.expect("core catalogues");
+        futures.extend(futures_catalogues);        // Deplacer vers futures globaux
+        map_senders.extend(routing_catalogues);    // Deplacer vers mapping global
+
         // Preparer ceduleur (emet triggers a toutes les minutes)
         let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
         futures.extend(ceduleur);           // Deplacer vers futures globaux
@@ -112,6 +122,7 @@ where
     // Liste de collections de transactions pour tous les domaines geres par Core
     let collections_transaction = vec! [
         PKI_NOM_COLLECTION_TRANSACTIONS,
+        CATALOGUES_NOM_COLLECTION_TRANSACTIONS,
     ];
 
     let mut prochain_entretien_transactions = chrono::Utc::now();
@@ -126,7 +137,6 @@ where
         if prochain_entretien_transactions < maintenant {
             let resultat = resoumettre_transactions(
                 middleware.as_ref(),
-                "Core",
                 &collections_transaction
             ).await;
 

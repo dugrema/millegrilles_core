@@ -31,31 +31,18 @@ use crate::validateur_pki_mongo::MiddlewareDbPki;
 // Constantes
 pub const DOMAINE_NOM: &str = "CorePki";
 pub const DOMAINE_LEGACY_NOM: &str = "Pki";
-// pub const PKI_DOMAINE_CERTIFICAT_NOM: &str = "certificat";
-//pub  const PKI_COLLECTION_TRANSACTIONS_NOM: &str = PKI_DOMAINE_NOM;
 pub const COLLECTION_CERTIFICAT_NOM: &str = "CorePki/certificat";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
 const DOMAINE_CERTIFICAT_NOM: &str = "certificat";
-// pub const PKI_COLLECTION_TRANSACTIONS_NOM: &str = "Pki.rust";
-// pub const PKI_COLLECTION_CERTIFICAT_NOM: &str = "Pki.rust/certificat";
-
 const PKI_REQUETE_CERTIFICAT: &str = "infoCertificat";
 const PKI_REQUETE_CERTIFICAT_PAR_PK: &str = "certificatParPk";
-
 const PKI_COMMANDE_SAUVEGARDER_CERTIFICAT: &str = "certificat";
 const PKI_COMMANDE_NOUVEAU_CERTIFICAT: &str = "nouveauCertificat";
-
-// pub const PKI_TRANSACTION_NOUVEAU_CERTIFICAT: &str = PKI_COMMANDE_NOUVEAU_CERTIFICAT;
-
-// pub const PKI_DOCUMENT_CHAMP_FINGERPRINT: &str = "fingerprint";
 const PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
-// pub const PKI_DOCUMENT_CHAMP_CERTIFICAT: &str = "certificat";
-
 const NOM_Q_TRANSACTIONS_PKI: &str = "CorePki/transactions";
 const NOM_Q_TRANSACTIONS_VOLATILS: &str = "CorePki/volatils";
 const NOM_Q_TRIGGERS_PKI: &str = "CorePki/triggers";
-
 const NOM_DOMAINE_CERTIFICATS: &str = "certificat";
 
 
