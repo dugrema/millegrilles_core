@@ -338,7 +338,8 @@ pub fn preparer_middleware_pki(
     futures.push(tokio::spawn(task_requetes_certificats(
         middleware.clone(),
         rx_certificats_manquants,
-        mq_executor.tx_interne.clone()
+        mq_executor.tx_interne.clone(),
+        true   // On ne fait par de requete.certificat.FP (cause avalanche avec CorePki)
     )));
 
     (middleware, rx_messages_verifies, rx_triggers, futures)
