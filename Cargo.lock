@@ -1378,6 +1378,7 @@ dependencies = [
  "env_logger",
  "log",
  "millegrilles_common_rust",
+ "serde",
 ]
 
 [[package]]
