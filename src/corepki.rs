@@ -83,6 +83,8 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<(HashM
     routing_pki.insert(String::from(DOMAINE_NOM), tx_pki_messages.clone());
     routing_pki.insert(String::from(NOM_DOMAINE_CERTIFICATS), tx_pki_messages.clone());
 
+    debug!("Routing PKI : {:?}", routing_pki);
+
     // Thread consommation
     let futures = FuturesUnordered::new();
     futures.push(spawn(consommer_messages(middleware.clone(), rx_pki_messages)));
@@ -428,11 +430,27 @@ where
     }?;
 
     let enveloppe = match middleware.get_certificat(fingerprint).await {
-        Some(inner) => Ok(inner),
-        None => Err(format!("Certificat inconnu : {}", fingerprint)),
-    }?;
+        Some(inner) => inner,
+        None => {
+            debug!("Certificat inconnu : {}", fingerprint);
+            return Ok(None);
+        }
+    };
+
+    debug!("Requete certificat sur fingerprint {} trouve", fingerprint);
 
     let reponse_value = formatter_message_certificat(enveloppe.as_ref());
+
+    // C'est une requete sur le domaine certificat, on emet l'evenement.infocertificat.fingerprint
+    let exchanges = match m.exchange {
+        Some(e) => Some(vec![securite_enum(e.as_str())?]),
+        None => None,
+    };
+
+    if let Err(e) = middleware.emettre_evenement("certificat", "infoCertificat", None, &reponse_value, exchanges).await {
+        warn!("Erreur emission evenement infocertificat pour {}", fingerprint);
+    }
+
     let reponse = middleware.formatter_reponse(reponse_value, None)?;
     Ok(Some(reponse))
 }
