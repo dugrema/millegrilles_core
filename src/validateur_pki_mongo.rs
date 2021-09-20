@@ -25,7 +25,6 @@ use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio as tokio;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::Receiver};
 use millegrilles_common_rust::tokio::task::JoinHandle;
-use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptions, VerificateurMessage, verifier_message};
 
 use crate::corepki::{COLLECTION_CERTIFICAT_NOM, DOMAINE_NOM as PKI_DOMAINE_NOM};
@@ -128,7 +127,7 @@ impl ValidateurX509Database {
         let collection = db.collection(COLLECTION_CERTIFICAT_NOM);
 
         match upsert_certificat(enveloppe, collection, None).await? {
-            Some(upserted_id) => {
+            Some(_) => {
                 debug!("Certificat upserted, creer transaction pour sauvegarde permanente");
                 // let domaine_action = format!("{}.{}", PKI_DOMAINE_NOM, PKI_TRANSACTION_NOUVEAU_CERTIFICAT);
 
@@ -156,7 +155,7 @@ impl ValidateurX509Database {
                     Some(Securite::L3Protege),
                     false
                 ).await {
-                    Ok(t) => (),
+                    Ok(_) => (),
                     Err(e) => error!("Erreur soumission transaction pour nouveau certificat : {}", e),
                 };
 
@@ -217,7 +216,7 @@ impl ValidateurX509 for ValidateurX509Database {
                                                     debug!("Certificat {} charge de la DB", fingerprint);
                                                     Some(enveloppe)
                                                 },
-                                                Err(t) => None,
+                                                Err(_) => None,
                                             }
                                         },
                                         None => None,

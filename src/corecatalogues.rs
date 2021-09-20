@@ -4,38 +4,34 @@ use std::sync::Arc;
 
 use log::{debug, error, info, warn};
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::backup::{reset_backup_flag, restaurer};
-use millegrilles_common_rust::backup::backup;
+use millegrilles_common_rust::backup::restaurer;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
-use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::chiffrage::Chiffreur;
+use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageSerialise};
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
+use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{formatter_message_certificat, sauvegarder_transaction, upsert_certificat};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao, filtrer_doc_id, convertir_bson_value};
+use millegrilles_common_rust::middleware::sauvegarder_transaction;
+use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
+use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
-use millegrilles_common_rust::tokio;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
-use millegrilles_common_rust::tokio::time::{sleep, Duration};
-use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use serde::Deserialize;
-use millegrilles_common_rust::mongodb as mongodb;
+use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
-
-use crate::validateur_pki_mongo::MiddlewareDbPki;
+use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::verificateur::ValidationOptions;
 use mongodb::options::{FindOptions, UpdateOptions};
-use crate::corepki::COLLECTION_CERTIFICAT_NOM;
+use serde::Deserialize;
+
+use crate::validateur_pki_mongo::MiddlewareDbPki;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreCatalogues";
@@ -366,7 +362,7 @@ async fn restaurer_transactions(middleware: Arc<MiddlewareDbPki>) -> Result<Opti
     Ok(None)
 }
 
-async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_transaction<M>(_middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -417,6 +413,7 @@ impl ProcesseurTransactions {
         ProcesseurTransactions {}
     }
 }
+
 #[async_trait]
 impl TraiterTransaction for ProcesseurTransactions {
     async fn traiter_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
@@ -457,9 +454,9 @@ where
     reponse
 }
 
-async fn traiter_cedule<M>(middleware: &M, trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
+async fn traiter_cedule<M>(_middleware: &M, _trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
 where M: ValidateurX509 {
-    let message = trigger.message;
+    // let message = trigger.message;
 
     debug!("Traiter cedule {}", DOMAINE_NOM);
 
@@ -502,9 +499,8 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
 
     // Verifier si l'application existe deja dans la base de donnees
     let entete_catalogue = catalogue.get_entete();
-    let uuid_catalogue = entete_catalogue.uuid_transaction.as_str();
 
-    debug!("Verifier si catalogue pour ");
+    debug!("Verifier si catalogue present pour version {:?}", version);
 
     // Valider le catalogue
     let opts = ValidationOptions::new(true, true, true);
@@ -533,7 +529,7 @@ struct CatalogueApplication {
     version: String,
 }
 
-async fn maj_catalogue<M>(middleware: &M, mut transaction: impl Transaction)
+async fn maj_catalogue<M>(middleware: &M, transaction: impl Transaction)
     -> Result<Option<MessageMilleGrille>, String>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -659,10 +655,10 @@ async fn repondre_application<M>(middleware: &M, param: &MessageMilleGrille)
 mod test_integration {
     use super::*;
 
-    // use millegrilles_common_rust::middleware::preparer_middleware_pki;
-
     use crate::test_setup::setup;
     use crate::validateur_pki_mongo::preparer_middleware_pki;
+
+// use millegrilles_common_rust::middleware::preparer_middleware_pki;
 
     #[tokio::test]
     async fn test_liste_applications() {

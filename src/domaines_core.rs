@@ -7,7 +7,6 @@ use std::sync::{Arc, Mutex};
 use log::{debug, error, warn};
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::chrono as chrono;
-use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::EmetteurCertificat;

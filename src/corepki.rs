@@ -9,9 +9,7 @@ use millegrilles_common_rust::backup::backup;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::chiffrage::Chiffreur;
 use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
@@ -21,7 +19,6 @@ use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange,
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
-use millegrilles_common_rust::tokio;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
@@ -436,7 +433,7 @@ where
     };
 
     if let Err(e) = middleware.emettre_evenement("certificat", "infoCertificat", None, &reponse_value, exchanges).await {
-        warn!("Erreur emission evenement infocertificat pour {}", fingerprint);
+        warn!("Erreur emission evenement infocertificat pour {} : {}", fingerprint, e);
     }
 
     let reponse = middleware.formatter_reponse(reponse_value, None)?;
@@ -588,11 +585,11 @@ where
     Ok(None)
 }
 
-async fn traiter_cedule<M>(middleware: &M, trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
+async fn traiter_cedule<M>(_middleware: &M, _trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
 where M: ValidateurX509 {
-    let message = trigger.message;
+    //let message = trigger.message;
 
-    debug!("Certificat ceduleur est valide, on peut executer les taches");
+    debug!("traiter_cedule corepki");
 
     Ok(())
 }
