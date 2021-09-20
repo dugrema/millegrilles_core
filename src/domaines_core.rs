@@ -21,6 +21,7 @@ use millegrilles_common_rust::transactions::resoumettre_transactions;
 use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
 use crate::corepki::{preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki, NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS};
 use crate::corecatalogues::{preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues, NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS};
+use crate::coretopologie::{preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie, NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
 
 const DUREE_ATTENTE: u64 = 20000;
@@ -31,6 +32,7 @@ pub async fn build() {
     let mut queues: Vec<QueueType> = preparer_q_corepki();
     queues.extend(preparer_q_corepki());
     queues.extend(preparer_q_catalogues());
+    queues.extend(preparer_q_topologie());
 
     // Listeners de connexion MQ
     let (tx_entretien, rx_entretien) = mpsc::channel(1);
@@ -73,13 +75,21 @@ pub async fn build() {
         futures.extend(futures_pki);        // Deplacer vers futures globaux
         map_senders.extend(routing_pki);    // Deplacer vers mapping global
 
-        // Preparer domaine CorePki
+        // Preparer domaine CoreCatalogues
         let (
             routing_catalogues,
             futures_catalogues
         ) = preparer_threads_corecatalogues(middleware.clone()).await.expect("core catalogues");
         futures.extend(futures_catalogues);        // Deplacer vers futures globaux
         map_senders.extend(routing_catalogues);    // Deplacer vers mapping global
+
+        // Preparer domaine CoreTopologie
+        let (
+            routing_topologie,
+            futures_topologie
+        ) = preparer_threads_coretopologie(middleware.clone()).await.expect("core topologie");
+        futures.extend(futures_topologie);        // Deplacer vers futures globaux
+        map_senders.extend(routing_topologie);    // Deplacer vers mapping global
 
         // Preparer ceduleur (emet triggers a toutes les minutes)
         let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
@@ -122,6 +132,7 @@ where
     let collections_transaction = vec! [
         PKI_NOM_COLLECTION_TRANSACTIONS,
         CATALOGUES_NOM_COLLECTION_TRANSACTIONS,
+        TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS,
     ];
 
     let mut prochain_entretien_transactions = chrono::Utc::now();

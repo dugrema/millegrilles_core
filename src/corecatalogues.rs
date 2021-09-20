@@ -497,9 +497,6 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
         None => None,
     };
 
-    // Verifier si l'application existe deja dans la base de donnees
-    let entete_catalogue = catalogue.get_entete();
-
     debug!("Verifier si catalogue present pour version {:?}", version);
 
     // Valider le catalogue
