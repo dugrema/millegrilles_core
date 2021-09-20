@@ -310,6 +310,7 @@ where
         DOMAINE_NOM => {
             match message.action.as_str() {
                 REQUETE_LISTE_APPLICATIONS => liste_applications(middleware).await,
+                REQUETE_INFO_APPLICATION => repondre_application(middleware, message.message.get_msg()).await,
                 _ => {
                     error!("Message action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -624,6 +625,36 @@ async fn liste_applications<M>(middleware: &M)
     Ok(Some(reponse))
 }
 
+async fn repondre_application<M>(middleware: &M, param: &MessageMilleGrille)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let nom_application: String = param.map_contenu(Some("nom"))?;
+
+    let filtre = doc! {"nom": nom_application};
+    let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
+
+    let val = match collection.find_one(filtre, None).await? {
+        Some(mut c) => {
+            filtrer_doc_id(&mut c);
+            match convertir_bson_value(c) {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg_erreur = format!("Erreur conversion doc vers json : {:?}", e);
+                    warn!("{}", msg_erreur.as_str());
+                    json!({"ok": false, "err": msg_erreur})
+                }
+            }
+        },
+        None => json!({"ok": false, "err": "Application inconnue"})
+    };
+
+    match middleware.formatter_reponse(&val,None) {
+        Ok(m) => Ok(Some(m)),
+        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+    }
+}
+
 #[cfg(test)]
 mod test_integration {
     use super::*;
@@ -642,6 +673,22 @@ mod test_integration {
             debug!("Duree test_liste_applications");
             let reponse = liste_applications(middleware.as_ref()).await.expect("reponse");
             debug!("Reponse test_liste_applications : {:?}", reponse);
+
+        }));
+        // Execution async du test
+        futures.next().await.expect("resultat").expect("ok");
+    }
+
+    #[tokio::test]
+    async fn test_application() {
+        setup("test_application");
+        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+        futures.push(spawn(async move {
+
+            debug!("Duree test_application");
+            let param = middleware.formatter_reponse(json!({"nom": "blynk"}), None).expect("param");
+            let reponse = repondre_application(middleware.as_ref(), &param).await.expect("reponse");
+            debug!("Reponse test_application : {:?}", reponse);
 
         }));
         // Execution async du test
