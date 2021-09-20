@@ -424,7 +424,7 @@ impl TraiterTransaction for ProcesseurTransactions {
 async fn aiguillage_transaction<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
 where M: ValidateurX509 + GenerateurMessages + MongoDao {
     match transaction.get_action() {
-        // PKI_TRANSACTION_NOUVEAU_CERTIFICAT => sauvegarder_certificat(middleware, transaction).await,
+        TRANSACTION_APPLICATION => maj_catalogue(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -522,4 +522,33 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
 struct CatalogueApplication {
     nom: String,
     version: String,
+}
+
+async fn maj_catalogue<M>(middleware: &M, mut transaction: impl Transaction) -> Result<Option<MessageMilleGrille>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Sauvegarder application recu via catalogue (transaction)");
+
+    let contenu = transaction.contenu();
+    let nom = match contenu.get_str("nom") {
+        Ok(c) => Ok(c),
+        Err(e) => Err(format!("Champ nom manquant de transaction application : {:?}", e)),
+    }?;
+
+    // Filtrer le contenu (retirer champs _)
+    let mut set_ops = Document::new();
+    let iter: millegrilles_common_rust::bson::document::IntoIter = contenu.into_iter();
+    for (k, v) in iter {
+        if ! k.starts_with("_") {
+            set_ops.insert(k, v);
+        }
+    }
+
+    debug!("set-ops : {:?}", set_ops);
+
+    // let collection_doc_pki = middleware.get_collection(COLLECTION_CERTIFICAT_NOM)?;
+    // upsert_certificat(&enveloppe, collection_doc_pki, Some(false)).await?;
+
+    Ok(None)
 }
