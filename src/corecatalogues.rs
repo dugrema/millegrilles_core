@@ -14,7 +14,7 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::sauvegarder_transaction;
+use millegrilles_common_rust::middleware::{sauvegarder_transaction, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -82,6 +82,7 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
 
     // Thread entretien
     futures.push(spawn(entretien(middleware.clone())));
+    futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
 
     Ok((routing, futures))
 }
@@ -650,10 +651,10 @@ async fn repondre_application<M>(middleware: &M, param: &MessageMilleGrille)
 
 #[cfg(test)]
 mod test_integration {
-    use super::*;
-
     use crate::test_setup::setup;
     use crate::validateur_pki_mongo::preparer_middleware_pki;
+
+    use super::*;
 
 // use millegrilles_common_rust::middleware::preparer_middleware_pki;
 

@@ -13,12 +13,13 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{formatter_message_certificat, sauvegarder_transaction, upsert_certificat};
+use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_message_certificat, sauvegarder_transaction, thread_emettre_presence_domaine, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
+use millegrilles_common_rust::tokio;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
@@ -75,11 +76,9 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<(HashM
     futures.push(spawn(consommer_messages(middleware.clone(), rx_pki_messages)));
     futures.push(spawn(consommer_messages(middleware.clone(), rx_pki_triggers)));
 
-    // todo Thread entretien
-        // match emettre_presence_domaine(self, PKI_DOMAINE_NOM).await {
-        //     Ok(()) => (),
-        //     Err(e) => warn!("Erreur emission presence du domaine : {}", e),
-        // };
+    // Thread entretien, etc
+    futures.push(spawn(entretien(middleware.clone())));
+    futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
 
     Ok((routing_pki, futures))
 }
@@ -224,6 +223,18 @@ where M: MongoDao
     ).await?;
 
     Ok(())
+}
+
+async fn entretien(middleware: Arc<MiddlewareDbPki>) {
+
+    let mut catalogues_charges = false;
+
+    // Attente initiale
+    tokio::time::sleep(tokio::time::Duration::new(15, 0)).await;
+    loop {
+        debug!("Cycle entretien {}", DOMAINE_NOM);
+        tokio::time::sleep(tokio::time::Duration::new(120, 0)).await;
+    }
 }
 
 async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
@@ -612,12 +623,12 @@ mod test_integration {
     // use millegrilles_common_rust::middleware::preparer_middleware_pki;
     // use millegrilles_common_rust::regenerer;
     use millegrilles_common_rust::tokio_stream::StreamExt;
+    use millegrilles_common_rust::transactions::regenerer;
 
     use crate::test_setup::setup;
     use crate::validateur_pki_mongo::preparer_middleware_pki;
 
     use super::*;
-    use millegrilles_common_rust::transactions::regenerer;
 
     #[tokio::test]
     async fn regenerer_transactions_integration() {

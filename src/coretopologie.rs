@@ -14,7 +14,7 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::sauvegarder_transaction;
+use millegrilles_common_rust::middleware::{sauvegarder_transaction, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -83,7 +83,8 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
     futures.push(spawn(consommer_messages(middleware.clone(), rx_triggers)));
 
     // Thread entretien
-    //futures.push(spawn(entretien(middleware.clone())));
+    futures.push(spawn(entretien(middleware.clone())));
+    futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
 
     Ok((routing, futures))
 }
@@ -216,15 +217,200 @@ async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<T
     while let Some(message) = rx.recv().await {
         debug!("Message {} recu : {:?}", DOMAINE_NOM, message);
 
-        // let resultat = match message {
-        //     TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
-        //     TypeMessage::Valide(inner) => {warn!("Recu MessageValide sur thread consommation, skip : {:?}", inner); Ok(())},
-        //     TypeMessage::Certificat(inner) => {warn!("Recu MessageCertificat sur thread consommation, skip : {:?}", inner); Ok(())},
-        //     TypeMessage::Regeneration => continue, // Rien a faire, on boucle
-        // };
-        //
-        // if let Err(e) = resultat {
-        //     error!("Erreur traitement message : {:?}\n", e);
-        // }
+        let resultat = match message {
+            TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
+            TypeMessage::Valide(inner) => {warn!("Recu MessageValide sur thread consommation, skip : {:?}", inner); Ok(())},
+            TypeMessage::Certificat(inner) => {warn!("Recu MessageCertificat sur thread consommation, skip : {:?}", inner); Ok(())},
+            TypeMessage::Regeneration => continue, // Rien a faire, on boucle
+        };
+
+        if let Err(e) = resultat {
+            error!("Erreur traitement message : {:?}\n", e);
+        }
+    }
+}
+
+async fn entretien(_middleware: Arc<MiddlewareDbPki>) {
+
+    let mut catalogues_charges = false;
+
+    loop {
+        sleep(Duration::new(30, 0)).await;
+        debug!("Cycle entretien {}", DOMAINE_NOM);
+    }
+}
+
+async fn traiter_cedule<M>(_middleware: &M, _trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
+where M: ValidateurX509 {
+    // let message = trigger.message;
+
+    debug!("Traiter cedule {}", DOMAINE_NOM);
+
+    Ok(())
+}
+
+async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), Box<dyn Error>> {
+
+    let correlation_id = match &message.correlation_id {
+        Some(inner) => Some(inner.clone()),
+        None => None,
+    };
+    let reply_q = match &message.reply_q {
+        Some(inner) => Some(inner.clone()),
+        None => None,
+    };
+
+    let resultat = match message.type_message {
+        TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
+        TypeMessageOut::Commande => consommer_commande(middleware.clone(), message).await,
+        TypeMessageOut::Transaction => consommer_transaction(middleware.as_ref(), message).await,
+        TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
+        TypeMessageOut::Evenement => consommer_evenement(middleware.as_ref(), message).await,
+    }?;
+
+    match resultat {
+        Some(reponse) => {
+            let reply_q = match reply_q {
+                Some(reply_q) => reply_q,
+                None => {
+                    debug!("Reply Q manquante pour reponse a {:?}", correlation_id);
+                    return Ok(())
+                },
+            };
+            let correlation_id = match correlation_id {
+                Some(correlation_id) => Ok(correlation_id),
+                None => Err("Correlation id manquant pour reponse"),
+            }?;
+            info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
+            middleware.repondre(reponse, &reply_q, &correlation_id).await?;
+        },
+        None => (),  // Aucune reponse
+    }
+
+    Ok(())
+}
+
+async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer requete : {:?}", &message.message);
+
+    // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
+
+    match message.domaine.as_str() {
+        DOMAINE_NOM => {
+            match message.action.as_str() {
+                // REQUETE_LISTE_APPLICATIONS => liste_applications(middleware).await,
+                _ => {
+                    error!("Message action inconnue : '{}'. Message dropped.", message.action);
+                    Ok(None)
+                },
+            }
+        },
+        _ => {
+            error!("Message requete domaine inconnu : '{}'. Message dropped.", message.domaine);
+            Ok(None)
+        },
+    }
+}
+
+async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+{
+    debug!("Consommer commande : {:?}", &m.message);
+
+    // Autorisation : doit etre de niveau 3.protege ou 4.secure
+    match m.verifier_exchanges(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
+    }?;
+
+    match m.action.as_str() {
+        // Commandes standard
+    //     TRANSACTION_APPLICATION => traiter_commande_application(middleware.as_ref(), m).await,
+    //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
+    //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
+    //
+    //     // Commandes specifiques au domaine
+    //     PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
+    //
+    //     // Commandes inconnues
+        _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
+    }
+}
+
+async fn consommer_transaction<M>(_middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer transaction : {:?}", &m.message);
+
+    // Autorisation : doit etre de niveau 4.secure
+    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+    }?;
+
+    match m.action.as_str() {
+    //     PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
+    //         sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
+    //         Ok(None)
+    //     },
+        _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
+    }
+
+    Ok(None)
+}
+
+async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
+    debug!("Consommer evenement : {:?}", &m.message);
+
+    // Autorisation : doit etre de niveau 4.secure
+    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+    }?;
+
+    match m.action.as_str() {
+        EVENEMENT_TRANSACTION_PERSISTEE => {
+            traiter_transaction(DOMAINE_NOM, middleware, m).await?;
+            Ok(None)
+        },
+        EVENEMENT_CEDULE => {
+            traiter_cedule(middleware, m).await?;
+            Ok(None)
+        }
+        _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
+    }
+}
+
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
+where
+    M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
+    };
+
+    let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;
+    debug!("Traitement transaction, chargee : {:?}", transaction);
+
+    let uuid_transaction = transaction.get_uuid_transaction().to_owned();
+    let reponse = aiguillage_transaction(middleware, transaction).await;
+    if reponse.is_ok() {
+        // Marquer transaction completee
+        debug!("Transaction traitee {}, marquer comme completee", uuid_transaction);
+        marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
+    }
+
+    reponse
+}
+
+async fn aiguillage_transaction<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+where M: ValidateurX509 + GenerateurMessages + MongoDao {
+    match transaction.get_action() {
+        // TRANSACTION_APPLICATION => maj_catalogue(middleware, transaction).await,
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
