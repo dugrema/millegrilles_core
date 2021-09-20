@@ -29,9 +29,10 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::verificateur::ValidationOptions;
 use mongodb::options::{FindOptions, UpdateOptions};
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
+use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreTopologie";
@@ -50,6 +51,9 @@ const REQUETE_DOMAINES: &str = "listeDomaines";
 const REQUETE_NOEUDS: &str = "listeNoeuds";
 const REQUETE_INFO_DOMAINE: &str = "infoDomaine";
 const REQUETE_INFO_NOEUD: &str = "infoNoeud";
+
+const TRANSACTION_DOMAINE: &str = "domaine";
+const TRANSACTION_MONITOR: &str = "monitor";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "monitor";
 const EVENEMENT_PRESENCE_DOMAINE: &str = "domaine";
@@ -452,7 +456,7 @@ where
 async fn aiguillage_transaction<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
 where M: ValidateurX509 + GenerateurMessages + MongoDao {
     match transaction.get_action() {
-        // TRANSACTION_APPLICATION => maj_catalogue(middleware, transaction).await,
+        TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -472,18 +476,39 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
     let filtre = doc! {"domaine": &event.domaine};
     let ops = doc! {
         "$set": set_ops,
-        "$setOnInsert": {"domaine": event.domaine, CHAMP_CREATION: Utc::now()},
+        "$setOnInsert": {"domaine": &event.domaine, CHAMP_CREATION: Utc::now(), "dirty": true},
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
 
     debug!("Document monitor a sauvegarder : {:?}", ops);
 
     let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
-    let options = UpdateOptions::builder()
-        .upsert(true)
-        .build();
-    let result = collection.update_one(filtre,ops, Some(options)).await?;
-    debug!("Result update domaines : {:?}", result);
+    let options = FindOneAndUpdateOptions::builder().upsert(true).build();
+    let result = match collection.find_one_and_update(filtre,ops, Some(options)).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("Erreur find document sur transaction domaine : {:?}", e))?
+    };
+    let creer_transaction = match result {
+        Some(d) => d.get_bool("dirty")?,
+        None => true,
+    };
+
+    if creer_transaction {
+        debug!("Creer transaction topologie pour domaine {}", &event.domaine);
+
+        let transaction = middleware.formatter_message(
+            &event, Some(DOMAINE_NOM), Some(TRANSACTION_DOMAINE), None, None)?;
+
+        // Sauvegarder la transation
+        let msg = MessageSerialise::from_parsed(transaction)?;
+        let msg_action = MessageValideAction::new(msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
+        sauvegarder_transaction(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
+
+        // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
+        let filtre = doc! {"domaine": &event.domaine};
+        let ops = doc! {"$set": {"dirty": false}};
+        let _ = collection.update_one(filtre, ops, None).await?;
+    }
 
     Ok(None)
 }
@@ -503,7 +528,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
     let filtre = doc! {"noeud_id": &event.noeud_id};
     let ops = doc! {
         "$set": set_ops,
-        "$setOnInsert": {"noeud_id": event.noeud_id, CHAMP_CREATION: Utc::now()},
+        "$setOnInsert": {"noeud_id": event.noeud_id, CHAMP_CREATION: Utc::now(), "dirty": true},
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
 
@@ -519,13 +544,42 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
     Ok(None)
 }
 
-#[derive(Clone, Debug, Deserialize)]
+async fn traiter_transaction_domaine<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+    where M: GenerateurMessages + MongoDao
+{
+    let mut doc = transaction.contenu();
+    let domaine = match doc.get_str("domaine") {
+        Ok(d) => d,
+        Err(e) => Err(format!("Erreur traitement transaction domaine {:?}", e))?
+    };
+
+    let ops = doc! {
+        "$set": {"dirty": false},
+        "$setOnInsert": {CHAMP_DOMAINE: domaine, CHAMP_CREATION: Utc::now()},
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    let filtre = doc! {CHAMP_DOMAINE: domaine};
+    let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
+    let options = UpdateOptions::builder().upsert(true).build();
+    match collection.update_one(filtre, ops, options).await {
+        Ok(_) => (),
+        Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
+    }
+
+    let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
+        Ok(r) => r,
+        Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
+    };
+    Ok(Some(reponse))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceDomaine {
     domaine: String,
     noeud_id: String,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceMonitor {
     domaine: String,
     noeud_id: String,
