@@ -17,11 +17,12 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::{formatter_message_certificat, sauvegarder_transaction, upsert_certificat};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao, filtrer_doc_id, convertir_bson_value};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
+use millegrilles_common_rust::tokio;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
@@ -29,10 +30,12 @@ use millegrilles_common_rust::tokio::time::{sleep, Duration};
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use serde::Deserialize;
 use millegrilles_common_rust::mongodb as mongodb;
+use millegrilles_common_rust::tokio_stream::StreamExt;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::verificateur::ValidationOptions;
-use mongodb::options::UpdateOptions;
+use mongodb::options::{FindOptions, UpdateOptions};
+use crate::corepki::COLLECTION_CERTIFICAT_NOM;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreCatalogues";
@@ -303,23 +306,21 @@ where
 
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
 
-    // match message.domaine.as_str() {
-    //     DOMAINE_LEGACY_NOM | DOMAINE_NOM => match message.action.as_str() {
-    //         PKI_REQUETE_CERTIFICAT => requete_certificat(middleware, message).await,
-    //         PKI_REQUETE_CERTIFICAT_PAR_PK => requete_certificat_par_pk(middleware, message).await,
-    //         _ => {
-    //             error!("Message requete action inconnue : {}. Message dropped.", message.action);
-    //             Ok(None)
-    //         },
-    //     },
-    //     DOMAINE_CERTIFICAT_NOM => requete_certificat(middleware, message).await,
-    //     _ => {
-    //         error!("Message requete domaine inconnu : '{}'. Message dropped.", message.domaine);
-    //         Ok(None)
-    //     },
-    // }
-
-    Ok(None)
+    match message.domaine.as_str() {
+        DOMAINE_NOM => {
+            match message.action.as_str() {
+                REQUETE_LISTE_APPLICATIONS => liste_applications(middleware).await,
+                _ => {
+                    error!("Message action inconnue : '{}'. Message dropped.", message.action);
+                    Ok(None)
+                },
+            }
+        },
+        _ => {
+            error!("Message requete domaine inconnu : '{}'. Message dropped.", message.domaine);
+            Ok(None)
+        },
+    }
 }
 
 async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -376,13 +377,13 @@ where
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
 
-    // match m.action.as_str() {
+    match m.action.as_str() {
     //     PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
     //         sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
     //         Ok(None)
     //     },
-    //     _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
-    // }
+        _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
+    }
 
     Ok(None)
 }
@@ -531,9 +532,9 @@ struct CatalogueApplication {
     version: String,
 }
 
-async fn maj_catalogue<M>(middleware: &M, mut transaction: impl Transaction) -> Result<Option<MessageMilleGrille>, String>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
+async fn maj_catalogue<M>(middleware: &M, mut transaction: impl Transaction)
+    -> Result<Option<MessageMilleGrille>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Sauvegarder application recu via catalogue (transaction)");
 
@@ -547,7 +548,7 @@ where
     let mut set_ops = Document::new();
     let iter: millegrilles_common_rust::bson::document::IntoIter = contenu.into_iter();
     for (k, v) in iter {
-        if ! k.starts_with("_") {
+        if ! k.starts_with("_") && k != TRANSACTION_CHAMP_ENTETE {
             set_ops.insert(k, v);
         }
     }
@@ -572,4 +573,78 @@ where
     debug!("Resultat maj document : {:?}", resultat);
 
     Ok(None)
+}
+
+async fn liste_applications<M>(middleware: &M)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let filtre = doc! {};
+    let projection = doc!{
+        "nom": true,
+        "version": true,
+        "images": true,
+        "registries": true,
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
+    let ops = FindOptions::builder()
+        .projection(Some(projection))
+        .build();
+    let mut curseur = match collection.find(filtre, Some(ops)).await {
+        Ok(c) => c,
+        Err(e) => Err(format!("Erreur chargement applications : {:?}", e))?
+    };
+
+    let mut apps = Vec::new();
+    while let Some(d) = curseur.next().await {
+        match d {
+            Ok(mut doc) => {
+                filtrer_doc_id(&mut doc);
+
+                match convertir_bson_value(doc) {
+                    Ok(v) => apps.push(v),
+                    Err(e) => warn!("Erreur conversion doc vers json : {:?}", e)
+                }
+
+            },
+            Err(e) => warn!("Erreur chargement document : {:?}", e)
+        }
+    }
+
+    debug!("Apps : {:?}", apps);
+    let liste = json!({
+        "resultats": apps,
+    });
+
+    let reponse = match middleware.formatter_reponse(&liste,None) {
+        Ok(m) => m,
+        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+    };
+    Ok(Some(reponse))
+}
+
+#[cfg(test)]
+mod test_integration {
+    use super::*;
+
+    // use millegrilles_common_rust::middleware::preparer_middleware_pki;
+
+    use crate::test_setup::setup;
+    use crate::validateur_pki_mongo::preparer_middleware_pki;
+
+    #[tokio::test]
+    async fn test_liste_applications() {
+        setup("test_liste_applications");
+        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+        futures.push(spawn(async move {
+
+            debug!("Duree test_liste_applications");
+            let reponse = liste_applications(middleware.as_ref()).await.expect("reponse");
+            debug!("Reponse test_liste_applications : {:?}", reponse);
+
+        }));
+        // Execution async du test
+        futures.next().await.expect("resultat").expect("ok");
+    }
 }

@@ -21,6 +21,7 @@ use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange,
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
+use millegrilles_common_rust::tokio;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
@@ -611,11 +612,9 @@ impl TraiterTransaction for TraiterTransactionPki {
 mod test_integration {
     use millegrilles_common_rust::chrono::Utc;
     // use millegrilles_common_rust::certificats::certificats_tests::{CERT_DOMAINES, CERT_FICHIERS, charger_enveloppe_privee_env, prep_enveloppe};
-    use millegrilles_common_rust::middleware::preparer_middleware_pki;
+    // use millegrilles_common_rust::middleware::preparer_middleware_pki;
     // use millegrilles_common_rust::regenerer;
     use millegrilles_common_rust::tokio_stream::StreamExt;
-
-    use chrono::Utc;
 
     use crate::test_setup::setup;
     use crate::validateur_pki_mongo::preparer_middleware_pki;
@@ -632,7 +631,7 @@ mod test_integration {
             let debut_traitement = Utc::now();
             debug!("Debut regeneration : {:?}", debut_traitement);
             let mut colls = Vec::new();
-            colls.push(String::from(NOM_COLLECTION_CERTIFICATS));
+            colls.push(String::from(COLLECTION_CERTIFICAT_NOM));
             let processor = TraiterTransactionPki{};
             regenerer(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS, &colls, &processor)
                 .await.expect("regenerer");
