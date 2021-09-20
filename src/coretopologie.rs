@@ -39,6 +39,8 @@ pub const NOM_COLLECTION_DOMAINES: &str = "CoreTopologie/domaines";
 pub const NOM_COLLECTION_NOEUDS: &str = "CoreTopologie/noeuds";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
+pub const DOMAINE_PRESENCE_NOM: &str = "presence";
+
 const NOM_Q_TRANSACTIONS: &str = "CoreTopologie/transactions";
 const NOM_Q_VOLATILS: &str = "CoreTopologie/volatils";
 const NOM_Q_TRIGGERS: &str = "CoreTopologie/triggers";
@@ -48,6 +50,9 @@ const REQUETE_DOMAINES: &str = "listeDomaines";
 const REQUETE_NOEUDS: &str = "listeNoeuds";
 const REQUETE_INFO_DOMAINE: &str = "infoDomaine";
 const REQUETE_INFO_NOEUD: &str = "infoNoeud";
+
+const EVENEMENT_PRESENCE_MONITOR: &str = "monitor";
+const EVENEMENT_PRESENCE_DOMAINE: &str = "domaine";
 
 // permissionDechiffrage
 // listerNoeudsAWSS3
@@ -61,8 +66,8 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
     preparer_index_mongodb(middleware.as_ref()).await?;
 
     // Channels pour traiter messages
-    let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(20);
-    let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(5);
+    let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(1);
+    let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(1);
 
     // Routing map pour le domaine
     let mut routing: HashMap<String, Sender<TypeMessage>> = HashMap::new();
@@ -110,6 +115,21 @@ pub fn preparer_queues() -> Vec<QueueType> {
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege});
     }
+
+    let evenements: Vec<&str> = vec![
+        EVENEMENT_PRESENCE_MONITOR,
+    ];
+    for evenement in &evenements {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L3Protege});
+    }
+    for evenement in &evenements {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L2Prive});
+    }
+    for evenement in &evenements {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L1Public});
+    }
+
+    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, EVENEMENT_PRESENCE_DOMAINE), exchange: Securite::L3Protege});
 
     let mut queues = Vec::new();
 

@@ -59,8 +59,8 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
     preparer_index_mongodb(middleware.as_ref()).await?;
 
     // Channels pour traiter messages Pki
-    let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(20);
-    let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(5);
+    let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(1);
+    let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(1);
 
     // Routing map pour le domaine
     let mut routing: HashMap<String, Sender<TypeMessage>> = HashMap::new();

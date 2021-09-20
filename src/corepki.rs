@@ -52,8 +52,8 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<(HashM
     preparer_index_mongodb(middleware.as_ref()).await?;
 
     // Channels pour traiter messages Pki
-    let (tx_pki_messages, rx_pki_messages) = mpsc::channel::<TypeMessage>(20);
-    let (tx_pki_triggers, rx_pki_triggers) = mpsc::channel::<TypeMessage>(5);
+    let (tx_pki_messages, rx_pki_messages) = mpsc::channel::<TypeMessage>(1);
+    let (tx_pki_triggers, rx_pki_triggers) = mpsc::channel::<TypeMessage>(1);
 
     // Routing map pour le domaine CorePki (et legacy Pki). Recoit aussi domaine virtuel "certificat".
     // Fonctionne avec le nom de la Q (e.g. CorPki/transactions) ou le domaine (certificat, Pki, etc. dans routing key)
