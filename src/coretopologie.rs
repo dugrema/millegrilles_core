@@ -54,6 +54,12 @@ const REQUETE_INFO_NOEUD: &str = "infoNoeud";
 const EVENEMENT_PRESENCE_MONITOR: &str = "monitor";
 const EVENEMENT_PRESENCE_DOMAINE: &str = "domaine";
 
+const INDEX_DOMAINE: &str = "domaine";
+const INDEX_NOEUDS: &str = "noeuds";
+
+const CHAMP_DOMAINE: &str = "domaine";
+const CHAMP_NOEUD_ID: &str = "noeud_id";
+
 // permissionDechiffrage
 // listerNoeudsAWSS3
 
@@ -216,19 +222,33 @@ where M: MongoDao
         Some(options_unique_transactions)
     ).await?;
 
-    // // Index catalogues
-    // let options_unique_catalogues = IndexOptions {
-    //     nom_index: Some(String::from(INDEX_NOMS_CATALOGUES)),
-    //     unique: true
-    // };
-    // let champs_index_catalogues = vec!(
-    //     ChampIndex {nom_champ: String::from(CHAMP_NOM_CATALOGUE), direction: 1},
-    // );
-    // middleware.create_index(
-    //     NOM_COLLECTION_CATALOGUES,
-    //     champs_index_catalogues,
-    //     Some(options_unique_catalogues)
-    // ).await?;
+    // Index noeuds
+    let options_unique_noeuds = IndexOptions {
+        nom_index: Some(String::from(INDEX_NOEUDS)),
+        unique: true
+    };
+    let champs_index_noeuds = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_NOEUD_ID), direction: 1},
+    );
+    middleware.create_index(
+        NOM_COLLECTION_NOEUDS,
+        champs_index_noeuds,
+        Some(options_unique_noeuds)
+    ).await?;
+
+    // Index domaines
+    let options_unique_domaine = IndexOptions {
+        nom_index: Some(String::from(INDEX_DOMAINE)),
+        unique: true
+    };
+    let champs_index_domaine = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_DOMAINE), direction: 1},
+    );
+    middleware.create_index(
+        NOM_COLLECTION_DOMAINES,
+        champs_index_domaine,
+        Some(options_unique_domaine)
+    ).await?;
 
     Ok(())
 }
@@ -399,7 +419,9 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
         EVENEMENT_CEDULE => {
             traiter_cedule(middleware, m).await?;
             Ok(None)
-        }
+        },
+        EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m).await,
+        EVENEMENT_PRESENCE_MONITOR => traiter_presence_monitor(middleware, m).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
@@ -433,4 +455,78 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao {
         // TRANSACTION_APPLICATION => maj_catalogue(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
+}
+
+async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let event: PresenceDomaine = m.message.get_msg().map_contenu(None)?;
+    debug!("Presence domaine : {:?}", event);
+
+    let mut set_ops = m.message.get_msg().map_to_bson()?;
+    filtrer_doc_id(&mut set_ops);
+
+    // Retirer champ cle
+    set_ops.remove("domaine");
+
+    let filtre = doc! {"domaine": &event.domaine};
+    let ops = doc! {
+        "$set": set_ops,
+        "$setOnInsert": {"domaine": event.domaine, CHAMP_CREATION: Utc::now()},
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+
+    debug!("Document monitor a sauvegarder : {:?}", ops);
+
+    let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
+    let options = UpdateOptions::builder()
+        .upsert(true)
+        .build();
+    let result = collection.update_one(filtre,ops, Some(options)).await?;
+    debug!("Result update domaines : {:?}", result);
+
+    Ok(None)
+}
+
+async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
+    debug!("Presence monitor : {:?}", event);
+
+    let mut set_ops = m.message.get_msg().map_to_bson()?;
+    filtrer_doc_id(&mut set_ops);
+
+    // Retirer champ cle
+    set_ops.remove("noeud_id");
+
+    let filtre = doc! {"noeud_id": &event.noeud_id};
+    let ops = doc! {
+        "$set": set_ops,
+        "$setOnInsert": {"noeud_id": event.noeud_id, CHAMP_CREATION: Utc::now()},
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+
+    debug!("Document monitor a sauvegarder : {:?}", ops);
+
+    let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+    let options = UpdateOptions::builder()
+        .upsert(true)
+        .build();
+    let result = collection.update_one(filtre,ops, Some(options)).await?;
+    debug!("Result update monitor : {:?}", result);
+
+    Ok(None)
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct PresenceDomaine {
+    domaine: String,
+    noeud_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct PresenceMonitor {
+    domaine: String,
+    noeud_id: String,
 }
