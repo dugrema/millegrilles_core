@@ -10,6 +10,7 @@ use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage::Chiffreur;
+use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageSerialise};
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
@@ -27,9 +28,11 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{sleep, Duration};
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use serde::Deserialize;
+use millegrilles_common_rust::mongodb as mongodb;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::verificateur::ValidationOptions;
+use mongodb::options::UpdateOptions;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreCatalogues";
@@ -485,6 +488,10 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
             debug!("Version recue : {}, dans DB : {}", info_catalogue.version, version);
 
             // Si version moins grande, on skip
+            if version == info_catalogue.version {
+                debug!("Meme version de catalogue, on skip");
+                return Ok(None)
+            }
 
             Some(version)
         },
@@ -532,7 +539,7 @@ where
 
     let contenu = transaction.contenu();
     let nom = match contenu.get_str("nom") {
-        Ok(c) => Ok(c),
+        Ok(c) => Ok(c.to_owned()),
         Err(e) => Err(format!("Champ nom manquant de transaction application : {:?}", e)),
     }?;
 
@@ -546,9 +553,23 @@ where
     }
 
     debug!("set-ops : {:?}", set_ops);
+    let ops = doc! {
+        "$set": set_ops,
+        "$setOnInsert": {CHAMP_CREATION: Utc::now()},
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+    let filtre = doc! {
+        "nom": nom,
+    };
 
-    // let collection_doc_pki = middleware.get_collection(COLLECTION_CERTIFICAT_NOM)?;
-    // upsert_certificat(&enveloppe, collection_doc_pki, Some(false)).await?;
+    let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
+    let opts = UpdateOptions::builder().upsert(true).build();
+    let resultat = match collection_catalogues.update_one(filtre, ops, Some(opts)).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("Erreur maj document catalogue avec mongo : {:?}", e))?
+    };
+
+    debug!("Resultat maj document : {:?}", resultat);
 
     Ok(None)
 }
