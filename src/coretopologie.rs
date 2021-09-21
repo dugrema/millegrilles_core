@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
-use log::{debug, error, info, warn};
+use log::{trace, debug, error, info, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
 use millegrilles_common_rust::bson::{doc, Bson};
@@ -270,7 +270,7 @@ where M: MongoDao
 
 async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
     while let Some(message) = rx.recv().await {
-        debug!("Message {} recu : {:?}", DOMAINE_NOM, message);
+        trace!("Message {} recu : {:?}", DOMAINE_NOM, message);
 
         let resultat = match message {
             TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
@@ -852,7 +852,7 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
     let liste = json!({"resultats": noeuds});
     let reponse = match middleware.formatter_reponse(&liste,None) {
         Ok(m) => m,
-        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+        Err(e) => Err(format!("Erreur preparation reponse noeuds : {:?}", e))?
     };
     Ok(Some(reponse))
 }
@@ -862,7 +862,43 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_domaines");
-    Ok(None)
+    if ! message.verifier_exchanges(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+        let refus = json!({"ok": false, "err": "Acces refuse"});
+        let reponse = match middleware.formatter_reponse(&refus,None) {
+            Ok(m) => m,
+            Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+        };
+        return Ok(Some(reponse))
+    }
+
+    let mut curseur = {
+        let projection = doc! {"noeud_id": true, "domaine": true, CHAMP_MODIFICATION: true};
+        let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
+        let ops = FindOptions::builder().projection(Some(projection)).build();
+        match collection.find(doc!{}, Some(ops)).await {
+            Ok(c) => c,
+            Err(e) => Err(format!("Erreur chargement domaines : {:?}", e))?
+        }
+    };
+
+    let mut domaines = Vec::new();
+    while let Some(r) = curseur.next().await {
+        match r {
+            Ok(mut d) => {
+                filtrer_doc_id(&mut d);
+                domaines.push(d);
+            },
+            Err(e) => warn!("Erreur lecture document sous liste_noeuds() : {:?}", e)
+        }
+    }
+
+    debug!("Domaines : {:?}", domaines);
+    let liste = json!({"resultats": domaines});
+    let reponse = match middleware.formatter_reponse(&liste,None) {
+        Ok(m) => m,
+        Err(e) => Err(format!("Erreur preparation reponse domaines : {:?}", e))?
+    };
+    Ok(Some(reponse))
 }
 
 #[cfg(test)]
