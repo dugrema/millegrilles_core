@@ -5,7 +5,7 @@ use std::sync::Arc;
 use log::{debug, error, info, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
-use millegrilles_common_rust::bson::doc;
+use millegrilles_common_rust::bson::{doc, Bson};
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
@@ -30,9 +30,11 @@ use millegrilles_common_rust::transactions::{charger_transaction, EtatTransactio
 use millegrilles_common_rust::verificateur::ValidationOptions;
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Serialize, Deserialize};
+use millegrilles_common_rust::bson::Array;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
+use millegrilles_common_rust::constantes::Securite::L3Protege;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreTopologie";
@@ -335,8 +337,7 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
 }
 
 async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer requete : {:?}", &message.message);
 
@@ -345,7 +346,7 @@ where
     match message.domaine.as_str() {
         DOMAINE_NOM => {
             match message.action.as_str() {
-                // REQUETE_LISTE_APPLICATIONS => liste_applications(middleware).await,
+                REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
                 _ => {
                     error!("Message action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -519,11 +520,44 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
     let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
     debug!("Presence monitor : {:?}", event);
 
+    // Preparer valeurs applications
+    let mut applications = Array::new();
+    if let Some(map) = event.services {
+        for (nom_service, info_service) in map.iter() {
+            if let Some(labels) = &info_service.labels {
+
+                let nom_application = match labels.get("application") {
+                    Some(a) => a.as_str(),
+                    None => nom_service.as_str()
+                };
+
+                if let Some(url) = labels.get("url") {
+                    if let Some(securite) = labels.get("securite") {
+                        let mut info_app = doc! {
+                            "application": nom_application,
+                            "securite": securite,
+                            "url": url,
+                        };
+
+                        if let Some(millegrille) = labels.get("millegrille") {
+                            info_app.insert("millegrille", millegrille);
+                        }
+
+                        applications.push(Bson::Document(info_app));
+                    }
+                }
+            }
+        }
+    }
+
+    debug!("Applications noeud : {:?}", &applications);
+
     let mut set_ops = m.message.get_msg().map_to_bson()?;
     filtrer_doc_id(&mut set_ops);
 
     // Retirer champ cle
     set_ops.remove("noeud_id");
+    set_ops.insert("applications", applications);
 
     let filtre = doc! {"noeud_id": &event.noeud_id};
     let ops = doc! {
@@ -583,4 +617,125 @@ struct PresenceDomaine {
 struct PresenceMonitor {
     domaine: String,
     noeud_id: String,
+    services: Option<HashMap<String, InfoService>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct InfoService {
+    etat: Option<String>,
+    labels: Option<HashMap<String, String>>,
+    replicas: Option<usize>,
+}
+
+async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let mut curseur = {
+        let filtre = doc! {};
+        let projection = doc! {"noeud_id": true, "domaine": true, "securite": true, "applications_configurees": true};
+        let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+        let ops = FindOptions::builder().projection(Some(projection)).build();
+        match collection.find(filtre, Some(ops)).await {
+            Ok(c) => c,
+            Err(e) => Err(format!("Erreur chargement applications : {:?}", e))?
+        }
+    };
+
+    let sec_enum = match message.exchange {
+        Some(s) => securite_enum(s.as_str())?,
+        None => Err(format!("Erreur exchange non specifie"))?,
+    };
+    let sec_cascade = securite_cascade_public(&sec_enum);
+
+    // Extraire liste d'applications
+    let mut apps = Vec::new();
+    while let Some(d) = curseur.next().await {
+        match d {
+            Ok(mut doc) => {
+                let info_monitor: InformationMonitor = serde_json::from_value(serde_json::to_value(doc)?)?;
+
+                let sec_noeud = match securite_enum(&info_monitor.securite) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!("Niveau de securite du noeud {} invalide : {}", info_monitor.noeud_id, info_monitor.securite);
+                        continue  // Skip noeud
+                    }
+                };
+
+                // Verifier si le demandeur a le niveau de securite approprie
+                if sec_cascade.contains(&sec_noeud) {
+
+                    // Preparer la valeur a exporter pour les applications
+
+
+                    apps.push(info_monitor);
+                }
+            },
+            Err(e) => warn!("Erreur chargement document : {:?}", e)
+        }
+    }
+
+    debug!("Apps : {:?}", apps);
+    let liste = json!({"resultats": apps});
+    let reponse = match middleware.formatter_reponse(&liste,None) {
+        Ok(m) => m,
+        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+    };
+    Ok(Some(reponse))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct InformationMonitor {
+    domaine: String,
+    noeud_id: String,
+    securite: String,
+    applications_configurees: Vec<ApplicationConfiguree>,
+}
+impl InformationMonitor {
+    fn exporter_applications(&self) -> Vec<Value> {
+        vec!()
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ApplicationConfiguree {
+    nom: String,
+    version: String,
+}
+
+#[cfg(test)]
+mod test_integration {
+    use crate::test_setup::setup;
+    use crate::validateur_pki_mongo::preparer_middleware_pki;
+
+    use super::*;
+    use millegrilles_common_rust::tokio;
+    use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
+
+    #[tokio::test]
+    async fn test_liste_applications() {
+        setup("test_liste_applications");
+        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+        futures.push(spawn(async move {
+
+            let message = {
+                let contenu = json!({});
+                let mm = middleware.formatter_message(&contenu, None, None, None, None).expect("mm");
+                let ms = MessageSerialise::from_parsed(mm).expect("ms");
+                let mut mva = MessageValideAction::new(ms, "", "", "", "", TypeMessageOut::Transaction);
+                mva.exchange = Some(String::from("3.protege"));
+                mva
+            };
+
+            debug!("Duree test_liste_applications");
+            let reponse = liste_applications_deployees(middleware.as_ref(), message).await.expect("reponse");
+            debug!("Reponse test_liste_applications : {:?}", reponse);
+
+        }));
+        // Execution async du test
+        futures.next().await.expect("resultat").expect("ok");
+    }
+
+
 }

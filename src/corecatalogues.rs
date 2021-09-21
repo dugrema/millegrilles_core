@@ -655,6 +655,8 @@ mod test_integration {
     use crate::validateur_pki_mongo::preparer_middleware_pki;
 
     use super::*;
+    use millegrilles_common_rust::tokio;
+    use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
 
 // use millegrilles_common_rust::middleware::preparer_middleware_pki;
 
