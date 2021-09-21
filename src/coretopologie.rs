@@ -49,8 +49,8 @@ const NOM_Q_VOLATILS: &str = "CoreTopologie/volatils";
 const NOM_Q_TRIGGERS: &str = "CoreTopologie/triggers";
 
 const REQUETE_APPLICATIONS_DEPLOYEES: &str = "listeApplicationsDeployees";
-const REQUETE_DOMAINES: &str = "listeDomaines";
-const REQUETE_NOEUDS: &str = "listeNoeuds";
+const REQUETE_LISTE_DOMAINES: &str = "listeDomaines";
+const REQUETE_LISTE_NOEUDS: &str = "listeNoeuds";
 const REQUETE_INFO_DOMAINE: &str = "infoDomaine";
 const REQUETE_INFO_NOEUD: &str = "infoNoeud";
 
@@ -112,8 +112,8 @@ pub fn preparer_queues() -> Vec<QueueType> {
     // RK 3.protege seulement
     let requetes_protegees = vec![
         REQUETE_APPLICATIONS_DEPLOYEES,
-        REQUETE_DOMAINES,
-        REQUETE_NOEUDS,
+        REQUETE_LISTE_DOMAINES,
+        REQUETE_LISTE_NOEUDS,
         REQUETE_INFO_DOMAINE,
         REQUETE_INFO_NOEUD,
     ];
@@ -356,14 +356,16 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
         DOMAINE_NOM => {
             match message.action.as_str() {
                 REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
+                REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
+                REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
                 _ => {
-                    error!("Message action inconnue : '{}'. Message dropped.", message.action);
+                    error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
                 },
             }
         },
         _ => {
-            error!("Message requete domaine inconnu : '{}'. Message dropped.", message.domaine);
+            error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
             Ok(None)
         },
     }
@@ -801,6 +803,66 @@ struct ApplicationConfiguree {
     securite: Option<String>,
     url: Option<String>,
     millegrille: Option<String>,
+}
+
+async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("liste_noeuds");
+    if ! message.verifier_exchanges(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+        let refus = json!({"ok": false, "err": "Acces refuse"});
+        let reponse = match middleware.formatter_reponse(&refus,None) {
+            Ok(m) => m,
+            Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+        };
+        return Ok(Some(reponse))
+    }
+
+    let mut curseur = {
+        let mut filtre = doc! {};
+        let msg = message.message.get_msg();
+        if let Some(noeud_id) = msg.contenu.get("noeud_id") {
+            if let Some(noeud_id) = noeud_id.as_str() {
+                filtre.insert("noeud_id", millegrilles_common_rust::bson::Bson::String(noeud_id.into()));
+            }
+        }
+
+        // let projection = doc! {"noeud_id": true, "domaine": true, "securite": true};
+        let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+        // let ops = FindOptions::builder().projection(Some(projection)).build();
+        match collection.find(filtre, None).await {
+            Ok(c) => c,
+            Err(e) => Err(format!("Erreur chargement applications : {:?}", e))?
+        }
+    };
+
+    let mut noeuds = Vec::new();
+    while let Some(r) = curseur.next().await {
+        match r {
+            Ok(mut d) => {
+                filtrer_doc_id(&mut d);
+                noeuds.push(d);
+            },
+            Err(e) => warn!("Erreur lecture document sous liste_noeuds() : {:?}", e)
+        }
+    }
+
+    debug!("Noeuds : {:?}", noeuds);
+    let liste = json!({"resultats": noeuds});
+    let reponse = match middleware.formatter_reponse(&liste,None) {
+        Ok(m) => m,
+        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+    };
+    Ok(Some(reponse))
+}
+
+async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("liste_domaines");
+    Ok(None)
 }
 
 #[cfg(test)]
