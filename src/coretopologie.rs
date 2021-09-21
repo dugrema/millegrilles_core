@@ -110,15 +110,24 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     // RK 3.protege seulement
-    let requetes = vec![
+    let requetes_protegees = vec![
         REQUETE_APPLICATIONS_DEPLOYEES,
         REQUETE_DOMAINES,
         REQUETE_NOEUDS,
         REQUETE_INFO_DOMAINE,
         REQUETE_INFO_NOEUD,
     ];
-    for req in requetes {
+    for req in requetes_protegees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
+    }
+
+    // RK 2.prive
+    let requetes_protegees = vec![
+        REQUETE_APPLICATIONS_DEPLOYEES,
+        REQUETE_INFO_NOEUD,
+    ];
+    for req in requetes_protegees {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
     }
 
     let commandes: Vec<&str> = vec![
