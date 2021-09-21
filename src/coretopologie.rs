@@ -631,9 +631,32 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
+    // Valider le niveau de securite
+    let sec_enum_opt = match message.message.get_extensions() {
+        Some(extensions) => {
+            // Verifier le type de securite
+            match extensions.exchange_top() {
+                Some(sec) => Some(sec),
+                None => None
+            }
+        },
+        None => None,
+    };
+    let sec_cascade = match sec_enum_opt {
+        Some(s) => securite_cascade_public(&s),
+        None => {
+            // Aucun niveau de securite, abort
+            let reponse = match middleware.formatter_reponse(json!({"ok": false}),None) {
+                Ok(m) => m,
+                Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+            };
+            return Ok(Some(reponse))
+        }
+    };
+
     let mut curseur = {
         let filtre = doc! {};
-        let projection = doc! {"noeud_id": true, "domaine": true, "securite": true, "applications_configurees": true};
+        let projection = doc! {"noeud_id": true, "domaine": true, "securite": true, "applications": true};
         let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
         let ops = FindOptions::builder().projection(Some(projection)).build();
         match collection.find(filtre, Some(ops)).await {
@@ -642,12 +665,6 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
         }
     };
 
-    let sec_enum = match message.exchange {
-        Some(s) => securite_enum(s.as_str())?,
-        None => Err(format!("Erreur exchange non specifie"))?,
-    };
-    let sec_cascade = securite_cascade_public(&sec_enum);
-
     // Extraire liste d'applications
     let mut apps = Vec::new();
     while let Some(d) = curseur.next().await {
@@ -655,21 +672,28 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
             Ok(mut doc) => {
                 let info_monitor: InformationMonitor = serde_json::from_value(serde_json::to_value(doc)?)?;
 
-                let sec_noeud = match securite_enum(&info_monitor.securite) {
-                    Ok(s) => s,
-                    Err(e) => {
-                        warn!("Niveau de securite du noeud {} invalide : {}", info_monitor.noeud_id, info_monitor.securite);
-                        continue  // Skip noeud
+                for app in info_monitor.applications {
+
+                    let securite = match app.securite {
+                        Some(s) => match securite_enum(s.as_str()){
+                            Ok(s) => s,
+                            Err(e) => continue   // Skip
+                        },
+                        None => continue  // Skip
+                    };
+
+                    // Verifier si le demandeur a le niveau de securite approprie
+                    if sec_cascade.contains(&securite) {
+
+                        // Preparer la valeur a exporter pour les applications
+                        let info_app = json!({
+                            "application": app.application,
+                            "securite": securite_str(&securite),
+                            "url": app.url,
+                        });
+
+                        apps.push(info_app);
                     }
-                };
-
-                // Verifier si le demandeur a le niveau de securite approprie
-                if sec_cascade.contains(&sec_noeud) {
-
-                    // Preparer la valeur a exporter pour les applications
-
-
-                    apps.push(info_monitor);
                 }
             },
             Err(e) => warn!("Erreur chargement document : {:?}", e)
@@ -690,7 +714,7 @@ struct InformationMonitor {
     domaine: String,
     noeud_id: String,
     securite: String,
-    applications_configurees: Vec<ApplicationConfiguree>,
+    applications: Vec<ApplicationConfiguree>,
 }
 impl InformationMonitor {
     fn exporter_applications(&self) -> Vec<Value> {
@@ -700,8 +724,10 @@ impl InformationMonitor {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ApplicationConfiguree {
-    nom: String,
-    version: String,
+    application: String,
+    securite: Option<String>,
+    url: Option<String>,
+    millegrille: Option<String>,
 }
 
 #[cfg(test)]
