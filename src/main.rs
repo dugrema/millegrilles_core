@@ -6,6 +6,7 @@ mod validateur_pki_mongo;
 mod corepki;
 mod corecatalogues;
 mod coretopologie;
+mod webauthn;
 
 use crate::domaines_core::build;
 use log::{info};
