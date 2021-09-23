@@ -16,7 +16,7 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{sauvegarder_transaction, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
@@ -35,6 +35,7 @@ use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
+use std::convert::TryInto;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
@@ -48,18 +49,26 @@ const NOM_Q_TRIGGERS: &str = "CoreMaitreDesComptes/triggers";
 const REQUETE_CHARGER_USAGER: &str = "chargerUsager";
 const REQUETE_LISTE_USAGERS: &str = "getListeUsagers";
 
-const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
+// const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
 const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
 const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
 
-// const TRANSACTION_DOMAINE: &str = "domaine";
+const TRANSACTION_INSCRIRE_USAGER: &str = "inscrireUsager";
+const TRANSACTION_AJOUTER_CLE: &str = "ajouterCle";
+const TRANSACTION_SUPPRIMER_CLES: &str = "supprimerCles";
+const TRANSACTION_SUPPRIMER_USAGER: &str = "supprimerUsager";
+const TRANSACTION_MAJ_USAGER_DELEGATIONS: &str = "majUsagerDelegations";
+const TRANSACTION_AJOUTER_DELEGATION_SIGNEE: &str = "ajouterDelegationSignee";
 
 const INDEX_ID_USAGER: &str = "idusager_unique";
 const INDEX_NOM_USAGER: &str = "nomusager_unique";
 
 const CHAMP_USER_ID: &str = "userId";
 const CHAMP_USAGER_NOM: &str = "nomUsager";
-
+const CHAMP_COMPTE_PRIVE: &str = "compte_prive";
+const CHAMP_DELEGATION_GLOBALE: &str = "delegation_globale";
+const CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
+const CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: &str = "activations_par_fingerprint_pk";
 
 /// Initialise le domaine.
 pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
@@ -111,7 +120,11 @@ pub fn preparer_queues() -> Vec<QueueType> {
     }
 
     let commandes: Vec<&str> = vec![
-        //TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
+        // Transactions recues sous forme de commande pour validation
+        TRANSACTION_INSCRIRE_USAGER,
+
+        // Commandes
+        COMMANDE_SIGNER_COMPTEUSAGER,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L2Prive});
@@ -280,6 +293,7 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
         Some(inner) => Some(inner.clone()),
         None => None,
     };
+    debug!("traiter_message_valide_action {:?}/{:?}", reply_q, correlation_id);
 
     let resultat = match message.type_message {
         TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
@@ -317,7 +331,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
     debug!("Consommer requete : {:?}", &message.message);
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
-    match message.verifier_exchanges(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    match message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Commande autorisation invalide (pas 2.prive, 3.protege ou 4.secure)")),
     }?;
@@ -327,7 +341,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
             match message.action.as_str() {
                 // liste_applications_deployees(middleware, message).await,
                 REQUETE_CHARGER_USAGER => charger_usager(middleware, message).await,
-                REQUETE_LISTE_USAGERS => todo!(),
+                REQUETE_LISTE_USAGERS => liste_usagers(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -346,7 +360,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
     debug!("Consommer commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Commande autorisation invalide (pas 2.prive, 3.protege ou 4.secure)")),
     }?;
@@ -354,9 +368,12 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
     match m.action.as_str() {
         // Commandes standard
 
+        // Transactions recues sous forme de commande
+        TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware.as_ref(), m).await,
+
         //traiter_commande_application(middleware.as_ref(), m).await,
+        COMMANDE_SIGNER_COMPTEUSAGER => signer_compte_usager(middleware.as_ref(), m).await,
         COMMANDE_CHALLENGE_COMPTEUSAGER => todo!(),
-        COMMANDE_SIGNER_COMPTEUSAGER => todo!(),
         COMMANDE_ACTIVATION_TIERCE => todo!(),
 
         // Commandes inconnues
@@ -371,7 +388,7 @@ where
     debug!("Consommer transaction : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
@@ -389,16 +406,13 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
 
     match m.action.as_str() {
-        EVENEMENT_TRANSACTION_PERSISTEE => {
-            traiter_transaction(DOMAINE_NOM, middleware, m).await?;
-            Ok(None)
-        },
+        EVENEMENT_TRANSACTION_PERSISTEE => Ok(traiter_transaction(DOMAINE_NOM, middleware, m).await?),
         EVENEMENT_CEDULE => {
             traiter_cedule(middleware, m).await?;
             Ok(None)
@@ -434,7 +448,7 @@ where
 async fn aiguillage_transaction<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
 where M: ValidateurX509 + GenerateurMessages + MongoDao {
     match transaction.get_action() {
-        // TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
+        TRANSACTION_INSCRIRE_USAGER => sauvegarder_inscrire_usager(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -445,7 +459,14 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
     debug!("charger_usager : {:?}", &message.message);
     let requete: RequeteUsager = message.message.get_msg().map_contenu(None)?;
 
-    let filtre = doc!{"userId": &requete.user_id};
+    let mut filtre = doc!{};
+    if let Some(nom_usager) = requete.nom_usager {
+        filtre.insert(CHAMP_USAGER_NOM, nom_usager);
+    }
+    if let Some(user_id) = requete.user_id {
+        filtre.insert(CHAMP_USER_ID, user_id);
+    }
+
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
     let val = match collection.find_one(filtre, None).await? {
         Some(mut doc_usager) => {
@@ -466,16 +487,167 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
 
     match middleware.formatter_reponse(&val,None) {
         Ok(m) => Ok(Some(m)),
-        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+        Err(e) => Err(format!("Erreur preparation reponse charger_usager : {:?}", e))?
+    }
+}
+
+async fn liste_usagers<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("liste_usagers : {:?}", &message.message);
+    let requete: RequeteListeUsagers = message.message.get_msg().map_contenu(None)?;
+
+    let usagers = {
+        let mut filtre = doc! {};
+        if let Some(userids) = &requete.liste_userids {
+            filtre.insert(CHAMP_USER_ID, doc!{"$in": userids});
+        }
+
+        let projection = doc! {
+            CHAMP_USAGER_NOM: true,
+            CHAMP_USER_ID: true,
+            CHAMP_COMPTE_PRIVE: true,
+            CHAMP_DELEGATION_GLOBALE: true,
+        };
+        let ops = FindOptions::builder().projection(Some(projection)).build();
+
+        let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+        let mut curseur = collection.find(filtre, ops).await?;
+
+        let mut vec_comptes = Vec::new();
+        while let Some(d) = curseur.next().await {
+            let mut doc_usager = d?;
+            filtrer_doc_id(&mut doc_usager);
+            let val_compte = convertir_bson_value(doc_usager)?;
+            vec_comptes.push(val_compte);
+        }
+
+        vec_comptes
+    };
+
+    let val_reponse = json!({
+        "complet": true,
+        "usagers": usagers,
+    });
+
+    match middleware.formatter_reponse(&val_reponse,None) {
+        Ok(m) => Ok(Some(m)),
+        Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
     }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RequeteUsager {
     #[serde(rename="userId")]
+    user_id: Option<String>,
+    #[serde(rename="nomUsager")]
+    nom_usager: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteListeUsagers {
+    liste_userids: Option<Vec<String>>,
+}
+
+async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer inscrire_usager : {:?}", &message.message);
+    let transaction: TransactionInscrireUsager = message.message.get_msg().map_contenu(None)?;
+    let nom_usager = transaction.nom_usager.as_str();
+
+    // Verifier que l'usager n'existe pas deja (collection usagers)
+    let filtre = doc!{CHAMP_USAGER_NOM: nom_usager};
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let doc_usager = collection.find_one(filtre, None).await?;
+    let reponse = match doc_usager {
+        Some(d) => {
+            debug!("Usager {} existe deja : {:?}, on skip", nom_usager, d);
+            let val = json!({"ok": false, "err": format!("Usager {} existe deja", nom_usager)});
+            match middleware.formatter_reponse(&val,None) {
+                Ok(m) => Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))
+            }
+        },
+        None => {
+            let uuid_transaction = message.message.get_entete().uuid_transaction.as_str();
+            debug!("L'usager '{}' n'existe pas, on le sauvegarde sous forme de transaction", nom_usager);
+            sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
+            let transaction: TransactionImpl = message.clone().try_into()?;
+            let reponse = sauvegarder_inscrire_usager(middleware, transaction).await?;
+            marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction, EtatTransaction::Complete).await?;
+
+            Ok(reponse)
+        }
+    }?;
+
+    Ok(reponse)
+}
+
+async fn sauvegarder_inscrire_usager<M, T>(middleware: &M, transaction: T)
+    -> Result<Option<MessageMilleGrille>, String>
+    where T: Transaction,
+          M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    let transaction: TransactionInscrireUsager = match transaction.clone().convertir() {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion en TransactionInscrireUsager : {:?}", e))?
+    };
+    let nom_usager = transaction.nom_usager.as_str();
+    let user_id = transaction.user_id.as_str();
+
+    let filtre = doc! {CHAMP_USAGER_NOM: nom_usager};
+    let ops = doc! {
+        "$set": {
+            CHAMP_USER_ID: user_id,
+            format!("{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, transaction.fingerprint_pk): {
+                "associe": false,
+                "date_activation": Utc::now(),
+            }
+        },
+        "$setOnInsert": {
+            CHAMP_USAGER_NOM: nom_usager,
+            CHAMP_CREATION: Utc::now(),
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    let options = UpdateOptions::builder().upsert(true).build();
+
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let resultat = match collection.update_one(filtre, ops, options).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("Erreur update db sauvegarder_inscrire_usager : {:?}", e))?
+    };
+    debug!("Resultat sauvegarder_inscrire_usager : {:?}", resultat);
+
+    let reponse = json!({"ok": true, "userId": user_id});
+    match middleware.formatter_reponse(&reponse,None) {
+        Ok(m) => return Ok(Some(m)),
+        Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TransactionInscrireUsager {
+    fingerprint_pk: String,
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+    #[serde(rename="userId")]
     user_id: String,
 }
 
+/// Verifie une demande de signature de certificat pour un compte usager
+/// Emet une commande autorisant la signature lorsque c'est approprie
+async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("signer_compte_usager : {:?}", message);
+
+    // Verifier autorisation
+
+
+    Ok(None)
+}
 
 #[cfg(test)]
 mod test_integration {

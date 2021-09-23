@@ -14,7 +14,7 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{sauvegarder_transaction, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -326,7 +326,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
     debug!("Consommer commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
     }?;
@@ -370,7 +370,7 @@ where
     debug!("Consommer transaction : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
@@ -390,7 +390,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
@@ -515,7 +515,7 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
             TRANSACTION_APPLICATION.into(),
             TypeMessageOut::Transaction
         );
-        sauvegarder_transaction(middleware, mva, NOM_COLLECTION_TRANSACTIONS).await?;
+        sauvegarder_transaction_recue(middleware, mva, NOM_COLLECTION_TRANSACTIONS).await?;
     }
 
     Ok(None)

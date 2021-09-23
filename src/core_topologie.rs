@@ -14,7 +14,7 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{sauvegarder_transaction, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -376,7 +376,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
     debug!("Consommer commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
     }?;
@@ -402,14 +402,14 @@ where
     debug!("Consommer transaction : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
 
     match m.action.as_str() {
         TRANSACTION_DOMAINE | TRANSACTION_MONITOR => {
-            sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
+            sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
@@ -420,7 +420,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
@@ -523,7 +523,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
         // Sauvegarder la transation
         let msg = MessageSerialise::from_parsed(transaction)?;
         let msg_action = MessageValideAction::new(msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
-        sauvegarder_transaction(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
+        sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
 
         // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
         let filtre = doc! {"domaine": &event.domaine};
@@ -613,7 +613,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
         let msg = MessageSerialise::from_parsed(transaction)?;
         let msg_action = MessageValideAction::new(
             msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
-        sauvegarder_transaction(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
+        sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
 
         // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
         let filtre = doc! {"noeud_id": &event.noeud_id};
@@ -810,7 +810,7 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_noeuds");
-    if ! message.verifier_exchanges(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    if ! message.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         let refus = json!({"ok": false, "err": "Acces refuse"});
         let reponse = match middleware.formatter_reponse(&refus,None) {
             Ok(m) => m,
@@ -862,7 +862,7 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_domaines");
-    if ! message.verifier_exchanges(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    if ! message.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         let refus = json!({"ok": false, "err": "Acces refuse"});
         let reponse = match middleware.formatter_reponse(&refus,None) {
             Ok(m) => m,

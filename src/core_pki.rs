@@ -13,7 +13,7 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_message_certificat, sauvegarder_transaction, thread_emettre_presence_domaine, upsert_certificat};
+use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_message_certificat, sauvegarder_transaction_recue, thread_emettre_presence_domaine, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -327,7 +327,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
     debug!("Consommer commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
@@ -371,14 +371,14 @@ where
     debug!("Consommer transaction : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
 
     match m.action.as_str() {
         PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
-            sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
+            sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
@@ -389,7 +389,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
