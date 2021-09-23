@@ -169,7 +169,7 @@ impl ConfigChallenge {
         match byte_commande {
             0x2 => {
                 let buffer = &self.challenge_bytes[1..65];
-                Ok(CommandeWebauthn::DemandeCertificat(buffer.to_vec()))
+                Ok(CommandeWebauthn::DemandeSignerCertificat(buffer.to_vec()))
             },
             _ => Err(format!("Commande inconnue, byte {:?}", byte_commande))?
         }
@@ -191,7 +191,7 @@ impl WebauthnConfig for ConfigChallenge {
 
 #[derive(Clone, Debug)]
 enum CommandeWebauthn {
-    DemandeCertificat(Vec<u8>),
+    DemandeSignerCertificat(Vec<u8>),
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -211,7 +211,7 @@ fn verifier_commande<S>(commande: &CommandeWebauthn, message: &S) -> Result<bool
     };
 
     match commande {
-        CommandeWebauthn::DemandeCertificat(h) => {
+        CommandeWebauthn::DemandeSignerCertificat(h) => {
             match contenu.get("demandeCertificat") {
                 Some(d) => Ok(verifier_hachage_serializable(h.as_slice(), Code::Sha2_512, d)?),
                 None => Err("Element 'demandeCertificat' absent de la commande")?
@@ -318,7 +318,7 @@ mod webauthn_test {
     use super::*;
     use millegrilles_common_rust::serde_json::Value;
 
-    const COMMANDE_CERTIFICAT: &str = r#"
+    const COMMANDE_SIGNER_CERTIFICAT: &str = r#"
         {
             "userId": "zQmZKg39RmHf4qo2pxjYpTk5ARzbyFeGX8va8XDpGBc6sah",
             "demandeCertificat": {
@@ -399,7 +399,7 @@ mod webauthn_test {
         debug!("Challenge bytes : {:?}", config_challenge.challenge_bytes);
 
         let commande = config_challenge.get_commande().expect("commande");
-        let message_demande: Value = serde_json::from_str(COMMANDE_CERTIFICAT).expect("demande");
+        let message_demande: Value = serde_json::from_str(COMMANDE_SIGNER_CERTIFICAT).expect("demande");
 
         let resultat = verifier_commande(&commande, &message_demande).expect("verif");
         assert_eq!(true, resultat);
