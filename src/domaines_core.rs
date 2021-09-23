@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use log::{debug, error, warn};
+use log::{debug, info, warn, error};
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::chrono as chrono;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
@@ -23,6 +23,7 @@ use crate::core_pki::{preparer_queues as preparer_q_corepki, preparer_threads as
 use crate::core_catalogues::{preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues, NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS};
 use crate::core_topologie::{preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie, NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS};
 use crate::core_maitredescomptes::{preparer_queues as preparer_q_maitredescomptes, preparer_threads as preparer_threads_coremaitredescomptes, NOM_COLLECTION_TRANSACTIONS as MAITREDESCOMPTES_NOM_COLLECTION_TRANSACTIONS};
+use crate::core_backup::{preparer_queues as preparer_q_backup, preparer_threads as preparer_threads_corebackup, NOM_COLLECTION_TRANSACTIONS as BACKUP_NOM_COLLECTION_TRANSACTIONS};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
 
 const DUREE_ATTENTE: u64 = 20000;
@@ -35,6 +36,7 @@ pub async fn build() {
     queues.extend(preparer_q_catalogues());
     queues.extend(preparer_q_topologie());
     queues.extend(preparer_q_maitredescomptes());
+    queues.extend(preparer_q_backup());
 
     // Listeners de connexion MQ
     let (tx_entretien, rx_entretien) = mpsc::channel(1);
@@ -101,6 +103,14 @@ pub async fn build() {
         futures.extend(futures_maitredescomptes);        // Deplacer vers futures globaux
         map_senders.extend(routing_maitredescomptes);    // Deplacer vers mapping global
 
+        // Preparer domaine CoreBackup
+        let (
+            routing_backup,
+            futures_backup
+        ) = preparer_threads_corebackup(middleware.clone()).await.expect("core backup");
+        futures.extend(futures_backup);        // Deplacer vers futures globaux
+        map_senders.extend(routing_backup);    // Deplacer vers mapping global
+
         // Preparer ceduleur (emet triggers a toutes les minutes)
         let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
         futures.extend(ceduleur);           // Deplacer vers futures globaux
@@ -125,9 +135,9 @@ pub async fn build() {
 
     }
 
-    debug!("domaines_middleware: Demarrage traitement domaines middleware");
+    info!("domaines_middleware: Demarrage traitement domaines middleware, top level threads {}", futures.len());
     let arret = futures.next().await;
-    debug!("domaines_middleware: Fermeture du contexte, task daemon terminee : {:?}", arret);
+    info!("domaines_middleware: Fermeture du contexte, task daemon terminee : {:?}", arret);
 }
 
 /// Thread d'entretien de Core
@@ -144,6 +154,7 @@ where
         CATALOGUES_NOM_COLLECTION_TRANSACTIONS,
         TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS,
         MAITREDESCOMPTES_NOM_COLLECTION_TRANSACTIONS,
+        BACKUP_NOM_COLLECTION_TRANSACTIONS,
     ];
 
     let mut prochain_entretien_transactions = chrono::Utc::now();
