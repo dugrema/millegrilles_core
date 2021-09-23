@@ -38,21 +38,27 @@ use crate::validateur_pki_mongo::MiddlewareDbPki;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
-pub const NOM_COLLECTION_DOMAINES: &str = "CoreMaitreDesComptes/domaines";
-pub const NOM_COLLECTION_NOEUDS: &str = "CoreMaitreDesComptes/noeuds";
+pub const NOM_COLLECTION_USAGERS: &str = "CoreMaitreDesComptes/usagers";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
 const NOM_Q_TRANSACTIONS: &str = "CoreMaitreDesComptes/transactions";
 const NOM_Q_VOLATILS: &str = "CoreMaitreDesComptes/volatils";
 const NOM_Q_TRIGGERS: &str = "CoreMaitreDesComptes/triggers";
 
-// const REQUETE_APPLICATIONS_DEPLOYEES: &str = "listeApplicationsDeployees";
+const REQUETE_CHARGER_USAGER: &str = "chargerUsager";
+const REQUETE_LISTE_USAGERS: &str = "getListeUsagers";
+
+const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
+const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
+const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
 
 // const TRANSACTION_DOMAINE: &str = "domaine";
 
+const INDEX_ID_USAGER: &str = "idusager_unique";
+const INDEX_NOM_USAGER: &str = "nomusager_unique";
 
-// permissionDechiffrage
-// listerNoeudsAWSS3
+const CHAMP_USER_ID: &str = "userId";
+const CHAMP_USAGER_NOM: &str = "nomUsager";
 
 
 /// Initialise le domaine.
@@ -94,26 +100,21 @@ pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
-    // RK 3.protege seulement
+    // RK 2.prive, 3.protege
     let requetes_protegees: Vec<&str> = vec![
-        // REQUETE_APPLICATIONS_DEPLOYEES,
-    ];
-    for req in requetes_protegees {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
-    }
-
-    // RK 2.prive
-    let requetes_protegees: Vec<&str> = vec![
-        // REQUETE_APPLICATIONS_DEPLOYEES,
+        REQUETE_LISTE_USAGERS,
+        REQUETE_CHARGER_USAGER,
     ];
     for req in requetes_protegees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
     }
 
     let commandes: Vec<&str> = vec![
         //TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
     ];
     for commande in commandes {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L2Prive});
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege});
     }
 
@@ -202,19 +203,33 @@ where M: MongoDao
         Some(options_unique_transactions)
     ).await?;
 
-    // // Index noeuds
-    // let options_unique_noeuds = IndexOptions {
-    //     nom_index: Some(String::from(INDEX_NOEUDS)),
-    //     unique: true
-    // };
-    // let champs_index_noeuds = vec!(
-    //     ChampIndex {nom_champ: String::from(CHAMP_NOEUD_ID), direction: 1},
-    // );
-    // middleware.create_index(
-    //     NOM_COLLECTION_NOEUDS,
-    //     champs_index_noeuds,
-    //     Some(options_unique_noeuds)
-    // ).await?;
+    // Index userId
+    let options_unique_noeuds = IndexOptions {
+        nom_index: Some(String::from(INDEX_ID_USAGER)),
+        unique: true
+    };
+    let champs_index_noeuds = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
+    );
+    middleware.create_index(
+        NOM_COLLECTION_USAGERS,
+        champs_index_noeuds,
+        Some(options_unique_noeuds)
+    ).await?;
+
+    // Index nomUsager
+    let options_unique_noeuds = IndexOptions {
+        nom_index: Some(String::from(INDEX_NOM_USAGER)),
+        unique: true
+    };
+    let champs_index_noeuds = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_USAGER_NOM), direction: 1},
+    );
+    middleware.create_index(
+        NOM_COLLECTION_USAGERS,
+        champs_index_noeuds,
+        Some(options_unique_noeuds)
+    ).await?;
 
     Ok(())
 }
@@ -301,12 +316,18 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
 {
     debug!("Consommer requete : {:?}", &message.message);
 
-    // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
+    // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
+    match message.verifier_exchanges(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Commande autorisation invalide (pas 2.prive, 3.protege ou 4.secure)")),
+    }?;
 
     match message.domaine.as_str() {
         DOMAINE_NOM => {
             match message.action.as_str() {
-                // REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
+                // liste_applications_deployees(middleware, message).await,
+                REQUETE_CHARGER_USAGER => charger_usager(middleware, message).await,
+                REQUETE_LISTE_USAGERS => todo!(),
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -324,22 +345,21 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
 {
     debug!("Consommer commande : {:?}", &m.message);
 
-    // Autorisation : doit etre de niveau 3.protege ou 4.secure
-    match m.verifier_exchanges(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
+    match m.verifier_exchanges(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
+        false => Err(format!("Commande autorisation invalide (pas 2.prive, 3.protege ou 4.secure)")),
     }?;
 
     match m.action.as_str() {
         // Commandes standard
-    //     TRANSACTION_APPLICATION => traiter_commande_application(middleware.as_ref(), m).await,
-    //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
-    //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
-    //
-    //     // Commandes specifiques au domaine
-    //     PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
-    //
-    //     // Commandes inconnues
+
+        //traiter_commande_application(middleware.as_ref(), m).await,
+        COMMANDE_CHALLENGE_COMPTEUSAGER => todo!(),
+        COMMANDE_SIGNER_COMPTEUSAGER => todo!(),
+        COMMANDE_ACTIVATION_TIERCE => todo!(),
+
+        // Commandes inconnues
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
     }
 }
@@ -418,6 +438,44 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao {
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
+
+async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("charger_usager : {:?}", &message.message);
+    let requete: RequeteUsager = message.message.get_msg().map_contenu(None)?;
+
+    let filtre = doc!{"userId": &requete.user_id};
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let val = match collection.find_one(filtre, None).await? {
+        Some(mut doc_usager) => {
+            filtrer_doc_id(&mut doc_usager);
+            match convertir_bson_value(doc_usager) {
+                Ok(v) => v,
+                Err(e) => {
+                    let msg_erreur = format!("Erreur conversion doc vers json : {:?}", e);
+                    warn!("{}", msg_erreur.as_str());
+                    json!({"ok": false, "err": msg_erreur})
+                }
+            }
+        },
+        None => {
+            json!({"ok": true, "reponse": false})
+        }
+    };
+
+    match middleware.formatter_reponse(&val,None) {
+        Ok(m) => Ok(Some(m)),
+        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteUsager {
+    #[serde(rename="userId")]
+    user_id: String,
+}
+
 
 #[cfg(test)]
 mod test_integration {
