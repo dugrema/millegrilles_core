@@ -19,9 +19,9 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::resoumettre_transactions;
 
 use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
-use crate::corepki::{preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki, NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS};
-use crate::corecatalogues::{preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues, NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS};
-use crate::coretopologie::{preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie, NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS};
+use crate::core_pki::{preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki, NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS};
+use crate::core_catalogues::{preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues, NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS};
+use crate::core_topologie::{preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie, NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
 
 const DUREE_ATTENTE: u64 = 20000;

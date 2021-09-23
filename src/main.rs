@@ -3,10 +3,11 @@ mod ceduleur;
 mod validateur_pki_mongo;
 
 // Domaines Core
-mod corepki;
-mod corecatalogues;
-mod coretopologie;
+mod core_pki;
+mod core_catalogues;
+mod core_topologie;
 mod webauthn;
+mod core_maitredescomptes;
 
 use crate::domaines_core::build;
 use log::{info};

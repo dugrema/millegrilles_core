@@ -27,7 +27,7 @@ use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::Receiver};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptions, VerificateurMessage, verifier_message};
 
-use crate::corepki::{COLLECTION_CERTIFICAT_NOM, DOMAINE_NOM as PKI_DOMAINE_NOM};
+use crate::core_pki::{COLLECTION_CERTIFICAT_NOM, DOMAINE_NOM as PKI_DOMAINE_NOM};
 
 // Middleware avec MongoDB et validateur X509 lie a la base de donnees
 pub struct MiddlewareDbPki {
