@@ -13,7 +13,7 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
@@ -234,14 +234,8 @@ async fn entretien(middleware: Arc<MiddlewareDbPki>) {
             debug!("Charger catalogues");
 
             let commande = json!({});
-            match middleware.transmettre_commande(
-                "servicemonitor",
-                "transmettreCatalogues",
-                None,
-                &commande,
-                None,
-                true
-            ).await {
+            let routage = RoutageMessageAction::new("servicemonitor", "transmettreCatalogues");
+            match middleware.transmettre_commande(routage, &commande, true).await {
                 Ok(r) => {
                     debug!("Reponse demande catalogues : {:?}", r);
                     catalogues_charges = true;

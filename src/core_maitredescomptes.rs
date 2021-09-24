@@ -15,7 +15,7 @@ use millegrilles_common_rust::constantes::Securite::L3Protege;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
@@ -696,14 +696,11 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
     }
 
     debug!("Emettre commande d'autorisation de signature certificat navigateur : {:?}", commande);
-    middleware.transmettre_commande(
-        DOMAINE_SERVICE_MONITOR,
-            "signerNavigateur",
-        None,
-        &commande_signature,
-        None,
-        false
-    ).await?;
+    let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "signerNavigateur")
+        .correlation_id("DADADA")
+        .reply_to("DODODO")
+        .build();
+    middleware.transmettre_commande(routage, &commande_signature, false).await?;
 
     Ok(None)    // Le message de reponse va etre emis par le module de signature de certificat
 

@@ -11,7 +11,7 @@ use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMessa
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMilleGrille, MessageSerialise};
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{configurer as configurer_queues, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, ReponseDechiffrageCle, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoImpl};
 use millegrilles_common_rust::mongodb::Database;
@@ -42,8 +42,8 @@ impl MiddlewareDbPki {
     pub async fn charger_certificats_chiffrage(&self) {
         debug!("Charger les certificats de maitre des cles pour chiffrage");
         let requete = json!({});
-        let message_reponse = match self.generateur_messages.transmettre_requete(
-            "MaitreDesCles", "certMaitreDesCles", None, &requete, None).await {
+        let routage = RoutageMessageAction::new("MaitreDesCles", "certMaitreDesCles");
+        let message_reponse = match self.generateur_messages.transmettre_requete(routage, &requete).await {
             Ok(r) => r,
             Err(e) => {
                 error!("Erreur demande certificats : {}", e);
@@ -147,14 +147,10 @@ impl ValidateurX509Database {
                 //     None
                 // );
 
-                match self.generateur_messages.soumettre_transaction(
-                    PKI_DOMAINE_NOM,
-                    PKI_TRANSACTION_NOUVEAU_CERTIFICAT,
-                    None,
-                    &contenu,
-                    Some(Securite::L3Protege),
-                    false
-                ).await {
+                let routage = RoutageMessageAction::builder(PKI_DOMAINE_NOM,PKI_TRANSACTION_NOUVEAU_CERTIFICAT)
+                    .exchanges(vec![Securite::L3Protege])
+                    .build();
+                match self.generateur_messages.soumettre_transaction(routage, &contenu,false).await {
                     Ok(_) => (),
                     Err(e) => error!("Erreur soumission transaction pour nouveau certificat : {}", e),
                 };
@@ -395,35 +391,48 @@ impl ValidateurX509 for MiddlewareDbPki {
 #[async_trait]
 impl GenerateurMessages for MiddlewareDbPki {
 
-    async fn emettre_evenement(&self, domaine: &str, action: &str, partition: Option<&str>, message: &(impl Serialize + Send + Sync), exchanges: Option<Vec<Securite>>) -> Result<(), String> {
-        self.generateur_messages.emettre_evenement( domaine, action, partition, message, exchanges).await
-    }
-
-    async fn transmettre_requete<M>(&self, domaine: &str, action: &str, partition: Option<&str>, message: &M, exchange: Option<Securite>) -> Result<TypeMessage, String>
-    where
-        M: Serialize + Send + Sync,
+    async fn emettre_evenement<M>(&self, routage: RoutageMessageAction, message: &M)
+        -> Result<(), String>
+        where M: Serialize + Send + Sync
     {
-        self.generateur_messages.transmettre_requete(domaine, action, partition, message, exchange).await
+        self.generateur_messages.emettre_evenement( routage, message).await
     }
 
-    async fn soumettre_transaction(&self, domaine: &str, action: &str, partition: Option<&str>, message: &(impl Serialize + Send + Sync), exchange: Option<Securite>, blocking: bool) -> Result<Option<TypeMessage>, String> {
-        self.generateur_messages.soumettre_transaction(domaine, action, partition, message, exchange, blocking).await
+    async fn transmettre_requete<M>(&self, routage: RoutageMessageAction, message: &M)
+        -> Result<TypeMessage, String>
+        where M: Serialize + Send + Sync
+    {
+        self.generateur_messages.transmettre_requete(routage, message).await
     }
 
-    async fn transmettre_commande(&self, domaine: &str, action: &str, partition: Option<&str>, message: &(impl Serialize + Send + Sync), exchange: Option<Securite>, blocking: bool) -> Result<Option<TypeMessage>, String> {
-        self.generateur_messages.transmettre_commande(domaine, action, partition, message, exchange, blocking).await
+    async fn soumettre_transaction<M>(&self, routage: RoutageMessageAction, message: &M, blocking: bool)
+        -> Result<Option<TypeMessage>, String>
+        where M: Serialize + Send + Sync
+    {
+        self.generateur_messages.soumettre_transaction(routage, message, blocking).await
+    }
+
+    async fn transmettre_commande<M>(&self, routage: RoutageMessageAction, message: &M, blocking: bool)
+        -> Result<Option<TypeMessage>, String>
+        where M: Serialize + Send + Sync
+    {
+        self.generateur_messages.transmettre_commande(routage, message, blocking).await
     }
 
     async fn repondre(&self, routage: RoutageMessageReponse, message: MessageMilleGrille) -> Result<(), String> {
         self.generateur_messages.repondre(routage, message).await
     }
 
-    async fn emettre_message(&self, domaine: &str, action: &str, partition: Option<&str>, type_message: TypeMessageOut, message: &str, exchange: Option<Securite>, blocking: bool) -> Result<Option<TypeMessage>, String> {
-        self.generateur_messages.emettre_message(domaine, action, partition, type_message, message, exchange, blocking).await
+    async fn emettre_message(&self, routage: RoutageMessageAction, type_message: TypeMessageOut, message: &str, blocking: bool)
+        -> Result<Option<TypeMessage>, String>
+    {
+        self.generateur_messages.emettre_message(routage, type_message, message,  blocking).await
     }
 
-    async fn emettre_message_millegrille(&self, domaine: &str, action: &str, partition: Option<&str>, exchange: Option<Securite>, blocking: bool, type_message: TypeMessageOut, message: MessageMilleGrille) -> Result<Option<TypeMessage>, String> {
-        self.generateur_messages.emettre_message_millegrille(domaine, action, partition, exchange, blocking, type_message, message).await
+    async fn emettre_message_millegrille(&self, routage: RoutageMessageAction, blocking: bool, type_message: TypeMessageOut, message: MessageMilleGrille)
+        -> Result<Option<TypeMessage>, String>
+    {
+        self.generateur_messages.emettre_message_millegrille(routage, blocking, type_message, message).await
     }
 
     fn mq_disponible(&self) -> bool {
@@ -496,8 +505,8 @@ impl Dechiffreur for MiddlewareDbPki {
                 "liste_hachage_bytes": liste_hachage_bytes,
             })
         };
-        let reponse_cle_rechiffree = self.transmettre_requete(
-            "MaitreDesCles.dechiffrage", "dechiffrage", None, &requete, None).await?;
+        let routage = RoutageMessageAction::new("MaitreDesCles.dechiffrage", "dechiffrage");
+        let reponse_cle_rechiffree = self.transmettre_requete(routage, &requete).await?;
 
         let m = match reponse_cle_rechiffree {
             TypeMessage::Valide(m) => m.message,
@@ -529,7 +538,11 @@ impl EmetteurCertificat for MiddlewareDbPki {
         let message = formatter_message_certificat(enveloppe_privee.enveloppe.as_ref());
         let exchanges = vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege);
 
-        match generateur_message.emettre_evenement("certificat", "infoCertificat", None, &message, Some(exchanges)).await {
+        let routage = RoutageMessageAction::builder("certificat", "infoCertificat")
+            .exchanges(exchanges)
+            .build();
+
+        match generateur_message.emettre_evenement(routage, &message).await {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Erreur emettre_certificat: {:?}", e)),
         }

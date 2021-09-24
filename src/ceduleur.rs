@@ -6,7 +6,7 @@ use log::{debug, error};
 use millegrilles_common_rust::chrono::{Timelike, Utc};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::GenerateurMessages;
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::task::JoinHandle;
@@ -67,12 +67,11 @@ where M: GenerateurMessages
         Securite::L4Secure
     ];
 
-    middleware.emettre_evenement(
-        "global",
-        "cedule",
-        None, &message,
-        Some(exchanges)
-    ).await?;
+    let routage = RoutageMessageAction::builder("global", "cedule")
+        .exchanges(exchanges)
+        .build();
+
+    middleware.emettre_evenement(routage, &message).await?;
 
     Ok(())
 }

@@ -12,7 +12,7 @@ use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, V
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_message_certificat, sauvegarder_transaction_recue, thread_emettre_presence_domaine, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -26,6 +26,7 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
+use std::convert::TryFrom;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CorePki";
@@ -439,12 +440,14 @@ where
     let reponse_value = formatter_message_certificat(enveloppe.as_ref());
 
     // C'est une requete sur le domaine certificat, on emet l'evenement.infocertificat.fingerprint
-    let exchanges = match m.exchange {
-        Some(e) => Some(vec![securite_enum(e.as_str())?]),
-        None => None,
-    };
+    let mut builder_routage = RoutageMessageAction::builder("certificat", "infoCertificat");
+    if let Some(e) = m.exchange {
+        let securite = Securite::try_from(e)?;
+        builder_routage = builder_routage.exchanges(vec![securite]);
+    }
 
-    if let Err(e) = middleware.emettre_evenement("certificat", "infoCertificat", None, &reponse_value, exchanges).await {
+    let routage = builder_routage.build();
+    if let Err(e) = middleware.emettre_evenement(routage, &reponse_value).await {
         warn!("Erreur emission evenement infocertificat pour {} : {}", fingerprint, e);
     }
 
