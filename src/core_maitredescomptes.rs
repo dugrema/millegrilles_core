@@ -5,7 +5,7 @@ use std::sync::Arc;
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
-use millegrilles_common_rust::bson::{Bson, doc};
+use millegrilles_common_rust::bson::{Bson, doc, bson};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
@@ -58,7 +58,7 @@ const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
 
 const TRANSACTION_INSCRIRE_USAGER: &str = "inscrireUsager";
 const TRANSACTION_AJOUTER_CLE: &str = "ajouterCle";
-const TRANSACTION_SUPPRIMER_CLES: &str = "supprimerCles";
+// const TRANSACTION_SUPPRIMER_CLES: &str = "supprimerCles";
 const TRANSACTION_SUPPRIMER_USAGER: &str = "supprimerUsager";
 const TRANSACTION_MAJ_USAGER_DELEGATIONS: &str = "majUsagerDelegations";
 const TRANSACTION_AJOUTER_DELEGATION_SIGNEE: &str = "ajouterDelegationSignee";
@@ -868,14 +868,28 @@ async fn sauvegarder_ajouter_cle<M, T>(middleware: &M, transaction: T)
         Err(e) => Err(format!("Erreur sauvegarder_ajouter_cle, echec conversion bson {:?}", e))?
     };
 
-    let ops = doc! {
-        "$push": {CHAMP_WEBAUTHN: commande_bson},
-        "$set": {
-            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): true,
-            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_association"): Utc::now(),
-        },
+    let reset_cles = match commande.reset_cles {Some(r) => r, None => false};
+
+    let commande_push = doc! {CHAMP_WEBAUTHN: &commande_bson};
+    let mut commande_set = doc! {
+        format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): true,
+        format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_association"): Utc::now(),
+    };
+    if reset_cles {
+        debug!("Reset cles webauth pour compte {}", nom_usager);
+        commande_set.insert(CHAMP_WEBAUTHN, bson!(vec!(commande_bson)));
+    }
+
+    let mut ops = doc! {
+        "$set": &commande_set,
         "$currentDate": {CHAMP_MODIFICATION: true},
     };
+
+    // Determiner si on reset (ecrase) les autres cles
+    if !reset_cles {
+        ops.insert("$push", commande_push);
+    }
+
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
     let resultat = match collection.update_one(filtre, ops, None).await {
         Ok(r) => r,
@@ -954,7 +968,8 @@ struct CommandeAjouterCle {
     #[serde(rename="nomUsager")]
     nom_usager: String,
     #[serde(rename="reponseClient")]
-    reponse_client: MessageMilleGrille
+    reponse_client: MessageMilleGrille,
+    reset_cles: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
