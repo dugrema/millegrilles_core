@@ -201,6 +201,17 @@ pub struct AllowCredential {
     cred_type: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompteCredential {
+    #[serde(rename = "credId")]
+    cred_id: String,
+    counter: Option<usize>,
+    #[serde(rename = "publicKeyPem")]
+    public_key_pem: Option<String>,
+    #[serde(rename = "type")]
+    type_: Option<String>,
+}
+
 fn verifier_commande<S>(commande: &CommandeWebauthn, message: &S) -> Result<bool, Box<dyn Error>>
     where S: Serialize
 {

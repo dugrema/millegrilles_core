@@ -17,7 +17,7 @@ use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao, convertir_bson_deserializable};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -36,7 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use std::convert::TryInto;
-use crate::webauthn::ClientAssertionResponse;
+use crate::webauthn::{ClientAssertionResponse, CompteCredential};
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
@@ -663,7 +663,6 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
 
     let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu(None)?;
     let user_id = commande.user_id.as_str();
-    let csr = commande.csr.expect("csr");  // todo fixme - csr conditionnel
 
     // Charger le compte usager
     let filtre = doc! {CHAMP_USER_ID: user_id};
@@ -681,7 +680,23 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
     };
 
     // Verifier si l'usager a deja des creds WebAuthn (doit signer sa demande) ou non
+    let compte_usager: CompteUsager = convertir_bson_deserializable(doc_usager.clone())?;
+    let webauthn_present = match compte_usager.webauthn {
+        Some(vc) => {
+            ! vc.is_empty()
+        },
+        None => false
+    };
 
+    let csr = if webauthn_present {
+        todo!()
+    } else {
+        debug!("Le compte {} est nouveau (aucun token webauthn), on permet l'enregistrement direct", user_id);
+        match commande.csr {
+            Some(c) => c,
+            None => Err(format!("CSR absent de la commande de signature"))?
+        }
+    };
 
     // Signature est autorisee, on genere la commande de signature
     // Emettre le compte usager pour qu'il soit signe et retourne au demandeur (serveur web)
@@ -708,29 +723,6 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
     middleware.transmettre_commande(routage, &commande_signature, false).await?;
 
     Ok(None)    // Le message de reponse va etre emis par le module de signature de certificat
-
-    // # Creer l'information pour la commande de signature de certificat
-    //     commande_signature = demande_certificat.copy()
-    //     commande_signature['userId'] = params['userId']
-    //     commande_signature['compte'] = doc_usager
-    //
-    //     # Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
-    //     # Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
-    //     if demande_certificat.get('activationTierce') is True or activation_tierce is True:
-    //         commande_signature['activation_tierce'] = True
-    //
-    //     # Emettre le compte usager pour qu'il soit signe et retourne au demandeur (serveur web)
-    //     domaine_action = 'commande.servicemonitor.signerNavigateur'
-    //     self.generateur_transactions.transmettre_commande(
-    //         commande_signature,
-    //         domaine_action,
-    //         exchange=Constantes.SECURITE_PROTEGE,
-    //         reply_to=properties.reply_to,
-    //         correlation_id=properties.correlation_id,
-    //         ajouter_certificats=True,
-    //     )
-
-    // Ok(None)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -761,6 +753,15 @@ struct DemandeCertificat {
     date: usize,
     #[serde(rename="activationTierce", skip_serializing_if = "Option::is_none")]
     activation_tierce: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CompteUsager {
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+    #[serde(rename="userId")]
+    user_id: String,
+    webauthn: Option<Vec<CompteCredential>>,
 }
 
 #[cfg(test)]
