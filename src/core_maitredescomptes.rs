@@ -645,6 +645,9 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
 {
     debug!("signer_compte_usager : {:?}", message);
 
+    // Valider information de reponse
+    let (reply_to, correlation_id) = message.get_reply_info()?;
+
     // Verifier autorisation
     if ! message.verifier(
         Some(vec!(Securite::L4Secure, Securite::L3Protege, Securite::L2Prive)),
@@ -660,6 +663,7 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
 
     let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu(None)?;
     let user_id = commande.user_id.as_str();
+    let csr = commande.csr.expect("csr");  // todo fixme - csr conditionnel
 
     // Charger le compte usager
     let filtre = doc! {CHAMP_USER_ID: user_id};
@@ -684,21 +688,22 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
     let mut commande_signature = json!({
         CHAMP_USER_ID: user_id,
         "compte": convertir_bson_value(doc_usager)?,
+        "csr": csr
     });
 
     // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
     // Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
     if let Some(activation_tierce) = commande.activation_tierce {
         if activation_tierce {
-            todo!();
-            //commande_signature.insert("activation_tierce", true);
+            let commande_signature_obj = commande_signature.as_object_mut().expect("mut");
+            commande_signature_obj.insert("activation_tierce".into(), Value::Bool(true));
         }
     }
 
-    debug!("Emettre commande d'autorisation de signature certificat navigateur : {:?}", commande);
+    debug!("Emettre commande d'autorisation de signature certificat navigateur : {:?}", commande_signature);
     let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "signerNavigateur")
-        .correlation_id("DADADA")
-        .reply_to("DODODO")
+        .correlation_id(correlation_id)
+        .reply_to(reply_to)
         .build();
     middleware.transmettre_commande(routage, &commande_signature, false).await?;
 
