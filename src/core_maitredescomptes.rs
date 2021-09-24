@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use std::convert::TryInto;
-use crate::webauthn::{ClientAssertionResponse, CompteCredential, multibase_to_safe};
+use crate::webauthn::{ClientAssertionResponse, CompteCredential, multibase_to_safe, valider_commande};
 use webauthn_rs::base64_data::Base64UrlSafeData;
 
 // Constantes
@@ -694,12 +694,45 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
         None => false
     };
 
-    let csr = if webauthn_present {
-        todo!()
+    let (csr, activation_tierce) = if webauthn_present {
+        match commande.demande_certificat {
+            Some(d) => {
+                // Valider signature webauthn
+                let origin = match commande.origin {
+                    Some(o) => o,
+                    None => Err(format!("signer_compte_usager Origin absent"))?
+                };
+                let challenge = match commande.challenge {
+                    Some(c) => c,
+                    None => Err(format!("signer_compte_usager Origin absent"))?
+                };
+                let resultat = valider_commande(origin, challenge, &d)?;
+                debug!("Resultat validation commande webauthn : {:?}", resultat);
+
+                if ! resultat {
+                    let err = json!({"ok": false, "code": 6, "err": format!("Erreur validation signature webauthn : {}", user_id)});
+                    debug!("signer_compte_usager signature webauthn pour commande ajouter cle est invalide : {:?}", err);
+                    match middleware.formatter_reponse(&err,None) {
+                        Ok(m) => return Ok(Some(m)),
+                        Err(e) => Err(format!("Erreur preparation reponse (6) signer_compte_usager : {:?}", e))?
+                    }
+                }
+
+                (d.csr, d.activation_tierce)
+            },
+            None => {
+                let err = json!({"ok": false, "code": 4, "err": format!("Compte existant, demandeCertificat est vide (erreur) : {}", user_id)});
+                debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
+                match middleware.formatter_reponse(&err,None) {
+                    Ok(m) => return Ok(Some(m)),
+                    Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+                }
+            }
+        }
     } else {
         debug!("Le compte {} est nouveau (aucun token webauthn), on permet l'enregistrement direct", user_id);
         match commande.csr {
-            Some(c) => c,
+            Some(c) => (c, Some(false)),
             None => Err(format!("CSR absent de la commande de signature"))?
         }
     };

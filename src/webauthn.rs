@@ -223,10 +223,12 @@ fn verifier_commande<S>(commande: &CommandeWebauthn, message: &S) -> Result<bool
 
     match commande {
         CommandeWebauthn::DemandeSignerCertificat(h) => {
-            match contenu.get("demandeCertificat") {
-                Some(d) => Ok(verifier_hachage_serializable(h.as_slice(), Code::Sha2_512, d)?),
-                None => Err("Element 'demandeCertificat' absent de la commande")?
-            }
+            // match contenu.get("demandeCertificat") {
+            //     Some(d) => Ok(
+                    Ok(verifier_hachage_serializable(h.as_slice(), Code::Sha2_512, &contenu)?)
+            //     ),
+            //     None => Err("Element 'demandeCertificat' absent de la commande")?
+            // }
         }
     }
 }
@@ -330,6 +332,22 @@ pub fn multibase_to_safe<S>(val: S) -> Result<Base64UrlSafeData, Box<dyn Error>>
     let data = Base64UrlSafeData(contenu_bytes);
 
     Ok(data)
+}
+
+pub fn valider_commande<M, S>(hostname: S, challenge: S, message: &M) -> Result<bool, Box<dyn Error>>
+    where
+        S: Into<String>,
+        M: Serialize,
+{
+    let config_challenge = ConfigChallenge::try_new(hostname, challenge)?;
+    debug!("Challenge bytes : {:?}", config_challenge.challenge_bytes);
+
+    let commande = config_challenge.get_commande()?;
+    debug!("Commande webauthn : {:?}", commande);
+
+    let resultat = verifier_commande(&commande, &message)?;
+
+    Ok(resultat)
 }
 
 #[cfg(test)]
