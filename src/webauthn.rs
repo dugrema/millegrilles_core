@@ -204,7 +204,7 @@ pub struct AllowCredential {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CompteCredential {
     #[serde(rename = "credId")]
-    cred_id: String,
+    pub cred_id: String,
     counter: Option<usize>,
     #[serde(rename = "publicKeyPem")]
     public_key_pem: Option<String>,
@@ -308,7 +308,7 @@ impl TryInto<PublicKeyCredential> for ClientAssertionResponse {
     }
 }
 
-fn multibase_to_b64<S>(val: S) -> Result<String, Box<dyn Error>>
+pub fn multibase_to_b64<S>(val: S) -> Result<String, Box<dyn Error>>
     where S: AsRef<str>
 {
     let val_str = val.as_ref();
@@ -320,6 +320,16 @@ fn multibase_to_b64<S>(val: S) -> Result<String, Box<dyn Error>>
             Ok(format_string[1..].to_string())
         }
     }
+}
+
+pub fn multibase_to_safe<S>(val: S) -> Result<Base64UrlSafeData, Box<dyn Error>>
+    where S: AsRef<str>
+{
+    let val_str = val.as_ref();
+    let (_, contenu_bytes) = multibase::decode(val_str)?;
+    let data = Base64UrlSafeData(contenu_bytes);
+
+    Ok(data)
 }
 
 #[cfg(test)]

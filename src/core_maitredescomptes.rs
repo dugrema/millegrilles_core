@@ -20,6 +20,7 @@ use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao, convertir_bson_deserializable, convertir_to_bson};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
+use millegrilles_common_rust::multibase;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage, valider_message};
 use millegrilles_common_rust::serde_json::{json, Value};
@@ -36,7 +37,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use std::convert::TryInto;
-use crate::webauthn::{ClientAssertionResponse, CompteCredential};
+use crate::webauthn::{ClientAssertionResponse, CompteCredential, multibase_to_safe};
+use webauthn_rs::base64_data::Base64UrlSafeData;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
@@ -770,13 +772,28 @@ async fn ajouter_cle<M>(middleware: &M, message: MessageValideAction) -> Result<
     let reponse_client = &commande.reponse_client;
     let mut reponse_client_serialise = MessageSerialise::from_parsed(reponse_client.to_owned())?;
     match valider_message(middleware, &mut reponse_client_serialise).await {
-        Ok(()) => (),
+        Ok(()) => {
+            // S'assurer que le contenu du message est coherent - credId == response.id (doit convertir en bytes)
+            let rep_challenge: ReponseClientAjouterCle = reponse_client.map_contenu(None)?;
+            let id_client = rep_challenge.reponse_challenge.id;
+            debug!("id client : {:?}, commande a decoder : {:?}", id_client, commande.cle);
+            let (_, cred_id): (_, Vec<u8>) = multibase::decode(commande.cle.cred_id)?;
+            if id_client.0 != cred_id {
+                debug!("Difference entre id_client et cred_id dans message ajouter cle\n{:?}\n{:?}", id_client, cred_id);
+                let err = json!({"ok": false, "code": 5, "err": format!{"Permission refusee, reponseClient mismatch credId"}});
+                debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+                match middleware.formatter_reponse(&err, None) {
+                    Ok(m) => return Ok(Some(m)),
+                    Err(e) => Err(format!("ajouter_cle: Erreur verification credId avec reponseClient : {:?}", e))?
+                }
+            }
+        },
         Err(e) => {
             let err = json!({"ok": false, "code": 3, "err": format!{"Permission refusee, reponseClient invalide : {:?}", e}});
             debug!("ajouter_cle autorisation acces refuse : {:?}", err);
             match middleware.formatter_reponse(&err,None) {
                 Ok(m) => return Ok(Some(m)),
-                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+                Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
             }
         }
     };
@@ -786,7 +803,7 @@ async fn ajouter_cle<M>(middleware: &M, message: MessageValideAction) -> Result<
         debug!("ajouter_cle autorisation acces refuse : {:?}", err);
         match middleware.formatter_reponse(&err,None) {
             Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+            Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
         }
     }
 
@@ -905,6 +922,16 @@ struct CommandeAjouterCle {
     nom_usager: String,
     #[serde(rename="reponseClient")]
     reponse_client: MessageMilleGrille
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseClientAjouterCle {
+    #[serde(rename="reponseChallenge")]
+    reponse_challenge: ReponseClientAjouteCleReponseChallenge
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseClientAjouteCleReponseChallenge {
+    id: Base64UrlSafeData
 }
 
 #[cfg(test)]
