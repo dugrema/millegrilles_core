@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use std::convert::TryInto;
+use crate::webauthn::ClientAssertionResponse;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
@@ -644,9 +645,119 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
     debug!("signer_compte_usager : {:?}", message);
 
     // Verifier autorisation
+    if ! message.verifier(
+        Some(vec!(Securite::L4Secure, Securite::L3Protege, Securite::L2Prive)),
+        Some(vec!(RolesCertificats::NoeudPrive, RolesCertificats::WebProtege)),
+    ) {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("signer_compte_usager autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+        }
+    }
+
+    let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu(None)?;
+    let user_id = commande.user_id.as_str();
+
+    // Charger le compte usager
+    let filtre = doc! {CHAMP_USER_ID: user_id};
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let doc_usager = match collection.find_one(filtre, None).await? {
+        Some(d) => d,
+        None => {
+            let err = json!({"ok": false, "code": 3, "err": format!("Usager inconnu : {}", user_id)});
+            debug!("signer_compte_usager usager inconnu : {:?}", err);
+            match middleware.formatter_reponse(&err,None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+            }
+        }
+    };
+
+    // Verifier si l'usager a deja des creds WebAuthn (doit signer sa demande) ou non
 
 
-    Ok(None)
+    // Signature est autorisee, on genere la commande de signature
+    // Emettre le compte usager pour qu'il soit signe et retourne au demandeur (serveur web)
+    let mut commande_signature = json!({
+        CHAMP_USER_ID: user_id,
+        "compte": convertir_bson_value(doc_usager)?,
+    });
+
+    // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
+    // Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
+    if let Some(activation_tierce) = commande.activation_tierce {
+        if activation_tierce {
+            todo!();
+            //commande_signature.insert("activation_tierce", true);
+        }
+    }
+
+    debug!("Emettre commande d'autorisation de signature certificat navigateur : {:?}", commande);
+    middleware.transmettre_commande(
+        DOMAINE_SERVICE_MONITOR,
+            "signerNavigateur",
+        None,
+        &commande_signature,
+        None,
+        false
+    ).await?;
+
+    Ok(None)    // Le message de reponse va etre emis par le module de signature de certificat
+
+    // # Creer l'information pour la commande de signature de certificat
+    //     commande_signature = demande_certificat.copy()
+    //     commande_signature['userId'] = params['userId']
+    //     commande_signature['compte'] = doc_usager
+    //
+    //     # Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
+    //     # Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
+    //     if demande_certificat.get('activationTierce') is True or activation_tierce is True:
+    //         commande_signature['activation_tierce'] = True
+    //
+    //     # Emettre le compte usager pour qu'il soit signe et retourne au demandeur (serveur web)
+    //     domaine_action = 'commande.servicemonitor.signerNavigateur'
+    //     self.generateur_transactions.transmettre_commande(
+    //         commande_signature,
+    //         domaine_action,
+    //         exchange=Constantes.SECURITE_PROTEGE,
+    //         reply_to=properties.reply_to,
+    //         correlation_id=properties.correlation_id,
+    //         ajouter_certificats=True,
+    //     )
+
+    // Ok(None)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandeSignerCertificat {
+    #[serde(rename="userId")]
+    user_id: String,
+    #[serde(rename="nomUsager")]
+    nom_usager: Option<String>,
+
+    // Demande initiale (inscription usager ou nouvel appareil)
+    csr: Option<String>,  // Present si demande initiale
+
+    activation_tierce: Option<bool>,
+
+    // Champs pour demande de signature avec preuve webauthn
+    challenge: Option<String>,
+    origin: Option<String>,
+    #[serde(rename="demandeCertificat")]
+    demande_certificat: Option<DemandeCertificat>,
+    #[serde(rename="clientAssertionResponse")]
+    client_assertion_response: Option<ClientAssertionResponse>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DemandeCertificat {
+    csr: String,
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+    date: usize,
+    #[serde(rename="activationTierce", skip_serializing_if = "Option::is_none")]
+    activation_tierce: Option<bool>,
 }
 
 #[cfg(test)]

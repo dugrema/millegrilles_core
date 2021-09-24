@@ -257,7 +257,7 @@ fn convertir_creds_compte(doc_compte: Document) -> Result<Vec<webauthn_rs::proto
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct ClientAssertionResponse {
+pub struct ClientAssertionResponse {
     id64: String,
     response: ClientAssertResponseContent
 }
