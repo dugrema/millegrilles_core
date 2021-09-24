@@ -15,7 +15,7 @@ use millegrilles_common_rust::constantes::Securite::L3Protege;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::GenerateurMessages;
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
 use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
@@ -288,7 +288,8 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
                 None => Err("Correlation id manquant pour reponse"),
             }?;
             info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
-            middleware.repondre(reponse, &reply_q, &correlation_id).await?;
+            let routage = RoutageMessageReponse::new(reply_q, correlation_id);
+            middleware.repondre(routage, reponse).await?;
         },
         None => (),  // Aucune reponse
     }

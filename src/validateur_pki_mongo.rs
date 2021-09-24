@@ -11,7 +11,7 @@ use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMessa
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMilleGrille, MessageSerialise};
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse};
 use millegrilles_common_rust::middleware::{configurer as configurer_queues, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, ReponseDechiffrageCle, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoImpl};
 use millegrilles_common_rust::mongodb::Database;
@@ -414,8 +414,8 @@ impl GenerateurMessages for MiddlewareDbPki {
         self.generateur_messages.transmettre_commande(domaine, action, partition, message, exchange, blocking).await
     }
 
-    async fn repondre(&self, message: MessageMilleGrille, reply_q: &str, correlation_id: &str) -> Result<(), String> {
-        self.generateur_messages.repondre(message, reply_q, correlation_id).await
+    async fn repondre(&self, routage: RoutageMessageReponse, message: MessageMilleGrille) -> Result<(), String> {
+        self.generateur_messages.repondre(routage, message).await
     }
 
     async fn emettre_message(&self, domaine: &str, action: &str, partition: Option<&str>, type_message: TypeMessageOut, message: &str, exchange: Option<Securite>, blocking: bool) -> Result<Option<TypeMessage>, String> {

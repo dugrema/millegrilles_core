@@ -12,7 +12,7 @@ use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, V
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::GenerateurMessages;
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
 use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_message_certificat, sauvegarder_transaction_recue, thread_emettre_presence_domaine, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -289,7 +289,8 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
                 None => Err("Correlation id manquant pour reponse"),
             }?;
             info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
-            middleware.repondre(reponse, &reply_q, &correlation_id).await?;
+            let routage = RoutageMessageReponse::new(reply_q, correlation_id);
+            middleware.repondre(routage, reponse).await?;
         },
         None => (),  // Aucune reponse
     }
