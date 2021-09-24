@@ -17,11 +17,11 @@ use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao, convertir_bson_deserializable};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao, convertir_bson_deserializable, convertir_to_bson};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
-use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
+use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage, valider_message};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio::spawn;
@@ -70,6 +70,8 @@ const CHAMP_COMPTE_PRIVE: &str = "compte_prive";
 const CHAMP_DELEGATION_GLOBALE: &str = "delegation_globale";
 const CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
 const CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: &str = "activations_par_fingerprint_pk";
+const CHAMP_WEBAUTHN: &str = "webauthn";
+
 
 /// Initialise le domaine.
 pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
@@ -123,6 +125,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let commandes: Vec<&str> = vec![
         // Transactions recues sous forme de commande pour validation
         TRANSACTION_INSCRIRE_USAGER,
+        TRANSACTION_AJOUTER_CLE,
 
         // Commandes
         COMMANDE_SIGNER_COMPTEUSAGER,
@@ -372,6 +375,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
 
         // Transactions recues sous forme de commande
         TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware.as_ref(), m).await,
+        TRANSACTION_AJOUTER_CLE => ajouter_cle(middleware.as_ref(), m).await,
 
         //traiter_commande_application(middleware.as_ref(), m).await,
         COMMANDE_SIGNER_COMPTEUSAGER => signer_compte_usager(middleware.as_ref(), m).await,
@@ -396,10 +400,10 @@ where
     }?;
 
     match m.action.as_str() {
-        // TRANSACTION_DOMAINE | TRANSACTION_MONITOR => {
-        //     sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
-        //     Ok(None)
-        // },
+        TRANSACTION_INSCRIRE_USAGER | TRANSACTION_AJOUTER_CLE => {
+            sauvegarder_transaction(middleware, &m, NOM_COLLECTION_TRANSACTIONS).await?;
+            Ok(None)
+        },
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
     }
 }
@@ -725,6 +729,135 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
     Ok(None)    // Le message de reponse va etre emis par le module de signature de certificat
 }
 
+async fn ajouter_cle<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer ajouter_cle : {:?}", &message.message);
+
+    // Verifier autorisation
+    if ! message.verifier(
+        Some(vec!(Securite::L4Secure, Securite::L3Protege, Securite::L2Prive)),
+        Some(vec!(RolesCertificats::NoeudPrive, RolesCertificats::WebProtege)),
+    ) {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+        }
+    }
+
+    let commande: CommandeAjouterCle = message.message.get_msg().map_contenu(None)?;
+
+    let nom_usager = commande.nom_usager.as_str();
+    let fingerprint_pk = commande.fingerprint_pk.as_str();
+
+    // Validation - s'assurer que le compte usager existe
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let compte_usager = match charger_compte_usager(middleware, nom_usager).await? {
+        Some(c) => c,
+        None => {
+            let err = json!({"ok": false, "code": 2, "err": format!("Usager inconnu : {}", nom_usager)});
+            debug!("ajouter_cle usager inconnu : {:?}", err);
+            match middleware.formatter_reponse(&err,None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+            }
+        }
+    };
+
+    // Verifier autorisation client - le certificat doit correspondre au user_id du compte
+    let reponse_client = &commande.reponse_client;
+    let mut reponse_client_serialise = MessageSerialise::from_parsed(reponse_client.to_owned())?;
+    match valider_message(middleware, &mut reponse_client_serialise).await {
+        Ok(()) => (),
+        Err(e) => {
+            let err = json!({"ok": false, "code": 3, "err": format!{"Permission refusee, reponseClient invalide : {:?}", e}});
+            debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+            match middleware.formatter_reponse(&err,None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+            }
+        }
+    };
+
+    if ! reponse_client_serialise.verifier_usager(compte_usager.user_id) {
+        let err = json!({"ok": false, "code": 4, "err": "Permission refusee, certificat non autorise"});
+        debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+        }
+    }
+
+    // Sauvegarder la transaction, marquer complete et repondre
+    let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
+    sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
+    let transaction: TransactionImpl = message.try_into()?;
+    let reponse = sauvegarder_ajouter_cle(middleware, transaction).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction.as_ref(), EtatTransaction::Complete).await?;
+
+    Ok(reponse)
+}
+
+async fn sauvegarder_ajouter_cle<M, T>(middleware: &M, transaction: T)
+    -> Result<Option<MessageMilleGrille>, String>
+    where T: Transaction,
+          M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    let commande: CommandeAjouterCle = match transaction.clone().convertir() {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion en CommandeAjouterCle : {:?}", e))?
+    };
+    let nom_usager = commande.nom_usager.as_str();
+    let fingerprint_pk = commande.fingerprint_pk.as_str();
+    let filtre = doc! {CHAMP_USAGER_NOM: nom_usager};
+
+    let commande_bson = match convertir_to_bson(commande.cle) {
+        Ok(c) => c,
+        Err(e) => Err(format!("Erreur sauvegarder_ajouter_cle, echec conversion bson {:?}", e))?
+    };
+
+    let ops = doc! {
+        "$push": {CHAMP_WEBAUTHN: commande_bson},
+        "$set": {
+            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): true,
+            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_association"): Utc::now(),
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let resultat = match collection.update_one(filtre, ops, None).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("Erreur sauvegarde transaction sauvegarder_ajouter_cle : {:?}", e))?
+    };
+    debug!("Resultat ajout cle : {:?}", resultat);
+
+    let reponse = json!({"ok": true, CHAMP_USAGER_NOM: nom_usager});
+    match middleware.formatter_reponse(&reponse,None) {
+        Ok(m) => return Ok(Some(m)),
+        Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+    }
+}
+
+/// Charger un compte usager a partir du nom usager
+async fn charger_compte_usager<M, S>(middleware: &M, nom_usager: S)
+    -> Result<Option<CompteUsager>, Box<dyn Error>>
+    where
+        M: MongoDao,
+        S: AsRef<str>
+{
+    let filtre = doc! {CHAMP_USAGER_NOM: nom_usager.as_ref()};
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    match collection.find_one(filtre, None).await? {
+        Some(c) => {
+            let compte: CompteUsager = convertir_bson_deserializable(c)?;
+            Ok(Some(compte))
+        },
+        None => Ok(None)
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CommandeSignerCertificat {
     #[serde(rename="userId")]
@@ -762,6 +895,16 @@ struct CompteUsager {
     #[serde(rename="userId")]
     user_id: String,
     webauthn: Option<Vec<CompteCredential>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandeAjouterCle {
+    cle: CompteCredential,
+    fingerprint_pk: String,
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+    #[serde(rename="reponseClient")]
+    reponse_client: MessageMilleGrille
 }
 
 #[cfg(test)]
