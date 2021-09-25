@@ -1027,7 +1027,7 @@ async fn activation_tierce<M>(middleware: &M, message: MessageValideAction) -> R
     let filtre = doc! {CHAMP_USER_ID: reponse_activation.user_id};
     let ops = doc! {
         "$set": {
-            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): true,
+            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): false,
         },
         "$currentDate": {
             CHAMP_MODIFICATION: true,
