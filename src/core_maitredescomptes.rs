@@ -129,6 +129,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_INSCRIRE_USAGER,
         TRANSACTION_AJOUTER_CLE,
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE,
+        TRANSACTION_MAJ_USAGER_DELEGATIONS,
 
         // Commandes
         COMMANDE_SIGNER_COMPTEUSAGER,
@@ -340,7 +341,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
     debug!("Consommer requete : {:?}", &message.message);
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
-    match message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    match message.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
         true => Ok(()),
         false => Err(format!("Commande autorisation invalide (pas 2.prive, 3.protege ou 4.secure)")),
     }?;
@@ -364,31 +365,81 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
     }
 }
 
+/// Consomme une commande
+/// Verifie le niveau de securite approprie avant d'executer la commande
 async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 {
     debug!("Consommer commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
-        true => Ok(()),
-        false => Err(format!("Commande autorisation invalide (pas 2.prive, 3.protege ou 4.secure)")),
-    }?;
+    if m.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
+        // Actions autorisees pour echanges prives
+        match m.action.as_str() {
+            // Transactions recues sous forme de commande
+            TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware.as_ref(), m).await,
+            TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware.as_ref(), m).await,
 
-    match m.action.as_str() {
-        // Commandes standard
+            // Commandes standard
+            COMMANDE_SIGNER_COMPTEUSAGER => signer_compte_usager(middleware.as_ref(), m).await,
+            COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware.as_ref(), m).await,
 
-        // Transactions recues sous forme de commande
-        TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware.as_ref(), m).await,
-        TRANSACTION_AJOUTER_CLE => ajouter_cle(middleware.as_ref(), m).await,
-        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware.as_ref(), m).await,
+            // Commandes 3.protegees
+            _ => {
+                if m.verifier_exchanges(vec!(Securite::L3Protege, Securite::L4Secure)) {
+                    // Commandes pour echanges proteges
+                    match m.action.as_str() {
+                        // Transactions recues sous forme de commande
+                        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware.as_ref(), m).await,
+                        // Commandes inconnues
+                        _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
+                    }
+                } else {
+                    Ok(acces_refuse(middleware.as_ref())?)
+                }
+            }
+        }
+    } else if m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        // Commande proprietaire (administrateur)
+        match m.action.as_str() {
+            // Transactions recues sous forme de commande
+            TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware.as_ref(), m).await,
+            // Commandes inconnues
+            _ => Ok(acces_refuse(middleware.as_ref())?)
+        }
+    } else {
+        Err(format!("Commande {} non autorisee : {}, message dropped", DOMAINE_NOM, m.action))?
+    }
 
-        //traiter_commande_application(middleware.as_ref(), m).await,
-        COMMANDE_SIGNER_COMPTEUSAGER => signer_compte_usager(middleware.as_ref(), m).await,
-        COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware.as_ref(), m).await,
-        // COMMANDE_CHALLENGE_COMPTEUSAGER => {debug!("Challenge compte usager");},
+    // match m.action.as_str() {
+    //     // Commandes standard
+    //
+    //     // Transactions recues sous forme de commande
+    //     TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware.as_ref(), m).await,
+    //     TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware.as_ref(), m).await,
+    //     TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware.as_ref(), m).await,
+    //     TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware.as_ref(), m).await,
+    //
+    //     //traiter_commande_application(middleware.as_ref(), m).await,
+    //     COMMANDE_SIGNER_COMPTEUSAGER => signer_compte_usager(middleware.as_ref(), m).await,
+    //     COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware.as_ref(), m).await,
+    //     // COMMANDE_CHALLENGE_COMPTEUSAGER => {debug!("Challenge compte usager");},
+    //
+    //     // Commandes inconnues
+    //     _ => acces_refuse(middleware.as_ref()),
+    // }
+}
 
-        // Commandes inconnues
-        _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
+fn acces_refuse<M>(middleware: &M) -> Result<Option<MessageMilleGrille>, String>
+    where M: GenerateurMessages
+{
+    let val = json!({
+        "ok": false,
+        "err": "Acces refuse",
+        "code": 254
+    });
+    match middleware.formatter_reponse(&val,None) {
+        Ok(m) => Ok(Some(m)),
+        Err(e) => Err(format!("Erreur preparation reponse charger_usager : {:?}", e))
     }
 }
 
@@ -399,13 +450,16 @@ where
     debug!("Consommer transaction : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges(vec!(Securite::L4Secure)) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
 
     match m.action.as_str() {
-        TRANSACTION_INSCRIRE_USAGER | TRANSACTION_AJOUTER_CLE => {
+        TRANSACTION_INSCRIRE_USAGER |
+        TRANSACTION_AJOUTER_CLE |
+        TRANSACTION_AJOUTER_DELEGATION_SIGNEE |
+        TRANSACTION_MAJ_USAGER_DELEGATIONS => {
             sauvegarder_transaction(middleware, &m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
@@ -417,7 +471,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges(vec!(Securite::L4Secure)) {
         true => Ok(()),
         false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
@@ -460,6 +514,9 @@ async fn aiguillage_transaction<M>(middleware: &M, transaction: TransactionImpl)
 where M: ValidateurX509 + GenerateurMessages + MongoDao {
     match transaction.get_action() {
         TRANSACTION_INSCRIRE_USAGER => sauvegarder_inscrire_usager(middleware, transaction).await,
+        TRANSACTION_AJOUTER_CLE => transaction_ajouter_cle(middleware, transaction).await,
+        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => transaction_ajouter_delegation_signee(middleware, transaction).await,
+        TRANSACTION_MAJ_USAGER_DELEGATIONS => transaction_maj_usager_delegations(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -768,7 +825,7 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
     Ok(None)    // Le message de reponse va etre emis par le module de signature de certificat
 }
 
-async fn ajouter_cle<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer ajouter_cle : {:?}", &message.message);
@@ -848,13 +905,13 @@ async fn ajouter_cle<M>(middleware: &M, message: MessageValideAction) -> Result<
     let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
     let transaction: TransactionImpl = message.try_into()?;
-    let reponse = sauvegarder_ajouter_cle(middleware, transaction).await?;
+    let reponse = transaction_ajouter_cle(middleware, transaction).await?;
     marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction.as_ref(), EtatTransaction::Complete).await?;
 
     Ok(reponse)
 }
 
-async fn sauvegarder_ajouter_cle<M, T>(middleware: &M, transaction: T)
+async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
     -> Result<Option<MessageMilleGrille>, String>
     where T: Transaction,
           M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -1008,7 +1065,6 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
-
     // Verifier autorisation
     if !message.verifier(
         Some(vec!(Securite::L4Secure, Securite::L3Protege)),
@@ -1122,15 +1178,6 @@ async fn activation_tierce<M>(middleware: &M, message: MessageValideAction) -> R
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer activation_tierce : {:?}", &message.message);
-
-    // Verifier autorisation
-    if !message.verifier(
-        Some(vec!(Securite::L4Secure, Securite::L3Protege)),
-        Some(vec!(RolesCertificats::Monitor)),
-    ) {
-        Err(format!("activation_tierce (1) Permission refusee, certificat non autorise"))?;
-    }
-
     let reponse_activation: ReponseActivationTierce = message.message.get_msg().map_contenu(None)?;
     let fingerprint_pk = reponse_activation.fingerprint_pk.as_str();
 
@@ -1171,6 +1218,73 @@ struct ReponseActivationTierce {
     nom_usager: String,
     #[serde(rename="userId")]
     user_id: String,
+}
+
+pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer commande_maj_usager_delegations : {:?}", &message.message);
+
+    // Valider contenu
+    let commande: TransactionMajUsagerDelegations = message.message.get_msg().map_contenu(None)?;
+    let user_id = commande.user_id.as_str();
+
+    // Commande valide, on sauvegarde et traite la transaction
+    let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
+    sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
+    let transaction: TransactionImpl = message.try_into()?;
+    let _ = transaction_maj_usager_delegations(middleware, transaction).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction.as_ref(), EtatTransaction::Complete).await?;
+
+    // Charger le document de compte et retourner comme reponse
+    let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
+        Some(compte) => serde_json::to_value(&compte)?,
+        None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
+    };
+
+    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TransactionMajUsagerDelegations {
+    compte_prive: Option<bool>,
+    delegation_globale: Option<String>,
+    #[serde(rename="userId")]
+    user_id: String,
+}
+
+pub async fn transaction_maj_usager_delegations<M, T>(middleware: &M, transaction: T)
+    -> Result<Option<MessageMilleGrille>, String>
+    where T: Transaction,
+          M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    let commande: TransactionMajUsagerDelegations = match transaction.clone().convertir() {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion en CommandeAjouterDelegationSignee : {:?}", e))?
+    };
+    let user_id = commande.user_id.as_str();
+
+    let filtre = doc! {CHAMP_USER_ID: user_id};
+    let set_ops = doc! {
+        "compte_prive": commande.compte_prive,
+        "delegation_globale": commande.delegation_globale,
+    };
+    let ops = doc! {
+        "$set": set_ops,
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let resultat = match collection.update_one(filtre, ops, None).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("Erreur transaction_maj_usager_delegations, echec sauvegarde : {:?}", e))?
+    };
+    debug!("Resultat commande_maj_usager_delegations : {:?}", resultat);
+
+    if resultat.matched_count != 1 {
+        Err(format!("Erreur transaction_maj_usager_delegations usager {} non trouve", user_id))?
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]
