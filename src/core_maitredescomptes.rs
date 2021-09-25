@@ -1,23 +1,24 @@
 use std::collections::HashMap;
+use std::convert::TryInto;
 use std::error::Error;
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
-use millegrilles_common_rust::bson::{Bson, doc, bson, DateTime};
+use millegrilles_common_rust::bson::{Bson, bson, DateTime, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::L3Protege;
-use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, DateEpochSeconds, preparer_btree_recursif};
+use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMilleGrille, preparer_btree_recursif};
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao, convertir_bson_deserializable, convertir_to_bson};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 use millegrilles_common_rust::multibase;
@@ -31,14 +32,13 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::{ValidationOptions, verifier_signature_str, verifier_signature_serialize, verifier_message};
+use millegrilles_common_rust::verificateur::{ValidationOptions, verifier_message, verifier_signature_serialize, verifier_signature_str};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
+use webauthn_rs::base64_data::Base64UrlSafeData;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
-use std::convert::TryInto;
 use crate::webauthn::{ClientAssertionResponse, CompteCredential, multibase_to_safe, valider_commande};
-use webauthn_rs::base64_data::Base64UrlSafeData;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
@@ -62,6 +62,7 @@ const TRANSACTION_AJOUTER_CLE: &str = "ajouterCle";
 const TRANSACTION_SUPPRIMER_USAGER: &str = "supprimerUsager";
 const TRANSACTION_MAJ_USAGER_DELEGATIONS: &str = "majUsagerDelegations";
 const TRANSACTION_AJOUTER_DELEGATION_SIGNEE: &str = "ajouterDelegationSignee";
+const TRANSACTION_SUPPRIMER_CLES: &str = "supprimerCles";
 
 const INDEX_ID_USAGER: &str = "idusager_unique";
 const INDEX_NOM_USAGER: &str = "nomusager_unique";
@@ -130,6 +131,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_AJOUTER_CLE,
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE,
         TRANSACTION_MAJ_USAGER_DELEGATIONS,
+        TRANSACTION_SUPPRIMER_CLES,
 
         // Commandes
         COMMANDE_SIGNER_COMPTEUSAGER,
@@ -403,6 +405,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
         match m.action.as_str() {
             // Transactions recues sous forme de commande
             TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware.as_ref(), m).await,
+            TRANSACTION_SUPPRIMER_CLES => commande_supprimer_cles(middleware.as_ref(), m).await,
             // Commandes inconnues
             _ => Ok(acces_refuse(middleware.as_ref())?)
         }
@@ -459,7 +462,8 @@ where
         TRANSACTION_INSCRIRE_USAGER |
         TRANSACTION_AJOUTER_CLE |
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE |
-        TRANSACTION_MAJ_USAGER_DELEGATIONS => {
+        TRANSACTION_MAJ_USAGER_DELEGATIONS |
+        TRANSACTION_SUPPRIMER_CLES => {
             sauvegarder_transaction(middleware, &m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
@@ -517,6 +521,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao {
         TRANSACTION_AJOUTER_CLE => transaction_ajouter_cle(middleware, transaction).await,
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE => transaction_ajouter_delegation_signee(middleware, transaction).await,
         TRANSACTION_MAJ_USAGER_DELEGATIONS => transaction_maj_usager_delegations(middleware, transaction).await,
+        TRANSACTION_SUPPRIMER_CLES => transaction_supprimer_cles(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -1318,6 +1323,56 @@ pub async fn transaction_maj_usager_delegations<M, T>(middleware: &M, transactio
     }
 
     Ok(None)
+}
+
+pub async fn commande_supprimer_cles<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer commande_supprimer_cles : {:?}", &message.message);
+
+    // Valider contenu
+    let commande: TransactionSupprimerCles = message.message.get_msg().map_contenu(None)?;
+    let user_id = commande.user_id.as_str();
+
+    // Commande valide, on sauvegarde et traite la transaction
+    let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
+    sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
+    let transaction: TransactionImpl = message.try_into()?;
+    let _ = transaction_supprimer_cles(middleware, transaction).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction.as_ref(), EtatTransaction::Complete).await?;
+
+    Ok(middleware.reponse_ok()?)
+}
+
+pub async fn transaction_supprimer_cles<M, T>(middleware: &M, transaction: T)
+    -> Result<Option<MessageMilleGrille>, String>
+    where T: Transaction,
+          M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    let commande: TransactionSupprimerCles = match transaction.clone().convertir() {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion en CommandeAjouterDelegationSignee : {:?}", e))?
+    };
+
+    let filtre = doc! {CHAMP_USER_ID: &commande.user_id};
+    let ops = doc! {
+        "$unset": {CHAMP_WEBAUTHN: true},
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let resultat = match collection.update_one(filtre, ops, None).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("transaction_supprimer_cles Erreur maj collection usagers {:?}", e))?
+    } ;
+    debug!("transaction_supprimer_cles resultat : {:?}", resultat);
+
+    Ok(None)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TransactionSupprimerCles {
+    #[serde(rename="userId")]
+    user_id: String,
 }
 
 #[cfg(test)]
