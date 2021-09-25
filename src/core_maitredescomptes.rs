@@ -31,7 +31,7 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::{ValidationOptions, verifier_signature_str, verifier_signature_serialize};
+use millegrilles_common_rust::verificateur::{ValidationOptions, verifier_signature_str, verifier_signature_serialize, verifier_message};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
@@ -380,7 +380,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware.as_ref(), m).await,
 
             // Commandes standard
-            COMMANDE_SIGNER_COMPTEUSAGER => signer_compte_usager(middleware.as_ref(), m).await,
+            COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware.as_ref(), m).await,
             COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware.as_ref(), m).await,
 
             // Commandes 3.protegees
@@ -706,7 +706,7 @@ struct TransactionInscrireUsager {
 
 /// Verifie une demande de signature de certificat pour un compte usager
 /// Emet une commande autorisant la signature lorsque c'est approprie
-async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("signer_compte_usager : {:?}", message);
@@ -728,6 +728,7 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
     }
 
     let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu(None)?;
+    debug!("commande_signer_compte_usager CommandeSignerCertificat : {:?}", commande);
     let user_id = commande.user_id.as_str();
 
     // Charger le compte usager
@@ -781,11 +782,42 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
                 (d.csr, d.activation_tierce)
             },
             None => {
-                let err = json!({"ok": false, "code": 4, "err": format!("Compte existant, demandeCertificat est vide (erreur) : {}", user_id)});
-                debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
-                match middleware.formatter_reponse(&err,None) {
-                    Ok(m) => return Ok(Some(m)),
-                    Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+                // Ce n'est pas une demande de certificat. Verifier si on a une permission
+                match commande.permission {
+                    Some(permission) => {
+                        let csr = match commande.csr {
+                            Some(c) => c,
+                            None => Err(format!("commande_signer_compte_usager (8) CSR manquant"))?
+                        };
+
+                        let mut perm_serialisee = MessageSerialise::from_parsed(permission)?;
+                        match valider_message(middleware, &mut perm_serialisee).await {
+                            Ok(()) => (),
+                            Err(e) => {
+                                let err = json!({"ok": false, "code": 7, "err": format!("Permission invalide (7) : {}, {:?}", user_id, e)});
+                                debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
+                                match middleware.formatter_reponse(&err, None) {
+                                    Ok(m) => return Ok(Some(m)),
+                                    Err(e) => Err(format!("Erreur preparation reponse (7) sauvegarder_inscrire_usager : {:?}", e))?
+                                }
+                            }
+                        }
+
+                        let c_signer: CommandeSignerCertificat = perm_serialisee.get_msg().map_contenu(None)?;
+                        if c_signer.user_id.as_str() != user_id {
+                            Err(format!("commande_signer_compte_usager User id mismatch (8) avec permission"))?
+                        }
+
+                        (csr, Some(true))
+                    },
+                    None => {
+                        let err = json!({"ok": false, "code": 4, "err": format!("Compte existant, demandeCertificat/permission sont vides (erreur) : {}", user_id)});
+                        debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
+                        match middleware.formatter_reponse(&err,None) {
+                            Ok(m) => return Ok(Some(m)),
+                            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+                        }
+                    }
                 }
             }
         }
@@ -1016,6 +1048,7 @@ struct CommandeSignerCertificat {
     demande_certificat: Option<DemandeCertificat>,
     #[serde(rename="clientAssertionResponse")]
     client_assertion_response: Option<ClientAssertionResponse>,
+    permission: Option<MessageMilleGrille>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DemandeCertificat {
