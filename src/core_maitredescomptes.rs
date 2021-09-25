@@ -5,14 +5,14 @@ use std::sync::Arc;
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
-use millegrilles_common_rust::bson::{Bson, doc, bson};
+use millegrilles_common_rust::bson::{Bson, doc, bson, DateTime};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::L3Protege;
-use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
+use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, DateEpochSeconds};
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
@@ -380,7 +380,7 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
         // Transactions recues sous forme de commande
         TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware.as_ref(), m).await,
         TRANSACTION_AJOUTER_CLE => ajouter_cle(middleware.as_ref(), m).await,
-        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => ajouter_delegation_signee(middleware.as_ref(), m).await,
+        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware.as_ref(), m).await,
 
         //traiter_commande_application(middleware.as_ref(), m).await,
         COMMANDE_SIGNER_COMPTEUSAGER => signer_compte_usager(middleware.as_ref(), m).await,
@@ -901,11 +901,7 @@ async fn sauvegarder_ajouter_cle<M, T>(middleware: &M, transaction: T)
     };
     debug!("Resultat ajout cle : {:?}", resultat);
 
-    let reponse = json!({"ok": true, CHAMP_USAGER_NOM: nom_usager});
-    match middleware.formatter_reponse(&reponse,None) {
-        Ok(m) => return Ok(Some(m)),
-        Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-    }
+    middleware.reponse_ok()
 }
 
 /// Charger un compte usager a partir du nom usager
@@ -919,6 +915,24 @@ async fn charger_compte_usager<M, S>(middleware: &M, nom_usager: S)
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
     match collection.find_one(filtre, None).await? {
         Some(c) => {
+            let compte: CompteUsager = convertir_bson_deserializable(c)?;
+            Ok(Some(compte))
+        },
+        None => Ok(None)
+    }
+}
+
+async fn charger_compte_user_id<M, S>(middleware: &M, user_id: S)
+    -> Result<Option<CompteUsager>, Box<dyn Error>>
+    where
+        M: MongoDao,
+        S: AsRef<str>
+{
+    let filtre = doc! {CHAMP_USER_ID: user_id.as_ref()};
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    match collection.find_one(filtre, None).await? {
+        Some(mut c) => {
+            filtrer_doc_id(&mut c);
             let compte: CompteUsager = convertir_bson_deserializable(c)?;
             Ok(Some(compte))
         },
@@ -963,6 +977,9 @@ struct CompteUsager {
     #[serde(rename="userId")]
     user_id: String,
     webauthn: Option<Vec<CompteCredential>>,
+
+    delegation_globale: Option<String>,
+    delegations_date: Option<DateEpochSeconds>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -986,7 +1003,8 @@ struct ReponseClientAjouteCleReponseChallenge {
     id: Base64UrlSafeData
 }
 
-async fn ajouter_delegation_signee<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+/// Ajoute une delegation globale a partir d'un message signe par la cle de millegrille
+async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
@@ -1004,7 +1022,79 @@ async fn ajouter_delegation_signee<M>(middleware: &M, message: MessageValideActi
         }
     }
 
-    Ok(None)
+    // Valider contenu
+    let commande: CommandeAjouterDelegationSignee = message.message.get_msg().map_contenu(None)?;
+
+    // Valider la signature de la cle de millegrille
+    let val_message_signe = message.message.get_msg().contenu.get("confirmation");
+
+    // Signature valide, on sauvegarde et traite la transaction
+    let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
+    sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
+    let transaction: TransactionImpl = message.try_into()?;
+    let _ = transaction_ajouter_delegation_signee(middleware, transaction).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction.as_ref(), EtatTransaction::Complete).await?;
+
+    // Charger le document de compte et retourner comme reponse
+    let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
+        Some(compte) => serde_json::to_value(&compte)?,
+        None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
+    };
+
+    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+}
+
+async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction: T)
+    -> Result<Option<MessageMilleGrille>, String>
+    where T: Transaction,
+          M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    let commande: CommandeAjouterDelegationSignee = match transaction.clone().convertir() {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion en CommandeAjouterCle : {:?}", e))?
+    };
+
+    debug!("transaction_ajouter_delegation_signee {:?}", commande);
+
+    // Le filtre agit a la fois sur le nom usager (valide par la cle) et le user_id (valide par serveur)
+    let filtre = doc! {
+        CHAMP_USER_ID: commande.user_id.as_str(),
+        CHAMP_USAGER_NOM: commande.confirmation.nom_usager.as_str(),
+    };
+    let ops = doc! {
+        "$set": {"delegation_globale": "proprietaire", "delegations_date": &DateEpochSeconds::now()},
+        "$currentDate": { CHAMP_MODIFICATION: true }
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let resultat = match collection.update_one(filtre, ops, None).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", commande, e))?
+    };
+    debug!("transaction_ajouter_delegation_signee resultat {:?}", resultat);
+    if resultat.matched_count == 1 {
+        Ok(None)
+    } else {
+        Err(format!("transaction_ajouter_delegation_signee Aucun match pour usager {:?}", commande))
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandeAjouterDelegationSignee {
+    confirmation: ConfirmationSigneeDelegationGlobale,
+    #[serde(rename="userId")]
+    user_id: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ConfirmationSigneeDelegationGlobale {
+    #[serde(rename="_signature")]
+    signature: String,
+    #[serde(rename="activerDelegation")]
+    activer_delegation: Option<bool>,
+    data: Option<String>,
+    date: usize,
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
 }
 
 /// Conserver confirmation d'activation tierce (certificat signe)
