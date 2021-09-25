@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
-use log::{debug, error, info, warn};
+use log::{trace, debug, error, info, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::{reset_backup_flag, restaurer};
 use millegrilles_common_rust::backup::backup;
@@ -289,7 +289,7 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
                 Some(correlation_id) => Ok(correlation_id),
                 None => Err("Correlation id manquant pour reponse"),
             }?;
-            info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
+            debug!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
             let routage = RoutageMessageReponse::new(reply_q, correlation_id);
             middleware.repondre(routage, reponse).await?;
         },
@@ -476,6 +476,7 @@ where
         Ok(inner) => match inner {
             Some(inner) => Ok(inner),
             None => {
+                debug!("Certificat par PK non trouve : {:?}", fingerprint_pk);
                 let reponse_value = json!({"resultat": false});
                 let reponse = middleware.formatter_reponse(reponse_value, None)?;
                 return Ok(Some(reponse));
@@ -501,6 +502,7 @@ where
     // repondre_enveloppe(middleware, &m, enveloppe.as_ref()).await?;
     let reponse_value = formatter_message_certificat(enveloppe.as_ref());
     let reponse = middleware.formatter_reponse(reponse_value, None)?;
+    debug!("requete_certificat_par_pk reponse pour fingerprint_pk {}\n{:?}", fingerprint_pk, reponse);
     Ok(Some(reponse))
 }
 

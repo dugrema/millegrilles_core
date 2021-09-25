@@ -128,9 +128,11 @@ pub fn preparer_queues() -> Vec<QueueType> {
         // Transactions recues sous forme de commande pour validation
         TRANSACTION_INSCRIRE_USAGER,
         TRANSACTION_AJOUTER_CLE,
+        TRANSACTION_AJOUTER_DELEGATION_SIGNEE,
 
         // Commandes
         COMMANDE_SIGNER_COMPTEUSAGER,
+        COMMANDE_ACTIVATION_TIERCE,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L2Prive});
@@ -378,11 +380,12 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
         // Transactions recues sous forme de commande
         TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware.as_ref(), m).await,
         TRANSACTION_AJOUTER_CLE => ajouter_cle(middleware.as_ref(), m).await,
+        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => ajouter_delegation_signee(middleware.as_ref(), m).await,
 
         //traiter_commande_application(middleware.as_ref(), m).await,
         COMMANDE_SIGNER_COMPTEUSAGER => signer_compte_usager(middleware.as_ref(), m).await,
-        COMMANDE_CHALLENGE_COMPTEUSAGER => todo!(),
-        COMMANDE_ACTIVATION_TIERCE => todo!(),
+        COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware.as_ref(), m).await,
+        // COMMANDE_CHALLENGE_COMPTEUSAGER => {debug!("Challenge compte usager");},
 
         // Commandes inconnues
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
@@ -742,7 +745,8 @@ async fn signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -
     let mut commande_signature = json!({
         CHAMP_USER_ID: user_id,
         "compte": convertir_bson_value(doc_usager)?,
-        "csr": csr
+        "csr": csr,
+        "activationTierce": activation_tierce,
     });
 
     // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
@@ -980,6 +984,83 @@ struct ReponseClientAjouterCle {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ReponseClientAjouteCleReponseChallenge {
     id: Base64UrlSafeData
+}
+
+async fn ajouter_delegation_signee<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
+
+    // Verifier autorisation
+    if !message.verifier(
+        Some(vec!(Securite::L4Secure, Securite::L3Protege)),
+        Some(vec!(RolesCertificats::WebProtege)),
+    ) {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err, None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse (1) ajouter_delegation_signee : {:?}", e))?
+        }
+    }
+
+    Ok(None)
+}
+
+/// Conserver confirmation d'activation tierce (certificat signe)
+async fn activation_tierce<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer activation_tierce : {:?}", &message.message);
+
+    // Verifier autorisation
+    if !message.verifier(
+        Some(vec!(Securite::L4Secure, Securite::L3Protege)),
+        Some(vec!(RolesCertificats::Monitor)),
+    ) {
+        Err(format!("activation_tierce (1) Permission refusee, certificat non autorise"))?;
+    }
+
+    let reponse_activation: ReponseActivationTierce = message.message.get_msg().map_contenu(None)?;
+    let fingerprint_pk = reponse_activation.fingerprint_pk.as_str();
+
+    let filtre = doc! {CHAMP_USER_ID: reponse_activation.user_id};
+    let ops = doc! {
+        "$set": {
+            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): true,
+        },
+        "$currentDate": {
+            CHAMP_MODIFICATION: true,
+            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_activation"): true,
+        }
+    };
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let resultat = collection.update_one(filtre, ops, None).await?;
+    debug!("Resultat maj activation_tierce {:?}", resultat);
+
+    // Emettre evenement de maj pour le navigateur en attente
+    let activation = json!({CHAMP_FINGERPRINT_PK: fingerprint_pk});
+    let routage = RoutageMessageAction::builder("CoreMaitreDesComptes", "activationFingerprintPk")
+        .exchanges(vec!(Securite::L2Prive, Securite::L3Protege))
+        .build();
+    middleware.emettre_evenement(routage, &activation).await?;
+
+    // Ok
+    let ok = json!({"ok": true, CHAMP_FINGERPRINT_PK: fingerprint_pk});
+    debug!("activation_tierce ok : {:?}", ok);
+    match middleware.formatter_reponse(&ok, None) {
+        Ok(m) => return Ok(Some(m)),
+        Err(e) => Err(format!("activation_tierce Erreur preparation reponse (2) : {:?}", e))?
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseActivationTierce {
+    fingerprint_pk: String,
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+    #[serde(rename="userId")]
+    user_id: String,
 }
 
 #[cfg(test)]
