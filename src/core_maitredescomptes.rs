@@ -12,7 +12,7 @@ use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissi
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::L3Protege;
-use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, DateEpochSeconds};
+use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, DateEpochSeconds, preparer_btree_recursif};
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
@@ -31,7 +31,7 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::ValidationOptions;
+use millegrilles_common_rust::verificateur::{ValidationOptions, verifier_signature_str, verifier_signature_serialize};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
@@ -1026,7 +1026,27 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     let commande: CommandeAjouterDelegationSignee = message.message.get_msg().map_contenu(None)?;
 
     // Valider la signature de la cle de millegrille
-    let val_message_signe = message.message.get_msg().contenu.get("confirmation");
+    let val_message_filtre = match message.message.get_msg().contenu.get("confirmation") {
+        Some(v) => {
+            // Retirer l'element _signature
+            match v.as_object() {
+                Some(mut vd) => {
+                    let mut vdc = vd.clone();
+                    vdc.remove("_signature");
+                    vdc
+                },
+                None => Err(format!("commande_ajouter_delegation_signee Confirmation n'est pas un document"))?
+            }
+        },
+        None => Err(format!("commande_ajouter_delegation_signee Confirmation manquante du message"))?
+    };
+    let pk_millegrille = middleware.get_enveloppe_privee().enveloppe.certificat_millegrille().public_key()?;
+    let signature_valide = verifier_signature_serialize(
+        &pk_millegrille, commande.confirmation.signature.as_str(), &val_message_filtre)?;
+
+    if ! signature_valide {
+        Err(format!("commande_ajouter_delegation_signee Signature de la commande est invalide"))?
+    }
 
     // Signature valide, on sauvegarde et traite la transaction
     let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
