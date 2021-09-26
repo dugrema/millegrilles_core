@@ -20,9 +20,9 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::resoumettre_transactions;
 
 use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
-use crate::core_backup::{GESTIONNAIRE_BACKUP, NOM_COLLECTION_TRANSACTIONS as BACKUP_NOM_COLLECTION_TRANSACTIONS};
+use crate::core_backup::{GESTIONNAIRE_BACKUP};
 use crate::core_catalogues::{NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues};
-use crate::core_maitredescomptes::{NOM_COLLECTION_TRANSACTIONS as MAITREDESCOMPTES_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_maitredescomptes, preparer_threads as preparer_threads_coremaitredescomptes};
+use crate::core_maitredescomptes::{GESTIONNAIRE_MAITREDESCOMPTES};
 use crate::core_pki::{NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki};
 use crate::core_topologie::{NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
@@ -36,7 +36,7 @@ pub async fn build() {
     queues.extend(preparer_q_corepki());
     queues.extend(preparer_q_catalogues());
     queues.extend(preparer_q_topologie());
-    queues.extend(preparer_q_maitredescomptes());
+    queues.extend(GESTIONNAIRE_MAITREDESCOMPTES.preparer_queues());
     queues.extend(GESTIONNAIRE_BACKUP.preparer_queues());
 
     // Listeners de connexion MQ
@@ -100,7 +100,7 @@ pub async fn build() {
         let (
             routing_maitredescomptes,
             futures_maitredescomptes
-        ) = preparer_threads_coremaitredescomptes(middleware.clone()).await.expect("core maitredescomptes");
+        ) = GESTIONNAIRE_MAITREDESCOMPTES.preparer_threads(middleware.clone()).await.expect("core maitredescomptes");
         futures.extend(futures_maitredescomptes);        // Deplacer vers futures globaux
         map_senders.extend(routing_maitredescomptes);    // Deplacer vers mapping global
 
@@ -150,13 +150,15 @@ where
     let mut certificat_emis = false;
 
     // Liste de collections de transactions pour tous les domaines geres par Core
-    let collections_transaction = vec! [
-        PKI_NOM_COLLECTION_TRANSACTIONS,
-        CATALOGUES_NOM_COLLECTION_TRANSACTIONS,
-        TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS,
-        MAITREDESCOMPTES_NOM_COLLECTION_TRANSACTIONS,
-        BACKUP_NOM_COLLECTION_TRANSACTIONS,
-    ];
+    let collections_transaction = {
+        let mut coll_docs_strings = Vec::new();
+        coll_docs_strings.extend(GESTIONNAIRE_BACKUP.get_collections_documents());
+        coll_docs_strings.extend(GESTIONNAIRE_MAITREDESCOMPTES.get_collections_documents());
+        coll_docs_strings.push(String::from(PKI_NOM_COLLECTION_TRANSACTIONS));
+        coll_docs_strings.push(String::from(CATALOGUES_NOM_COLLECTION_TRANSACTIONS));
+        coll_docs_strings.push(String::from(TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS));
+        coll_docs_strings
+    };
 
     let mut prochain_entretien_transactions = chrono::Utc::now();
     let intervalle_entretien_transactions = chrono::Duration::minutes(5);

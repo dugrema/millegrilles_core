@@ -17,7 +17,7 @@ use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMil
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
-use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine, Middleware};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
@@ -39,6 +39,7 @@ use webauthn_rs::base64_data::Base64UrlSafeData;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use crate::webauthn::{ClientAssertionResponse, CompteCredential, multibase_to_safe, valider_commande};
+use millegrilles_common_rust::domaines::GestionnaireDomaine;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
@@ -75,42 +76,125 @@ const CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
 const CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: &str = "activations_par_fingerprint_pk";
 const CHAMP_WEBAUTHN: &str = "webauthn";
 
+/// Instance statique du gestionnaire de maitredescomptes
+pub const GESTIONNAIRE_MAITREDESCOMPTES: GestionnaireDomaineMaitreDesComptes = GestionnaireDomaineMaitreDesComptes {};
 
-/// Initialise le domaine.
-pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
-    -> Result<(HashMap<String, Sender<TypeMessage>>, FuturesUnordered<JoinHandle<()>>), Box<dyn Error>>
-{
-    // Preparer les index MongoDB
-    preparer_index_mongodb(middleware.as_ref()).await?;
+#[derive(Clone)]
+pub struct GestionnaireDomaineMaitreDesComptes {}
 
-    // Channels pour traiter messages
-    let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(1);
-    let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(1);
-
-    // Routing map pour le domaine
-    let mut routing: HashMap<String, Sender<TypeMessage>> = HashMap::new();
-
-    // Mapping par Q nommee
-    routing.insert(String::from(NOM_Q_TRANSACTIONS), tx_messages.clone());  // Legacy
-    routing.insert(String::from(NOM_Q_VOLATILS), tx_messages.clone());  // Legacy
-    routing.insert(String::from(NOM_Q_TRIGGERS), tx_triggers.clone());
-
-    // Mapping par domaine (routing key)
-    routing.insert(String::from(DOMAINE_NOM), tx_messages.clone());
-
-    debug!("Routing : {:?}", routing);
-
-    // Thread consommation
-    let futures = FuturesUnordered::new();
-    futures.push(spawn(consommer_messages(middleware.clone(), rx_messages)));
-    futures.push(spawn(consommer_messages(middleware.clone(), rx_triggers)));
-
-    // Thread entretien
-    futures.push(spawn(entretien(middleware.clone())));
-    futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
-
-    Ok((routing, futures))
+#[async_trait]
+impl TraiterTransaction for GestionnaireDomaineMaitreDesComptes {
+    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    {
+        aiguillage_transaction(middleware, transaction).await
+    }
 }
+
+#[async_trait]
+impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
+    #[inline]
+    fn get_nom_domaine(&self) -> &str {DOMAINE_NOM}
+    #[inline]
+    fn get_collection_transactions(&self) -> &str {NOM_COLLECTION_TRANSACTIONS}
+
+    fn get_collections_documents(&self) -> Vec<String> {
+        vec![
+            String::from(NOM_COLLECTION_USAGERS),
+        ]
+    }
+
+    #[inline]
+    fn get_q_transactions(&self) -> &str {NOM_Q_TRANSACTIONS}
+    #[inline]
+    fn get_q_volatils(&self) -> &str {NOM_Q_VOLATILS}
+    #[inline]
+    fn get_q_triggers(&self) -> &str {NOM_Q_TRIGGERS}
+
+    fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
+
+    async fn preparer_index_mongodb_custom<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
+        preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
+    }
+
+    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware + 'static
+    {
+        consommer_requete(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware + 'static
+    {
+        consommer_commande(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware + 'static
+    {
+        consommer_transaction(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware + 'static
+    {
+        consommer_evenement(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn entretien<M>(&self, middleware: Arc<M>)
+        where M: Middleware + 'static
+    {
+        entretien(middleware).await  // Fonction plus bas
+    }
+
+    async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
+        -> Result<Option<MessageMilleGrille>, String>
+        where
+            M: ValidateurX509 + GenerateurMessages + MongoDao,
+            T: Transaction
+    {
+        aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
+    }
+}
+
+// /// Initialise le domaine.
+// pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
+//     -> Result<(HashMap<String, Sender<TypeMessage>>, FuturesUnordered<JoinHandle<()>>), Box<dyn Error>>
+// {
+//     // Preparer les index MongoDB
+//     preparer_index_mongodb(middleware.as_ref()).await?;
+//
+//     // Channels pour traiter messages
+//     let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(1);
+//     let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(1);
+//
+//     // Routing map pour le domaine
+//     let mut routing: HashMap<String, Sender<TypeMessage>> = HashMap::new();
+//
+//     // Mapping par Q nommee
+//     routing.insert(String::from(NOM_Q_TRANSACTIONS), tx_messages.clone());  // Legacy
+//     routing.insert(String::from(NOM_Q_VOLATILS), tx_messages.clone());  // Legacy
+//     routing.insert(String::from(NOM_Q_TRIGGERS), tx_triggers.clone());
+//
+//     // Mapping par domaine (routing key)
+//     routing.insert(String::from(DOMAINE_NOM), tx_messages.clone());
+//
+//     debug!("Routing : {:?}", routing);
+//
+//     // Thread consommation
+//     let futures = FuturesUnordered::new();
+//     futures.push(spawn(consommer_messages(middleware.clone(), rx_messages)));
+//     futures.push(spawn(consommer_messages(middleware.clone(), rx_triggers)));
+//
+//     // Thread entretien
+//     futures.push(spawn(entretien(middleware.clone())));
+//     futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
+//
+//     Ok((routing, futures))
+// }
 
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
@@ -177,7 +261,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 }
 
 /// Creer index MongoDB
-async fn preparer_index_mongodb<M>(middleware: &M) -> Result<(), String>
+async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
 where M: MongoDao
 {
 
@@ -263,7 +347,7 @@ async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<T
         trace!("Message {} recu : {:?}", DOMAINE_NOM, message);
 
         let resultat = match message {
-            TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
+            TypeMessage::ValideAction(inner) => traiter_message_valide_action(middleware.clone(), inner).await,
             TypeMessage::Valide(inner) => {warn!("Recu MessageValide sur thread consommation, skip : {:?}", inner); Ok(())},
             TypeMessage::Certificat(inner) => {warn!("Recu MessageCertificat sur thread consommation, skip : {:?}", inner); Ok(())},
             TypeMessage::Regeneration => continue, // Rien a faire, on boucle
@@ -275,7 +359,9 @@ async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<T
     }
 }
 
-async fn entretien(_middleware: Arc<MiddlewareDbPki>) {
+async fn entretien<M>(_middleware: Arc<M>)
+    where M: Middleware + 'static
+{
 
     let mut catalogues_charges = false;
 
@@ -294,7 +380,10 @@ where M: ValidateurX509 {
     Ok(())
 }
 
-async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), Box<dyn Error>> {
+async fn traiter_message_valide_action<M>(middleware: Arc<M>, message: MessageValideAction)
+    -> Result<(), Box<dyn Error>>
+    where M: Middleware + 'static
+{
 
     let correlation_id = match &message.correlation_id {
         Some(inner) => Some(inner.clone()),
@@ -308,7 +397,7 @@ async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, messag
 
     let resultat = match message.type_message {
         TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
-        TypeMessageOut::Commande => consommer_commande(middleware.clone(), message).await,
+        TypeMessageOut::Commande => consommer_commande(middleware.as_ref(), message).await,
         TypeMessageOut::Transaction => consommer_transaction(middleware.as_ref(), message).await,
         TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
         TypeMessageOut::Evenement => consommer_evenement(middleware.as_ref(), message).await,
@@ -369,7 +458,8 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
 
 /// Consomme une commande
 /// Verifie le niveau de securite approprie avant d'executer la commande
-async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
 
@@ -378,12 +468,12 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
         // Actions autorisees pour echanges prives
         match m.action.as_str() {
             // Transactions recues sous forme de commande
-            TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware.as_ref(), m).await,
-            TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware.as_ref(), m).await,
+            TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m).await,
+            TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m).await,
 
             // Commandes standard
-            COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware.as_ref(), m).await,
-            COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware.as_ref(), m).await,
+            COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
+            COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware, m).await,
 
             // Commandes 3.protegees
             _ => {
@@ -391,12 +481,12 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
                     // Commandes pour echanges proteges
                     match m.action.as_str() {
                         // Transactions recues sous forme de commande
-                        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware.as_ref(), m).await,
+                        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
                         // Commandes inconnues
                         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
                     }
                 } else {
-                    Ok(acces_refuse(middleware.as_ref())?)
+                    Ok(acces_refuse(middleware)?)
                 }
             }
         }
@@ -404,32 +494,14 @@ async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAc
         // Commande proprietaire (administrateur)
         match m.action.as_str() {
             // Transactions recues sous forme de commande
-            TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware.as_ref(), m).await,
-            TRANSACTION_SUPPRIMER_CLES => commande_supprimer_cles(middleware.as_ref(), m).await,
+            TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware, m).await,
+            TRANSACTION_SUPPRIMER_CLES => commande_supprimer_cles(middleware, m).await,
             // Commandes inconnues
-            _ => Ok(acces_refuse(middleware.as_ref())?)
+            _ => Ok(acces_refuse(middleware)?)
         }
     } else {
         Err(format!("Commande {} non autorisee : {}, message dropped", DOMAINE_NOM, m.action))?
     }
-
-    // match m.action.as_str() {
-    //     // Commandes standard
-    //
-    //     // Transactions recues sous forme de commande
-    //     TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware.as_ref(), m).await,
-    //     TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware.as_ref(), m).await,
-    //     TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware.as_ref(), m).await,
-    //     TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware.as_ref(), m).await,
-    //
-    //     //traiter_commande_application(middleware.as_ref(), m).await,
-    //     COMMANDE_SIGNER_COMPTEUSAGER => signer_compte_usager(middleware.as_ref(), m).await,
-    //     COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware.as_ref(), m).await,
-    //     // COMMANDE_CHALLENGE_COMPTEUSAGER => {debug!("Challenge compte usager");},
-    //
-    //     // Commandes inconnues
-    //     _ => acces_refuse(middleware.as_ref()),
-    // }
 }
 
 fn acces_refuse<M>(middleware: &M) -> Result<Option<MessageMilleGrille>, String>
@@ -514,8 +586,11 @@ where
     reponse
 }
 
-async fn aiguillage_transaction<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-where M: ValidateurX509 + GenerateurMessages + MongoDao {
+async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: ValidateurX509 + GenerateurMessages + MongoDao,
+        T: Transaction
+{
     match transaction.get_action() {
         TRANSACTION_INSCRIRE_USAGER => sauvegarder_inscrire_usager(middleware, transaction).await,
         TRANSACTION_AJOUTER_CLE => transaction_ajouter_cle(middleware, transaction).await,
