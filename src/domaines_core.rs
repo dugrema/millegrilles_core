@@ -4,9 +4,10 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use log::{debug, info, warn, error};
+use log::{debug, error, info, warn};
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::chrono as chrono;
+use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::EmetteurCertificat;
@@ -19,19 +20,16 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::resoumettre_transactions;
 
 use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
-use crate::core_pki::{preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki, NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS};
-use crate::core_catalogues::{preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues, NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS};
-use crate::core_topologie::{preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie, NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS};
-use crate::core_maitredescomptes::{preparer_queues as preparer_q_maitredescomptes, preparer_threads as preparer_threads_coremaitredescomptes, NOM_COLLECTION_TRANSACTIONS as MAITREDESCOMPTES_NOM_COLLECTION_TRANSACTIONS};
 use crate::core_backup::{GESTIONNAIRE_BACKUP, NOM_COLLECTION_TRANSACTIONS as BACKUP_NOM_COLLECTION_TRANSACTIONS};
+use crate::core_catalogues::{NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues};
+use crate::core_maitredescomptes::{NOM_COLLECTION_TRANSACTIONS as MAITREDESCOMPTES_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_maitredescomptes, preparer_threads as preparer_threads_coremaitredescomptes};
+use crate::core_pki::{NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki};
+use crate::core_topologie::{NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
-use millegrilles_common_rust::domaines::GestionnaireDomaine;
 
 const DUREE_ATTENTE: u64 = 20000;
 
 pub async fn build() {
-
-    // let backup = GestionnaireDomaineCoreBackup::new();
 
     // Recuperer configuration des Q de tous les domaines
     let mut queues: Vec<QueueType> = preparer_q_corepki();

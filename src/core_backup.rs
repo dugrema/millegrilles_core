@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
@@ -9,14 +10,17 @@ use millegrilles_common_rust::bson::{Bson, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur};
 use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::L3Protege;
-use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, FormatteurMessage};
+use millegrilles_common_rust::domaines::GestionnaireDomaine;
+use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMilleGrille};
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
-use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine, IsConfigurationPki, Middleware};
+use millegrilles_common_rust::middleware::{IsConfigurationPki, Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
@@ -35,10 +39,6 @@ use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
-use millegrilles_common_rust::configuration::IsConfigNoeud;
-use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur};
-use millegrilles_common_rust::domaines::GestionnaireDomaine;
-use std::fmt::{Debug, Formatter};
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreBackup";
@@ -54,20 +54,11 @@ const NOM_Q_TRIGGERS: &str = "CoreBackup/triggers";
 
 // const TRANSACTION_DOMAINE: &str = "domaine";
 
-
-// permissionDechiffrage
-// listerNoeudsAWSS3
-
+/// Instance statique du gestionnaire de backup
 pub const GESTIONNAIRE_BACKUP: GestionnaireDomaineCoreBackup = GestionnaireDomaineCoreBackup {};
 
 #[derive(Clone)]
 pub struct GestionnaireDomaineCoreBackup {}
-
-impl GestionnaireDomaineCoreBackup {
-    pub fn new() -> Self {
-        GestionnaireDomaineCoreBackup {}
-    }
-}
 
 #[async_trait]
 impl GestionnaireDomaine for GestionnaireDomaineCoreBackup {
@@ -82,12 +73,10 @@ impl GestionnaireDomaine for GestionnaireDomaineCoreBackup {
     #[inline]
     fn get_q_triggers(&self) -> &str {NOM_Q_TRIGGERS}
 
-    fn preparer_queues(&self) -> Vec<QueueType> {
-        preparer_queues()  // Fonction plus bas
-    }
+    fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_index_mongodb<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
-        preparer_index_mongodb(middleware).await  // Fonction plus bas
+    async fn preparer_index_mongodb_custom<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
+        preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
     async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
@@ -112,25 +101,7 @@ impl GestionnaireDomaine for GestionnaireDomaineCoreBackup {
         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware
     {
-        debug!("Consommer evenement : {:?}", &message.message);
-
-        // Autorisation : doit etre de niveau 4.secure
-        match message.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
-            true => Ok(()),
-            false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
-        }?;
-
-        match message.action.as_str() {
-            EVENEMENT_TRANSACTION_PERSISTEE => {
-                self.traiter_transaction(middleware, message).await?;
-                Ok(None)
-            },
-            EVENEMENT_CEDULE => {
-                traiter_cedule(middleware, message).await?;
-                Ok(None)
-            },
-            _ => Err(format!("Mauvais type d'action pour un evenement : {}", message.action))?,
-        }
+        consommer_evenement(middleware, message).await  // Fonction plus bas
     }
 
     async fn entretien<M>(&self, middleware: Arc<M>) where M: Middleware {
@@ -144,42 +115,6 @@ impl GestionnaireDomaine for GestionnaireDomaineCoreBackup {
         aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
     }
 }
-
-// /// Initialise le domaine.
-// pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
-//     -> Result<(HashMap<String, Sender<TypeMessage>>, FuturesUnordered<JoinHandle<()>>), Box<dyn Error>>
-// {
-//     // Preparer les index MongoDB
-//     preparer_index_mongodb(middleware.as_ref()).await?;
-//
-//     // Channels pour traiter messages
-//     let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(1);
-//     let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(1);
-//
-//     // Routing map pour le domaine
-//     let mut routing: HashMap<String, Sender<TypeMessage>> = HashMap::new();
-//
-//     // Mapping par Q nommee
-//     routing.insert(String::from(NOM_Q_TRANSACTIONS), tx_messages.clone());  // Legacy
-//     routing.insert(String::from(NOM_Q_VOLATILS), tx_messages.clone());  // Legacy
-//     routing.insert(String::from(NOM_Q_TRIGGERS), tx_triggers.clone());
-//
-//     // Mapping par domaine (routing key)
-//     routing.insert(String::from(DOMAINE_NOM), tx_messages.clone());
-//
-//     debug!("Routing : {:?}", routing);
-//
-//     // Thread consommation
-//     let futures = FuturesUnordered::new();
-//     futures.push(spawn(consommer_messages(middleware.clone(), rx_messages)));
-//     futures.push(spawn(consommer_messages(middleware.clone(), rx_triggers)));
-//
-//     // Thread entretien
-//     futures.push(spawn(entretien(middleware.clone())));
-//     futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
-//
-//     Ok((routing, futures))
-// }
 
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
@@ -242,56 +177,9 @@ pub fn preparer_queues() -> Vec<QueueType> {
 }
 
 /// Creer index MongoDB
-async fn preparer_index_mongodb<M>(middleware: &M) -> Result<(), String>
-where M: MongoDao
+async fn preparer_index_mongodb_custom<M>(_middleware: &M) -> Result<(), String>
+    where M: MongoDao
 {
-
-    // Transactions
-
-    // Index transactions par uuid-transaction
-    let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from(TRANSACTION_CHAMP_UUID_TRANSACTION)),
-        unique: true
-    };
-    let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_ENTETE_UUID_TRANSACTION), direction: 1}
-    );
-    middleware.create_index(
-        NOM_COLLECTION_TRANSACTIONS,
-        champs_index_transactions,
-        Some(options_unique_transactions)
-    ).await?;
-
-    // Index transactions completes
-    let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from(TRANSACTION_CHAMP_COMPLETE)),
-        unique: false
-    };
-    let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1}
-    );
-    middleware.create_index(
-        NOM_COLLECTION_TRANSACTIONS,
-        champs_index_transactions,
-        Some(options_unique_transactions)
-    ).await?;
-
-    // Index backup transactions
-    let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from(BACKUP_CHAMP_BACKUP_TRANSACTIONS)),
-        unique: false
-    };
-    let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_TRANSACTION_TRAITEE), direction: 1},
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_BACKUP_FLAG), direction: 1},
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
-    );
-    middleware.create_index(
-        NOM_COLLECTION_TRANSACTIONS,
-        champs_index_transactions,
-        Some(options_unique_transactions)
-    ).await?;
-
     // // Index noeuds
     // let options_unique_noeuds = IndexOptions {
     //     nom_index: Some(String::from(INDEX_NOEUDS)),
@@ -308,25 +196,6 @@ where M: MongoDao
 
     Ok(())
 }
-
-// async fn consommer_messages<M>(middleware: Arc<M>, mut rx: Receiver<TypeMessage>)
-//     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigurationPki + IsConfigNoeud + FormatteurMessage + Chiffreur + Dechiffreur
-// {
-//     while let Some(message) = rx.recv().await {
-//         trace!("Message {} recu : {:?}", DOMAINE_NOM, message);
-//
-//         let resultat = match message {
-//             TypeMessage::ValideAction(inner) => traiter_message_valide_action(middleware.as_ref(), inner).await,
-//             TypeMessage::Valide(inner) => {warn!("Recu MessageValide sur thread consommation, skip : {:?}", inner); Ok(())},
-//             TypeMessage::Certificat(inner) => {warn!("Recu MessageCertificat sur thread consommation, skip : {:?}", inner); Ok(())},
-//             TypeMessage::Regeneration => continue, // Rien a faire, on boucle
-//         };
-//
-//         if let Err(e) = resultat {
-//             error!("Erreur traitement message : {:?}\n", e);
-//         }
-//     }
-// }
 
 async fn entretien<M>(_middleware: Arc<M>)
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigurationPki + IsConfigNoeud + FormatteurMessage + Chiffreur + Dechiffreur
@@ -348,49 +217,30 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao {
     Ok(())
 }
 
-// async fn traiter_message_valide_action<M>(middleware: &M, message: MessageValideAction) -> Result<(), Box<dyn Error>>
-//     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigurationPki + IsConfigNoeud + FormatteurMessage + Chiffreur + Dechiffreur
-// {
-//
-//     let correlation_id = match &message.correlation_id {
-//         Some(inner) => Some(inner.clone()),
-//         None => None,
-//     };
-//     let reply_q = match &message.reply_q {
-//         Some(inner) => Some(inner.clone()),
-//         None => None,
-//     };
-//
-//     let resultat = match message.type_message {
-//         TypeMessageOut::Requete => consommer_requete(middleware, message).await,
-//         TypeMessageOut::Commande => consommer_commande(middleware, message).await,
-//         TypeMessageOut::Transaction => consommer_transaction(middleware, message).await,
-//         TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
-//         TypeMessageOut::Evenement => consommer_evenement(middleware, message).await,
-//     }?;
-//
-//     match resultat {
-//         Some(reponse) => {
-//             let reply_q = match reply_q {
-//                 Some(reply_q) => reply_q,
-//                 None => {
-//                     debug!("Reply Q manquante pour reponse a {:?}", correlation_id);
-//                     return Ok(())
-//                 },
-//             };
-//             let correlation_id = match correlation_id {
-//                 Some(correlation_id) => Ok(correlation_id),
-//                 None => Err("Correlation id manquant pour reponse"),
-//             }?;
-//             info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
-//             let routage = RoutageMessageReponse::new(reply_q, correlation_id);
-//             middleware.repondre(routage, reponse).await?;
-//         },
-//         None => (),  // Aucune reponse
-//     }
-//
-//     Ok(())
-// }
+async fn consommer_evenement<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: Middleware
+{
+    debug!("Consommer evenement : {:?}", &message.message);
+
+    // Autorisation : doit etre de niveau 4.secure
+    match message.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+        true => Ok(()),
+        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+    }?;
+
+    match message.action.as_str() {
+        EVENEMENT_TRANSACTION_PERSISTEE => {
+            GESTIONNAIRE_BACKUP.traiter_transaction(middleware, message).await?;
+            Ok(None)
+        },
+        EVENEMENT_CEDULE => {
+            traiter_cedule(middleware, message).await?;
+            Ok(None)
+        },
+        _ => Err(format!("Mauvais type d'action pour un evenement : {}", message.action))?,
+    }
+}
 
 async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -462,29 +312,6 @@ where
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
     }
 }
-
-// async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
-// where
-//     M: ValidateurX509 + GenerateurMessages + MongoDao,
-// {
-//     let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
-//         Ok(t) => t,
-//         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
-//     };
-//
-//     let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;
-//     debug!("Traitement transaction, chargee : {:?}", transaction);
-//
-//     let uuid_transaction = transaction.get_uuid_transaction().to_owned();
-//     let reponse = aiguillage_transaction(middleware, transaction).await;
-//     if reponse.is_ok() {
-//         // Marquer transaction completee
-//         debug!("Transaction traitee {}, marquer comme completee", uuid_transaction);
-//         marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
-//     }
-//
-//     reponse
-// }
 
 async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
     where
