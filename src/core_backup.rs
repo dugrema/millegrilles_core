@@ -2,16 +2,17 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
+use std::convert::TryInto;
 
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::backup::restaurer;
+use millegrilles_common_rust::backup::{restaurer, CatalogueHoraire};
 use millegrilles_common_rust::bson::{Bson, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur};
-use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::chrono::{Utc, Timelike};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
@@ -19,10 +20,10 @@ use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMi
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
-use millegrilles_common_rust::middleware::{IsConfigurationPki, Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao, convertir_bson_deserializable};
+use millegrilles_common_rust::middleware::{IsConfigurationPki, Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine, sauvegarder_transaction};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao, convertir_bson_deserializable, convertir_to_bson};
 use millegrilles_common_rust::mongodb as mongodb;
-use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
+use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions, Hint};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
@@ -52,7 +53,10 @@ const NOM_Q_TRIGGERS: &str = "CoreBackup/triggers";
 
 const REQUETE_DERNIER_HORAIRE: &str = "backupDernierHoraire";
 
+const TRANSACTION_CATALOGUE_HORAIRE: &str = "catalogueHoraire";
+
 const CHAMP_DOMAINE: &str = "domaine";
+const CHAMP_PARTITION: &str = "partition";
 const CHAMP_HEURE: &str = "heure";
 const CHAMP_JOUR: &str = "jour";
 
@@ -154,10 +158,10 @@ pub fn preparer_queues() -> Vec<QueueType> {
     ));
 
     let mut rk_transactions = Vec::new();
-    // rk_transactions.push(ConfigRoutingExchange {
-    //     routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_APPLICATION).into(),
-    //     exchange: Securite::L3Protege
-    // });
+    rk_transactions.push(ConfigRoutingExchange {
+        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_CATALOGUE_HORAIRE).into(),
+        exchange: Securite::L3Protege
+    });
 
     // Queue de transactions
     queues.push(QueueType::ExchangeQueue (
@@ -186,6 +190,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
     };
     let champs_index_catalogues_horaires = vec!(
         ChampIndex {nom_champ: String::from(CHAMP_DOMAINE), direction: 1},
+        ChampIndex {nom_champ: String::from(CHAMP_PARTITION), direction: 1},
         ChampIndex {nom_champ: String::from(CHAMP_HEURE), direction: -1},
     );
     middleware.create_index(
@@ -201,6 +206,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
     };
     let champs_index_catalogues_quotidiens = vec!(
         ChampIndex {nom_champ: String::from(CHAMP_DOMAINE), direction: 1},
+        ChampIndex {nom_champ: String::from(CHAMP_PARTITION), direction: 1},
         ChampIndex {nom_champ: String::from(CHAMP_JOUR), direction: -1},
     );
     middleware.create_index(
@@ -326,10 +332,10 @@ where
     }?;
 
     match m.action.as_str() {
-        // TRANSACTION_DOMAINE | TRANSACTION_MONITOR => {
-        //     sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
-        //     Ok(None)
-        // },
+        TRANSACTION_CATALOGUE_HORAIRE => {
+            sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
+            Ok(None)
+        },
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
     }
 }
@@ -340,7 +346,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         T: Transaction
 {
     match transaction.get_action() {
-        // TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
+        TRANSACTION_CATALOGUE_HORAIRE => transaction_catalogue_horaire(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -349,7 +355,7 @@ async fn requete_dernier_horaire<M>(middleware: &M, m: MessageValideAction) -> R
 where
     M: GenerateurMessages + MongoDao,
 {
-    debug!("Consommer transaction : {:?}", &m.message);
+    debug!("Consommer requete : {:?}", &m.message);
     let requete: RequeteDernierCatalogueHoraire = m.message.get_msg().map_contenu(None)?;
 
     let mut filtre = doc! {
@@ -360,14 +366,19 @@ where
     }
     debug!("Charger dernier backup pour : {:?}", filtre);
 
+    let opts = FindOneOptions::builder()
+        .hint(Some(Hint::Name(INDEX_CATALOGUES_HORAIRE.into())))
+        .sort(Some(doc!{CHAMP_DOMAINE: 1, CHAMP_PARTITION: 1, CHAMP_HEURE: -1}))
+        .build();
+
     let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES_HORAIRES)?;
-    let val_reponse = match collection.find_one(filtre, None).await? {
+    let val_reponse = match collection.find_one(filtre, Some(opts)).await? {
         Some(d) => {
             let doc_horaire: DocCatalogueHoraire = convertir_bson_deserializable(d)?;
             json!({
                 "ok": true,
                 "dernier_backup": {
-                    "entete": doc_horaire.entete,
+                    "en-tete": doc_horaire.entete,
                     "heure": doc_horaire.heure,
                 }
             })
@@ -390,8 +401,91 @@ struct RequeteDernierCatalogueHoraire {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DocCatalogueHoraire {
+    #[serde(rename = "en-tete")]
     entete: Entete,
     heure: DateEpochSeconds,
+}
+
+async fn transaction_catalogue_horaire<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: GenerateurMessages + MongoDao,
+        T: Transaction
+{
+    debug!("transaction_catalogue_horaire Consommer transaction : {:?}", &transaction);
+    let catalogue_horaire: CatalogueHoraire = match convertir_bson_deserializable(transaction.contenu()) {
+        Ok(c) => c,
+        Err(e) => Err(format!("transaction_catalogue_horaire Erreur conversion bson : {:?}", e))?
+    };
+
+    let entete = match catalogue_horaire.entete {
+        Some(e) => e,
+        None => Err(format!("transaction_catalogue_horaire Entete manquante du catalogue"))?
+    };
+    let entete_bson: Document = entete.clone().try_into()?;
+    let jour = catalogue_horaire.heure.get_jour();
+    let jour_bson: Bson = jour.clone().into();
+    let heure = catalogue_horaire.heure.clone();
+    let heure_bson: Bson = catalogue_horaire.heure.into();
+
+    // Mettre a jour la collection de catalogues horaires
+    let ops_horaire = doc! {
+        "$set": {
+            "en-tete": entete_bson,
+        },
+        "$setOnInsert": {
+            CHAMP_CREATION: Utc::now(),
+            "domaine": &catalogue_horaire.domaine,
+            "heure": &heure_bson,
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+    let mut filtre_horaire = doc! {
+        "domaine": &catalogue_horaire.domaine,
+        "heure": &heure_bson,
+    };
+    let opts_horaire: FindOneAndUpdateOptions = FindOneAndUpdateOptions::builder().upsert(true).build();
+    let collection_horaire = match middleware.get_collection(NOM_COLLECTION_CATALOGUES_HORAIRES) {
+        Ok(c) => c,
+        Err(e) => Err(format!("transaction_catalogue_horaire Erreur get_collection catalogues horaires :{:?}", e))?
+    };
+    let resultat_horaire = match collection_horaire.find_one_and_update(filtre_horaire, ops_horaire, opts_horaire).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("transaction_catalogue_horaire Erreur find_one_and_update horaire : {:?}", e))?
+    };
+    debug!("transaction_catalogue_horaire Resultat update horaire : {:?}", resultat_horaire);
+
+    // Ajouter l'information dans le document de catalogue quotidien
+    let heure_int = heure.get_datetime().hour();
+    let ops_quotidien = doc! {
+        "$set": {
+            "dirty_flag": true,
+            format!("fichiers_horaire.{:02}", heure_int): {
+                "catalogue_nomfichier": &catalogue_horaire.catalogue_nomfichier,
+                "transactions_nomfichier": &catalogue_horaire.transactions_nomfichier,
+                "uuid_transaction": &entete.uuid_transaction,
+            }
+        },
+        "$setOnInsert": {
+            CHAMP_CREATION: Utc::now(),
+            "domaine": &catalogue_horaire.domaine,
+            "jour": &jour_bson,
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+    let mut filtre_quotidien = doc! {
+        "domaine": &catalogue_horaire.domaine,
+        "jour": &jour_bson,
+    };
+    let opts_quotidien: FindOneAndUpdateOptions = FindOneAndUpdateOptions::builder().upsert(true).build();
+    let collection_quotidienne = middleware.get_collection(NOM_COLLECTION_CATALOGUES_QUOTIDIENS)?;
+    let resultat_quotidien = match collection_quotidienne.find_one_and_update(
+        filtre_quotidien, ops_quotidien, Some(opts_quotidien)).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("transaction_catalogue_horaire Erreur maj quotidien {:?}", e))?
+    };
+    debug!("Resultat update quotidien : {:?}", resultat_quotidien);
+
+    middleware.reponse_ok()
 }
 
 #[cfg(test)]
@@ -401,6 +495,9 @@ mod test_integration {
     use millegrilles_common_rust::tokio as tokio;
 
     use super::*;
+    use millegrilles_common_rust::backup::CatalogueHoraire;
+    use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
+    use millegrilles_common_rust::mongo_dao::convertir_to_bson;
 
     #[tokio::test]
     async fn test_requete_dernier_horaire() {
@@ -409,7 +506,7 @@ mod test_integration {
         futures.push(spawn(async move {
 
             let message = {
-                let contenu = json!({"domaine": "DUMMY", "partition": "DUMMY_TOO"});
+                let contenu = json!({"domaine": "DUMMY"});
                 let mm = middleware.formatter_message(&contenu, None::<&str>, None, None, None).expect("mm");
                 let ms = MessageSerialise::from_parsed(mm).expect("ms");
                 let mut mva = MessageValideAction::new(ms, "", "", "", "", TypeMessageOut::Transaction);
@@ -422,7 +519,36 @@ mod test_integration {
             debug!("Resultat dernier horaire : {:?}", resultat);
 
             assert_eq!(resultat.contenu.get("ok").expect("ok").as_bool().expect("bool"), true);
-            assert_eq!(resultat.contenu.get("dernier_backup").expect("dernier_backup").as_null().expect("null"), ());
+            // assert_eq!(resultat.contenu.get("dernier_backup").expect("dernier_backup").as_null().expect("null"), ());
+            // assert_eq!(resultat.contenu.get("dernier_backup").expect("dernier_backup").as_object().expect("not null"), ());
+
+        }));
+        // Execution async du test
+        futures.next().await.expect("resultat").expect("ok");
+    }
+
+    #[tokio::test]
+    async fn test_generer_catalogue_horaire() {
+        setup("test_generer_catalogue_horaire");
+        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+        futures.push(spawn(async move {
+
+            let catalogue_horaire = CatalogueHoraire::builder(
+                DateEpochSeconds::from_heure(2021, 09, 26, 08),
+                "DUMMY".into(),
+                "uuid-abcd-1234".into(),
+                false,
+                false
+            ).build();
+            let message = middleware.formatter_message(&catalogue_horaire, Some("Backup"), Some("catalogueHoraire"), None, None).expect("format");
+            let mut doc_catalogue = convertir_to_bson(message).expect("bson");
+            doc_catalogue.insert("_evenements", doc!{"_estampille": millegrilles_common_rust::bson::DateTime::now()});
+
+            let transaction = TransactionImpl::new(doc_catalogue, None);
+
+            let resultat = transaction_catalogue_horaire(middleware.as_ref(), transaction).await.expect("traitement");
+
+            debug!("Resultat traitement nouveau catalogue backup : {:?}", resultat);
 
         }));
         // Execution async du test
