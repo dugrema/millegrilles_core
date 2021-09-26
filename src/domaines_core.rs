@@ -23,12 +23,15 @@ use crate::core_pki::{preparer_queues as preparer_q_corepki, preparer_threads as
 use crate::core_catalogues::{preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues, NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS};
 use crate::core_topologie::{preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie, NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS};
 use crate::core_maitredescomptes::{preparer_queues as preparer_q_maitredescomptes, preparer_threads as preparer_threads_coremaitredescomptes, NOM_COLLECTION_TRANSACTIONS as MAITREDESCOMPTES_NOM_COLLECTION_TRANSACTIONS};
-use crate::core_backup::{preparer_queues as preparer_q_backup, preparer_threads as preparer_threads_corebackup, NOM_COLLECTION_TRANSACTIONS as BACKUP_NOM_COLLECTION_TRANSACTIONS};
+use crate::core_backup::{GESTIONNAIRE_BACKUP, NOM_COLLECTION_TRANSACTIONS as BACKUP_NOM_COLLECTION_TRANSACTIONS};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
+use millegrilles_common_rust::domaines::GestionnaireDomaine;
 
 const DUREE_ATTENTE: u64 = 20000;
 
 pub async fn build() {
+
+    // let backup = GestionnaireDomaineCoreBackup::new();
 
     // Recuperer configuration des Q de tous les domaines
     let mut queues: Vec<QueueType> = preparer_q_corepki();
@@ -36,7 +39,7 @@ pub async fn build() {
     queues.extend(preparer_q_catalogues());
     queues.extend(preparer_q_topologie());
     queues.extend(preparer_q_maitredescomptes());
-    queues.extend(preparer_q_backup());
+    queues.extend(GESTIONNAIRE_BACKUP.preparer_queues());
 
     // Listeners de connexion MQ
     let (tx_entretien, rx_entretien) = mpsc::channel(1);
@@ -107,9 +110,7 @@ pub async fn build() {
         let (
             routing_backup,
             futures_backup
-        ) = preparer_threads_corebackup(middleware.clone()).await.expect("core backup");
-        futures.extend(futures_backup);        // Deplacer vers futures globaux
-        map_senders.extend(routing_backup);    // Deplacer vers mapping global
+        ) = GESTIONNAIRE_BACKUP.preparer_threads(middleware.clone()).await.expect("core backup");
 
         // Preparer ceduleur (emet triggers a toutes les minutes)
         let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");

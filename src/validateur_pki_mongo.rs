@@ -12,7 +12,7 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMilleGrille, MessageSerialise};
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
-use millegrilles_common_rust::middleware::{configurer as configurer_queues, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, ReponseDechiffrageCle, upsert_certificat};
+use millegrilles_common_rust::middleware::{configurer as configurer_queues, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, ReponseDechiffrageCle, upsert_certificat, Middleware};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoImpl};
 use millegrilles_common_rust::mongodb::Database;
 use millegrilles_common_rust::openssl::x509::store::X509Store;
@@ -96,6 +96,8 @@ impl MiddlewareDbPki {
         }
     }
 }
+
+impl Middleware for MiddlewareDbPki {}
 
 /// Validateur X509 backe par une base de donnees (Mongo)
 /// Permet de charger les certificats et generer les transactions pour les certificats inconnus.

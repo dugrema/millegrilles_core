@@ -16,7 +16,7 @@ use millegrilles_common_rust::formatteur_messages::{MessageMilleGrille, Formatte
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
-use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine, IsConfigurationPki};
+use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine, IsConfigurationPki, Middleware};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
@@ -37,6 +37,8 @@ use serde::{Deserialize, Serialize};
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur};
+use millegrilles_common_rust::domaines::GestionnaireDomaine;
+use std::fmt::{Debug, Formatter};
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreBackup";
@@ -56,7 +58,92 @@ const NOM_Q_TRIGGERS: &str = "CoreBackup/triggers";
 // permissionDechiffrage
 // listerNoeudsAWSS3
 
-struct GestionnaireDomaineCoreBackup {}
+pub const GESTIONNAIRE_BACKUP: GestionnaireDomaineCoreBackup = GestionnaireDomaineCoreBackup {};
+
+#[derive(Clone)]
+pub struct GestionnaireDomaineCoreBackup {}
+
+impl GestionnaireDomaineCoreBackup {
+    pub fn new() -> Self {
+        GestionnaireDomaineCoreBackup {}
+    }
+}
+
+#[async_trait]
+impl GestionnaireDomaine for GestionnaireDomaineCoreBackup {
+    #[inline]
+    fn get_nom_domaine(&self) -> &str {DOMAINE_NOM}
+    #[inline]
+    fn get_collection_transactions(&self) -> &str {NOM_COLLECTION_TRANSACTIONS}
+    #[inline]
+    fn get_q_transactions(&self) -> &str {NOM_Q_TRANSACTIONS}
+    #[inline]
+    fn get_q_volatils(&self) -> &str {NOM_Q_VOLATILS}
+    #[inline]
+    fn get_q_triggers(&self) -> &str {NOM_Q_TRIGGERS}
+
+    fn preparer_queues(&self) -> Vec<QueueType> {
+        preparer_queues()  // Fonction plus bas
+    }
+
+    async fn preparer_index_mongodb<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
+        preparer_index_mongodb(middleware).await  // Fonction plus bas
+    }
+
+    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware
+    {
+        consommer_requete(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware
+    {
+        consommer_commande(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> where M: Middleware {
+        consommer_transaction(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware
+    {
+        debug!("Consommer evenement : {:?}", &message.message);
+
+        // Autorisation : doit etre de niveau 4.secure
+        match message.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+            true => Ok(()),
+            false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        }?;
+
+        match message.action.as_str() {
+            EVENEMENT_TRANSACTION_PERSISTEE => {
+                self.traiter_transaction(middleware, message).await?;
+                Ok(None)
+            },
+            EVENEMENT_CEDULE => {
+                traiter_cedule(middleware, message).await?;
+                Ok(None)
+            },
+            _ => Err(format!("Mauvais type d'action pour un evenement : {}", message.action))?,
+        }
+    }
+
+    async fn entretien<M>(&self, middleware: Arc<M>) where M: Middleware {
+        entretien(middleware).await  // Fonction plus bas
+    }
+
+    async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
+        -> Result<Option<MessageMilleGrille>, String>
+        where M: ValidateurX509 + GenerateurMessages + MongoDao, T: Transaction
+    {
+        aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
+    }
+}
 
 // /// Initialise le domaine.
 // pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
@@ -373,32 +460,6 @@ where
         //     Ok(None)
         // },
         _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
-    }
-}
-
-async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigurationPki + IsConfigNoeud + FormatteurMessage + Chiffreur + Dechiffreur
-{
-    debug!("Consommer evenement : {:?}", &m.message);
-
-    // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
-        true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
-    }?;
-
-    match m.action.as_str() {
-        EVENEMENT_TRANSACTION_PERSISTEE => {
-            traiter_transaction(DOMAINE_NOM, middleware, m).await?;
-            Ok(None)
-        },
-        EVENEMENT_CEDULE => {
-            traiter_cedule(middleware, m).await?;
-            Ok(None)
-        },
-        // EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m).await,
-        _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
 
