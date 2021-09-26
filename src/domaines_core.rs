@@ -109,6 +109,8 @@ pub async fn build() {
             routing_backup,
             futures_backup
         ) = GESTIONNAIRE_BACKUP.preparer_threads(middleware.clone()).await.expect("core backup");
+        futures.extend(futures_backup);        // Deplacer vers futures globaux
+        map_senders.extend(routing_backup);    // Deplacer vers mapping global
 
         // Preparer ceduleur (emet triggers a toutes les minutes)
         let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
@@ -234,10 +236,12 @@ async fn consommer(
     mut rx: Receiver<TypeMessage>,
     map_senders: HashMap<String, Sender<TypeMessage>>
 ) {
+    info!("consommer: Mapping senders core : {:?}", map_senders.keys());
+
     while let Some(message) = rx.recv().await {
         match &message {
             TypeMessage::Valide(m) => {
-                debug!("traiter_messages_valides: Message valide sans routing key/action : {:?}", m.message);
+                warn!("traiter_messages_valides: Message valide sans routing key/action : {:?}", m.message);
             },
             TypeMessage::ValideAction(m) => {
                 let contenu = &m.message;
@@ -245,7 +249,7 @@ async fn consommer(
                 let action = m.action.as_str();
                 let domaine = m.domaine.as_str();
                 let nom_q = m.q.as_str();
-                debug!("domaines_middleware.consommer: Traiter message valide (action: {}, rk: {}, q: {}): {:?}", action, rk, nom_q, contenu);
+                info!("domaines_middleware.consommer: Traiter message valide (action: {}, rk: {}, q: {}): {:?}", action, rk, nom_q, contenu);
 
                 // Tenter de mapper avec le nom de la Q (ne fonctionnera pas pour la Q de reponse)
                 let sender = match map_senders.get(nom_q) {

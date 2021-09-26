@@ -370,7 +370,7 @@ async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Res
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer transaction : {:?}", &m.message);
+    debug!("Consommer transaction core_pki : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
     match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {

@@ -41,19 +41,19 @@ use serde::{Deserialize, Serialize};
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 
 // Constantes
-pub const DOMAINE_NOM: &str = "CoreBackup";
+pub const DOMAINE_NOM: &str = BACKUP_NOM_DOMAINE;
 pub const NOM_COLLECTION_CATALOGUES_HORAIRES: &str = "CoreBackup/cataloguesHoraires";
 pub const NOM_COLLECTION_CATALOGUES_QUOTIDIENS: &str = "CoreBackup/cataloguesQuotidiens";
 pub const NOM_COLLECTION_RAPPORTS: &str = "CoreBackup/rapports";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
-const NOM_Q_TRANSACTIONS: &str = "CoreBackup/transactions";
+const NOM_Q_TRANSACTIONS: &str = "CoreBackup/transactions2";
 const NOM_Q_VOLATILS: &str = "CoreBackup/volatils";
 const NOM_Q_TRIGGERS: &str = "CoreBackup/triggers";
 
-const REQUETE_DERNIER_HORAIRE: &str = "backupDernierHoraire";
+const REQUETE_DERNIER_HORAIRE: &str = BACKUP_REQUETE_DERNIER_HORAIRE;
 
-const TRANSACTION_CATALOGUE_HORAIRE: &str = "catalogueHoraire";
+const TRANSACTION_CATALOGUE_HORAIRE: &str = BACKUP_TRANSACTION_CATALOGUE_HORAIRE;
 
 const CHAMP_DOMAINE: &str = "domaine";
 const CHAMP_PARTITION: &str = "partition";
