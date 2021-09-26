@@ -21,7 +21,7 @@ fn main() {
 }
 
 // #[tokio::main(flavor = "current_thread")]
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
+#[tokio::main(flavor = "multi_thread", worker_threads = 5)]
 async fn executer() {
     build().await
 }
