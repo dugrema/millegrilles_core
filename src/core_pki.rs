@@ -564,7 +564,7 @@ impl ProcesseurTransactions {
 }
 #[async_trait]
 impl TraiterTransaction for ProcesseurTransactions {
-    async fn traiter_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
         where M: ValidateurX509 + GenerateurMessages + MongoDao
     {
         aiguillage_transaction(middleware, transaction).await
@@ -615,7 +615,7 @@ where M: ValidateurX509 {
 struct TraiterTransactionPki {}
 #[async_trait]
 impl TraiterTransaction for TraiterTransactionPki {
-    async fn traiter_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
         where M: ValidateurX509 + GenerateurMessages + MongoDao
     {
         aiguillage_transaction(middleware, transaction).await

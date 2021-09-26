@@ -72,11 +72,29 @@ pub const GESTIONNAIRE_BACKUP: GestionnaireDomaineCoreBackup = GestionnaireDomai
 pub struct GestionnaireDomaineCoreBackup {}
 
 #[async_trait]
+impl TraiterTransaction for GestionnaireDomaineCoreBackup {
+    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    {
+        aiguillage_transaction(middleware, transaction).await
+    }
+}
+
+#[async_trait]
 impl GestionnaireDomaine for GestionnaireDomaineCoreBackup {
     #[inline]
     fn get_nom_domaine(&self) -> &str {DOMAINE_NOM}
     #[inline]
     fn get_collection_transactions(&self) -> &str {NOM_COLLECTION_TRANSACTIONS}
+
+    fn get_collections_documents(&self) -> Vec<String> {
+        vec![
+            String::from(NOM_COLLECTION_CATALOGUES_HORAIRES),
+            String::from(NOM_COLLECTION_CATALOGUES_QUOTIDIENS),
+            String::from(NOM_COLLECTION_RAPPORTS),
+        ]
+    }
+
     #[inline]
     fn get_q_transactions(&self) -> &str {NOM_Q_TRANSACTIONS}
     #[inline]
