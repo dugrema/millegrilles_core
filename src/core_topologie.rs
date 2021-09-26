@@ -919,7 +919,7 @@ mod test_integration {
 
             let message = {
                 let contenu = json!({});
-                let mm = middleware.formatter_message(&contenu, None, None, None, None).expect("mm");
+                let mm = middleware.formatter_message(&contenu, None::<&str>, None, None, None).expect("mm");
                 let ms = MessageSerialise::from_parsed(mm).expect("ms");
                 let mut mva = MessageValideAction::new(ms, "", "", "", "", TypeMessageOut::Transaction);
                 mva.exchange = Some(String::from("3.protege"));

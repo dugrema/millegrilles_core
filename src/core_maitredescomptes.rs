@@ -1379,6 +1379,7 @@ struct TransactionSupprimerCles {
 mod test_integration {
     use crate::test_setup::setup;
     use crate::validateur_pki_mongo::preparer_middleware_pki;
+    use millegrilles_common_rust::tokio as tokio;
 
     use super::*;
 
