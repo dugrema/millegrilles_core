@@ -1,8 +1,9 @@
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::error::Error;
 use std::sync::Arc;
 
-use log::{trace, debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::{reset_backup_flag, restaurer};
 use millegrilles_common_rust::backup::backup;
@@ -10,10 +11,11 @@ use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::constantes::*;
+use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
-use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_message_certificat, sauvegarder_transaction_recue, thread_emettre_presence_domaine, upsert_certificat, Middleware};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
+use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_message_certificat, Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -26,8 +28,6 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
-use std::convert::TryFrom;
-use millegrilles_common_rust::domaines::GestionnaireDomaine;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CorePki";
@@ -133,44 +133,6 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
         aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
     }
 }
-
-// /// Initialise le domaine CorePki.
-// pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>) -> Result<(HashMap<String, Sender<TypeMessage>>, FuturesUnordered<JoinHandle<()>>), Box<dyn Error>> {
-//
-//     // Preparer les index MongoDB
-//     preparer_index_mongodb(middleware.as_ref()).await?;
-//
-//     // Channels pour traiter messages Pki
-//     let (tx_pki_messages, rx_pki_messages) = mpsc::channel::<TypeMessage>(1);
-//     let (tx_pki_triggers, rx_pki_triggers) = mpsc::channel::<TypeMessage>(1);
-//
-//     // Routing map pour le domaine CorePki (et legacy Pki). Recoit aussi domaine virtuel "certificat".
-//     // Fonctionne avec le nom de la Q (e.g. CorPki/transactions) ou le domaine (certificat, Pki, etc. dans routing key)
-//     let mut routing_pki: HashMap<String, Sender<TypeMessage>> = HashMap::new();
-//
-//     // Mapping par Q nommee
-//     routing_pki.insert(String::from(NOM_Q_TRANSACTIONS_PKI), tx_pki_messages.clone());  // Legacy
-//     routing_pki.insert(String::from(NOM_Q_TRANSACTIONS_VOLATILS), tx_pki_messages.clone());  // Legacy
-//     routing_pki.insert(String::from(NOM_Q_TRIGGERS_PKI), tx_pki_triggers.clone());
-//
-//     // Mapping par domaine (routing key)
-//     routing_pki.insert(String::from("Pki"), tx_pki_messages.clone());  // Legacy
-//     routing_pki.insert(String::from(DOMAINE_NOM), tx_pki_messages.clone());
-//     routing_pki.insert(String::from(NOM_DOMAINE_CERTIFICATS), tx_pki_messages.clone());
-//
-//     debug!("Routing PKI : {:?}", routing_pki);
-//
-//     // Thread consommation
-//     let futures = FuturesUnordered::new();
-//     futures.push(spawn(consommer_messages(middleware.clone(), rx_pki_messages)));
-//     futures.push(spawn(consommer_messages(middleware.clone(), rx_pki_triggers)));
-//
-//     // Thread entretien, etc
-//     futures.push(spawn(entretien(middleware.clone())));
-//     futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
-//
-//     Ok((routing_pki, futures))
-// }
 
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
@@ -327,67 +289,6 @@ async fn entretien<M>(middleware: Arc<M>)
     }
 }
 
-// async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
-//     while let Some(message) = rx.recv().await {
-//         debug!("Message PKI recu : {:?}", message);
-//
-//         let resultat = match message {
-//             TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
-//             TypeMessage::Valide(_inner) => {warn!("Recu MessageValide sur thread consommation"); todo!()},
-//             TypeMessage::Certificat(_inner) => {warn!("Recu MessageCertificat sur thread consommation"); todo!()},
-//             TypeMessage::Regeneration => continue, // Rien a faire, on boucle
-//         };
-//
-//         match resultat {
-//             Ok(()) => (),
-//             Err(e) => warn!("Erreur traitement, message dropped : {}", e),
-//         }
-//
-//     }
-// }
-
-// async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), Box<dyn Error>> {
-//
-//     let correlation_id = match &message.correlation_id {
-//         Some(inner) => Some(inner.clone()),
-//         None => None,
-//     };
-//     let reply_q = match &message.reply_q {
-//         Some(inner) => Some(inner.clone()),
-//         None => None,
-//     };
-//
-//     let resultat = match message.type_message {
-//         TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
-//         TypeMessageOut::Commande => consommer_commande(middleware.clone(), message).await,
-//         TypeMessageOut::Transaction => consommer_transaction(middleware.as_ref(), message).await,
-//         TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
-//         TypeMessageOut::Evenement => consommer_evenement(middleware.as_ref(), message).await,
-//     }?;
-//
-//     match resultat {
-//         Some(reponse) => {
-//             let reply_q = match reply_q {
-//                 Some(reply_q) => reply_q,
-//                 None => {
-//                     debug!("Reply Q manquante pour reponse a {:?}", correlation_id);
-//                     return Ok(())
-//                 },
-//             };
-//             let correlation_id = match correlation_id {
-//                 Some(correlation_id) => Ok(correlation_id),
-//                 None => Err("Correlation id manquant pour reponse"),
-//             }?;
-//             debug!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
-//             let routage = RoutageMessageReponse::new(reply_q, correlation_id);
-//             middleware.repondre(routage, reponse).await?;
-//         },
-//         None => (),  // Aucune reponse
-//     }
-//
-//     Ok(())
-// }
-
 async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -437,24 +338,6 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
         _ => Err(format!("Commande Pki inconnue : {}, message dropped", m.action))?,
     }
 }
-
-// async fn restaurer_transactions(middleware: Arc<MiddlewareDbPki>) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
-//     let noms_collections_docs = vec! [
-//         String::from(COLLECTION_CERTIFICAT_NOM)
-//     ];
-//
-//     let processor = ProcesseurTransactions::new();
-//
-//     restaurer(
-//         middleware.clone(),
-//         DOMAINE_NOM,
-//         NOM_COLLECTION_TRANSACTIONS,
-//         &noms_collections_docs,
-//         &processor
-//     ).await?;
-//
-//     Ok(None)
-// }
 
 async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
@@ -646,21 +529,6 @@ where
     reponse
 }
 
-// struct ProcesseurTransactions {}
-// impl ProcesseurTransactions {
-//     pub fn new() -> Self {
-//         ProcesseurTransactions {}
-//     }
-// }
-// #[async_trait]
-// impl TraiterTransaction for ProcesseurTransactions {
-//     async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-//         where M: ValidateurX509 + GenerateurMessages + MongoDao
-//     {
-//         aiguillage_transaction(middleware, transaction).await
-//     }
-// }
-
 async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -704,17 +572,6 @@ where M: ValidateurX509 {
 
     Ok(())
 }
-
-// /// Implementer methode pour regenerer transactions
-// struct TraiterTransactionPki {}
-// #[async_trait]
-// impl TraiterTransaction for TraiterTransactionPki {
-//     async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-//         where M: ValidateurX509 + GenerateurMessages + MongoDao
-//     {
-//         aiguillage_transaction(middleware, transaction).await
-//     }
-// }
 
 #[cfg(test)]
 mod test_integration {
