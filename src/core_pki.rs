@@ -124,6 +124,10 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
         entretien(middleware).await  // Fonction plus bas
     }
 
+    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: MessageValideAction) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
+        traiter_cedule(middleware, trigger).await
+    }
+
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
         -> Result<Option<MessageMilleGrille>, String>
         where
@@ -370,14 +374,6 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     }?;
 
     match m.action.as_str() {
-        EVENEMENT_TRANSACTION_PERSISTEE => {
-            traiter_transaction(DOMAINE_NOM, middleware, m).await?;
-            Ok(None)
-        },
-        EVENEMENT_CEDULE => {
-            traiter_cedule(middleware, m).await?;
-            Ok(None)
-        }
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }

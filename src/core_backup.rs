@@ -141,6 +141,10 @@ impl GestionnaireDomaine for GestionnaireDomaineCoreBackup {
         entretien(middleware).await  // Fonction plus bas
     }
 
+    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: MessageValideAction) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
+        traiter_cedule(middleware, trigger).await  // Fonction plus bas
+    }
+
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
         -> Result<Option<MessageMilleGrille>, String>
         where M: ValidateurX509 + GenerateurMessages + MongoDao, T: Transaction
@@ -260,7 +264,7 @@ async fn entretien<M>(_middleware: Arc<M>)
 }
 
 async fn traiter_cedule<M>(_middleware: &M, _trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
-where M: ValidateurX509 + GenerateurMessages + MongoDao {
+where M: GenerateurMessages + MongoDao {
     // let message = trigger.message;
 
     debug!("Traiter cedule {}", DOMAINE_NOM);
@@ -281,14 +285,6 @@ async fn consommer_evenement<M>(middleware: &M, message: MessageValideAction)
     }?;
 
     match message.action.as_str() {
-        EVENEMENT_TRANSACTION_PERSISTEE => {
-            let reponse = GESTIONNAIRE_BACKUP.traiter_transaction(middleware, message).await?;
-            Ok(reponse)
-        },
-        EVENEMENT_CEDULE => {
-            traiter_cedule(middleware, message).await?;
-            Ok(None)
-        },
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", message.action))?,
     }
 }
