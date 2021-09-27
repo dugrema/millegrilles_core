@@ -507,7 +507,7 @@ impl Dechiffreur for MiddlewareDbPki {
                 "liste_hachage_bytes": liste_hachage_bytes,
             })
         };
-        let routage = RoutageMessageAction::new("MaitreDesCles.dechiffrage", "dechiffrage");
+        let routage = RoutageMessageAction::new("MaitreDesCles", "dechiffrage");
         let reponse_cle_rechiffree = self.transmettre_requete(routage, &requete).await?;
 
         let m = match reponse_cle_rechiffree {
