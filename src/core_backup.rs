@@ -6,7 +6,7 @@ use std::convert::TryInto;
 
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::backup::{restaurer, CatalogueHoraire};
+use millegrilles_common_rust::backup::{restaurer, CatalogueHoraire, CommandeDeclencherBackupQuotidien};
 use millegrilles_common_rust::bson::{Bson, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
@@ -19,7 +19,7 @@ use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMilleGrille, Entete, DateEpochSeconds};
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{IsConfigurationPki, Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine, sauvegarder_transaction};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao, convertir_bson_deserializable, convertir_to_bson};
 use millegrilles_common_rust::mongodb as mongodb;
@@ -53,7 +53,10 @@ const NOM_Q_TRIGGERS: &str = "CoreBackup/triggers";
 
 const REQUETE_DERNIER_HORAIRE: &str = BACKUP_REQUETE_DERNIER_HORAIRE;
 
+const COMMANDE_DECLENCHER_BACKUP_QUOTIDIEN: &str = COMMANDE_BACKUP_QUOTIDIEN;
+
 const TRANSACTION_CATALOGUE_HORAIRE: &str = BACKUP_TRANSACTION_CATALOGUE_HORAIRE;
+const TRANSACTION_CATALOGUE_QUOTIDIEN: &str = BACKUP_TRANSACTION_CATALOGUE_QUOTIDIEN;
 
 const CHAMP_DOMAINE: &str = "domaine";
 const CHAMP_PARTITION: &str = "partition";
@@ -157,10 +160,10 @@ pub fn preparer_queues() -> Vec<QueueType> {
     }
 
     let commandes: Vec<&str> = vec![
-        //TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
+        COMMANDE_DECLENCHER_BACKUP_QUOTIDIEN,
     ];
     for commande in commandes {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege});
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L4Secure});
     }
 
     let mut queues = Vec::new();
@@ -178,6 +181,10 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_transactions = Vec::new();
     rk_transactions.push(ConfigRoutingExchange {
         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_CATALOGUE_HORAIRE).into(),
+        exchange: Securite::L3Protege
+    });
+    rk_transactions.push(ConfigRoutingExchange {
+        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_CATALOGUE_QUOTIDIEN).into(),
         exchange: Securite::L3Protege
     });
 
@@ -270,8 +277,8 @@ async fn consommer_evenement<M>(middleware: &M, message: MessageValideAction)
 
     match message.action.as_str() {
         EVENEMENT_TRANSACTION_PERSISTEE => {
-            GESTIONNAIRE_BACKUP.traiter_transaction(middleware, message).await?;
-            Ok(None)
+            let reponse = GESTIONNAIRE_BACKUP.traiter_transaction(middleware, message).await?;
+            Ok(reponse)
         },
         EVENEMENT_CEDULE => {
             traiter_cedule(middleware, message).await?;
@@ -313,27 +320,21 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
 
 async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigurationPki + IsConfigNoeud + FormatteurMessage + Chiffreur + Dechiffreur
+    where M: GenerateurMessages + MongoDao
 {
-    debug!("Consommer commande : {:?}", &m.message);
+    debug!("consommer_commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
     match m.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
+        false => Err(format!("core_backup.consommer_commande: Commande autorisation invalide (pas 3.protege ou 4.secure)")),
     }?;
 
     match m.action.as_str() {
         // Commandes standard
-    //     TRANSACTION_APPLICATION => traiter_commande_application(middleware.as_ref(), m).await,
-    //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
-    //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
-    //
-    //     // Commandes specifiques au domaine
-    //     PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
-    //
-    //     // Commandes inconnues
-        _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
+        COMMANDE_DECLENCHER_BACKUP_QUOTIDIEN => commande_declencher_backup_quotidien(middleware, m).await,
+        // Commandes inconnues
+        _ => Err(format!("core_backup.consommer_commande: Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
     }
 }
 
@@ -343,18 +344,18 @@ where
 {
     debug!("Consommer transaction : {:?}", &m.message);
 
-    // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    // Autorisation : doit etre de niveau 3.protege ou 4.secure
+    match m.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core_backup.consommer_transaction: Trigger cedule autorisation invalide (pas 4.secure)")),
     }?;
 
     match m.action.as_str() {
-        TRANSACTION_CATALOGUE_HORAIRE => {
+        TRANSACTION_CATALOGUE_HORAIRE | TRANSACTION_CATALOGUE_QUOTIDIEN => {
             sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
-        _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
+        _ => Err(format!("core_backup.consommer_transaction: Mauvais type d'action pour une transaction : {}", m.action))?,
     }
 }
 
@@ -365,7 +366,8 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
 {
     match transaction.get_action() {
         TRANSACTION_CATALOGUE_HORAIRE => transaction_catalogue_horaire(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
+        TRANSACTION_CATALOGUE_QUOTIDIEN => transaction_catalogue_quotidien(middleware, transaction).await,
+        _ => Err(format!("core_backup.aiguillage_transaction: Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
 
@@ -382,7 +384,7 @@ where
     if let Some(partition) = requete.partition {
         filtre.insert("partition", partition);
     }
-    debug!("Charger dernier backup pour : {:?}", filtre);
+    debug!("requete_dernier_horaire Charger dernier backup pour : {:?}", filtre);
 
     let opts = FindOneOptions::builder()
         .hint(Some(Hint::Name(INDEX_CATALOGUES_HORAIRE.into())))
@@ -408,7 +410,7 @@ where
 
     match middleware.formatter_reponse(&val_reponse,None) {
         Ok(m) => Ok(Some(m)),
-        Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+        Err(e) => Err(format!("core_backup.requete_dernier_horaire: Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
     }
 }
 
@@ -432,12 +434,12 @@ async fn transaction_catalogue_horaire<M, T>(middleware: &M, transaction: T) -> 
     debug!("transaction_catalogue_horaire Consommer transaction : {:?}", &transaction);
     let catalogue_horaire: CatalogueHoraire = match convertir_bson_deserializable(transaction.contenu()) {
         Ok(c) => c,
-        Err(e) => Err(format!("transaction_catalogue_horaire Erreur conversion bson : {:?}", e))?
+        Err(e) => Err(format!("core_backup.transaction_catalogue_horaire: transaction_catalogue_horaire Erreur conversion bson : {:?}", e))?
     };
 
     let entete = match catalogue_horaire.entete {
         Some(e) => e,
-        None => Err(format!("transaction_catalogue_horaire Entete manquante du catalogue"))?
+        None => Err(format!("core_backup.transaction_catalogue_horaire: transaction_catalogue_horaire Entete manquante du catalogue"))?
     };
     let entete_bson: Document = entete.clone().try_into()?;
     let jour = catalogue_horaire.heure.get_jour();
@@ -464,11 +466,11 @@ async fn transaction_catalogue_horaire<M, T>(middleware: &M, transaction: T) -> 
     let opts_horaire: FindOneAndUpdateOptions = FindOneAndUpdateOptions::builder().upsert(true).build();
     let collection_horaire = match middleware.get_collection(NOM_COLLECTION_CATALOGUES_HORAIRES) {
         Ok(c) => c,
-        Err(e) => Err(format!("transaction_catalogue_horaire Erreur get_collection catalogues horaires :{:?}", e))?
+        Err(e) => Err(format!("core_backup.transaction_catalogue_horaire: transaction_catalogue_horaire Erreur get_collection catalogues horaires :{:?}", e))?
     };
     let resultat_horaire = match collection_horaire.find_one_and_update(filtre_horaire, ops_horaire, opts_horaire).await {
         Ok(r) => r,
-        Err(e) => Err(format!("transaction_catalogue_horaire Erreur find_one_and_update horaire : {:?}", e))?
+        Err(e) => Err(format!("core_backup.transaction_catalogue_horaire: transaction_catalogue_horaire Erreur find_one_and_update horaire : {:?}", e))?
     };
     debug!("transaction_catalogue_horaire Resultat update horaire : {:?}", resultat_horaire);
 
@@ -499,11 +501,100 @@ async fn transaction_catalogue_horaire<M, T>(middleware: &M, transaction: T) -> 
     let resultat_quotidien = match collection_quotidienne.find_one_and_update(
         filtre_quotidien, ops_quotidien, Some(opts_quotidien)).await {
         Ok(r) => r,
-        Err(e) => Err(format!("transaction_catalogue_horaire Erreur maj quotidien {:?}", e))?
+        Err(e) => Err(format!("core_backup.transaction_catalogue_horaire: transaction_catalogue_horaire Erreur maj quotidien {:?}", e))?
     };
     debug!("Resultat update quotidien : {:?}", resultat_quotidien);
 
     middleware.reponse_ok()
+}
+
+/// Sauvegarde un catalogue quotidien, set dirty_flag a false.
+async fn transaction_catalogue_quotidien<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: GenerateurMessages + MongoDao,
+        T: Transaction
+{
+    debug!("transaction_catalogue_quotidien Consommer transaction : {:?}", &transaction);
+
+    // Conserver le contenu complet du journal quotidien (override valeurs existantes)
+    let mut doc_transaction = transaction.contenu();
+    filtrer_doc_id(&mut doc_transaction);
+
+    // Enlever les champs cles (vont etre mis dans setOnInsert)
+    let domaine = doc_transaction.remove("domaine");
+    let partition = doc_transaction.remove("partition");
+    let jour = doc_transaction.remove("jour");
+
+    // S'assurer de changer le dirty_flag a false
+    doc_transaction.insert("dirty_flag", false);
+
+    let filtre = doc! {
+        "jour": jour.as_ref(),
+        "domaine": domaine.as_ref(),
+        "partition": partition.as_ref(),
+    };
+
+    let ops = doc! {
+        "$set": doc_transaction,
+        "$setOnInsert": {
+            "jour": jour.as_ref(),
+            "domaine": domaine.as_ref(),
+            "partition": partition.as_ref(),
+            CHAMP_CREATION: Utc::now(),
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES_QUOTIDIENS)?;
+    let opts: UpdateOptions = UpdateOptions::builder().upsert(true).build();
+    let resultat = match collection.update_one(filtre, ops, Some(opts)).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("core_backup.transaction_catalogue_quotidien: Erreur update document : {:?}", e))?
+    };
+    debug!("transaction_catalogue_quotidien resultat : {:?}", resultat);
+
+    middleware.reponse_ok()
+}
+
+async fn commande_declencher_backup_quotidien<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+where
+    M: GenerateurMessages + MongoDao,
+{
+    debug ! ("commande_declencher_backup_quotidien Consommer commande : {:?}", & m.message);
+    let commande: CommandeDeclencherBackupQuotidien = m.message.get_msg().map_contenu(None)?;
+
+    let filtre = doc! {
+        "domaine": &commande.domaine,
+        "dirty_flag": true,
+        "jour": {"$lte": &commande.jour}
+    };
+    debug!("commande_declencher_backup_quotidien Trouver catalogues quotidiens : {:?}", filtre);
+    let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES_QUOTIDIENS)?;
+    let mut curseur = collection.find(filtre, None).await?;
+    while let Some(d) = curseur.next().await {
+        debug!("catalogue trouve : {:?}", d);
+        match d {
+            Ok(mut doc_catalogue) => {
+                filtrer_doc_id(&mut doc_catalogue);
+                doc_catalogue.remove("dirty_flag");
+                let catalogue_signe = middleware.formatter_message(
+                    &doc_catalogue, BACKUP_NOM_DOMAINE.into(), TRANSACTION_CATALOGUE_QUOTIDIEN.into(), None, None)?;
+
+                let commande_backup_domaine = json!({
+                    "catalogue": catalogue_signe,
+                    "uuid_rapport": &commande.uuid_rapport
+                });
+                debug!("Emettre commande backup quotidien pour {:?}", commande_backup_domaine);
+                let routage = RoutageMessageAction::builder("backup", "genererBackupQuotidien")
+                    .exchanges(vec!(Securite::L3Protege))
+                    .build();
+                middleware.transmettre_commande(routage, &commande_backup_domaine, false).await?;
+            },
+            Err(e) => Err(format!("core_backup.commande_declencher_backup_quotidien Erreur traitement curseur {:?}", e))?
+        }
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]

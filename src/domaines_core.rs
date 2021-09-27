@@ -153,11 +153,11 @@ where
     // Liste de collections de transactions pour tous les domaines geres par Core
     let collections_transaction = {
         let mut coll_docs_strings = Vec::new();
-        coll_docs_strings.extend(GESTIONNAIRE_BACKUP.get_collections_documents());
-        coll_docs_strings.extend(GESTIONNAIRE_MAITREDESCOMPTES.get_collections_documents());
-        coll_docs_strings.extend(GESTIONNAIRE_CATALOGUES.get_collections_documents());
-        coll_docs_strings.extend(GESTIONNAIRE_TOPOLOGIE.get_collections_documents());
-        coll_docs_strings.extend(GESTIONNAIRE_PKI.get_collections_documents());
+        coll_docs_strings.push(String::from(GESTIONNAIRE_BACKUP.get_collection_transactions()));
+        coll_docs_strings.push(String::from(GESTIONNAIRE_MAITREDESCOMPTES.get_collection_transactions()));
+        coll_docs_strings.push(String::from(GESTIONNAIRE_CATALOGUES.get_collection_transactions()));
+        coll_docs_strings.push(String::from(GESTIONNAIRE_TOPOLOGIE.get_collection_transactions()));
+        coll_docs_strings.push(String::from(GESTIONNAIRE_PKI.get_collection_transactions()));
         coll_docs_strings
     };
 
