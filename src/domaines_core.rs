@@ -20,9 +20,10 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::resoumettre_transactions;
 
 use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
-use crate::core_backup::{GESTIONNAIRE_BACKUP};
-use crate::core_catalogues::{NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues};
-use crate::core_maitredescomptes::{GESTIONNAIRE_MAITREDESCOMPTES};
+use crate::core_backup::GESTIONNAIRE_BACKUP;
+// use crate::core_catalogues::{NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues};
+use crate::core_catalogues::GESTIONNAIRE_CATALOGUES;
+use crate::core_maitredescomptes::GESTIONNAIRE_MAITREDESCOMPTES;
 use crate::core_pki::{NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki};
 use crate::core_topologie::{NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
@@ -34,7 +35,7 @@ pub async fn build() {
     // Recuperer configuration des Q de tous les domaines
     let mut queues: Vec<QueueType> = preparer_q_corepki();
     queues.extend(preparer_q_corepki());
-    queues.extend(preparer_q_catalogues());
+    queues.extend(GESTIONNAIRE_CATALOGUES.preparer_queues());
     queues.extend(preparer_q_topologie());
     queues.extend(GESTIONNAIRE_MAITREDESCOMPTES.preparer_queues());
     queues.extend(GESTIONNAIRE_BACKUP.preparer_queues());
@@ -84,7 +85,7 @@ pub async fn build() {
         let (
             routing_catalogues,
             futures_catalogues
-        ) = preparer_threads_corecatalogues(middleware.clone()).await.expect("core catalogues");
+        ) = GESTIONNAIRE_CATALOGUES.preparer_threads(middleware.clone()).await.expect("core catalogues");
         futures.extend(futures_catalogues);        // Deplacer vers futures globaux
         map_senders.extend(routing_catalogues);    // Deplacer vers mapping global
 
@@ -154,8 +155,8 @@ where
         let mut coll_docs_strings = Vec::new();
         coll_docs_strings.extend(GESTIONNAIRE_BACKUP.get_collections_documents());
         coll_docs_strings.extend(GESTIONNAIRE_MAITREDESCOMPTES.get_collections_documents());
+        coll_docs_strings.extend(GESTIONNAIRE_CATALOGUES.get_collections_documents());
         coll_docs_strings.push(String::from(PKI_NOM_COLLECTION_TRANSACTIONS));
-        coll_docs_strings.push(String::from(CATALOGUES_NOM_COLLECTION_TRANSACTIONS));
         coll_docs_strings.push(String::from(TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS));
         coll_docs_strings
     };
