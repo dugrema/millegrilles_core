@@ -2,21 +2,25 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::Arc;
 
-use log::{trace, debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
-use millegrilles_common_rust::bson::{doc, Bson};
+use millegrilles_common_rust::bson::{Bson, doc};
+use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::constantes::*;
+use millegrilles_common_rust::constantes::Securite::L3Protege;
+use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
-use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine, Middleware};
+use millegrilles_common_rust::middleware::{Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
+use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
@@ -29,13 +33,9 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::verificateur::ValidationOptions;
 use mongodb::options::{FindOptions, UpdateOptions};
-use serde::{Serialize, Deserialize};
-use millegrilles_common_rust::bson::Array;
+use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
-use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
-use millegrilles_common_rust::constantes::Securite::L3Protege;
-use millegrilles_common_rust::domaines::GestionnaireDomaine;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreTopologie";
@@ -154,42 +154,6 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
         aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
     }
 }
-
-// /// Initialise le domaine.
-// pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
-//     -> Result<(HashMap<String, Sender<TypeMessage>>, FuturesUnordered<JoinHandle<()>>), Box<dyn Error>>
-// {
-//     // Preparer les index MongoDB
-//     preparer_index_mongodb(middleware.as_ref()).await?;
-//
-//     // Channels pour traiter messages
-//     let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(1);
-//     let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(1);
-//
-//     // Routing map pour le domaine
-//     let mut routing: HashMap<String, Sender<TypeMessage>> = HashMap::new();
-//
-//     // Mapping par Q nommee
-//     routing.insert(String::from(NOM_Q_TRANSACTIONS), tx_messages.clone());  // Legacy
-//     routing.insert(String::from(NOM_Q_VOLATILS), tx_messages.clone());  // Legacy
-//     routing.insert(String::from(NOM_Q_TRIGGERS), tx_triggers.clone());
-//
-//     // Mapping par domaine (routing key)
-//     routing.insert(String::from(DOMAINE_NOM), tx_messages.clone());
-//
-//     debug!("Routing : {:?}", routing);
-//
-//     // Thread consommation
-//     let futures = FuturesUnordered::new();
-//     futures.push(spawn(consommer_messages(middleware.clone(), rx_messages)));
-//     futures.push(spawn(consommer_messages(middleware.clone(), rx_triggers)));
-//
-//     // Thread entretien
-//     futures.push(spawn(entretien(middleware.clone())));
-//     futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
-//
-//     Ok((routing, futures))
-// }
 
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
@@ -353,23 +317,6 @@ where M: MongoDao
     Ok(())
 }
 
-// async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
-//     while let Some(message) = rx.recv().await {
-//         trace!("Message {} recu : {:?}", DOMAINE_NOM, message);
-//
-//         let resultat = match message {
-//             TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
-//             TypeMessage::Valide(inner) => {warn!("Recu MessageValide sur thread consommation, skip : {:?}", inner); Ok(())},
-//             TypeMessage::Certificat(inner) => {warn!("Recu MessageCertificat sur thread consommation, skip : {:?}", inner); Ok(())},
-//             TypeMessage::Regeneration => continue, // Rien a faire, on boucle
-//         };
-//
-//         if let Err(e) = resultat {
-//             error!("Erreur traitement message : {:?}\n", e);
-//         }
-//     }
-// }
-
 async fn entretien<M>(_middleware: Arc<M>)
     where M: Middleware + 'static
 {
@@ -390,48 +337,6 @@ where M: ValidateurX509 {
 
     Ok(())
 }
-
-// async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), Box<dyn Error>> {
-//
-//     let correlation_id = match &message.correlation_id {
-//         Some(inner) => Some(inner.clone()),
-//         None => None,
-//     };
-//     let reply_q = match &message.reply_q {
-//         Some(inner) => Some(inner.clone()),
-//         None => None,
-//     };
-//
-//     let resultat = match message.type_message {
-//         TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
-//         TypeMessageOut::Commande => consommer_commande(middleware.clone(), message).await,
-//         TypeMessageOut::Transaction => consommer_transaction(middleware.as_ref(), message).await,
-//         TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
-//         TypeMessageOut::Evenement => consommer_evenement(middleware.as_ref(), message).await,
-//     }?;
-//
-//     match resultat {
-//         Some(reponse) => {
-//             let reply_q = match reply_q {
-//                 Some(reply_q) => reply_q,
-//                 None => {
-//                     debug!("Reply Q manquante pour reponse a {:?}", correlation_id);
-//                     return Ok(())
-//                 },
-//             };
-//             let correlation_id = match correlation_id {
-//                 Some(correlation_id) => Ok(correlation_id),
-//                 None => Err("Correlation id manquant pour reponse"),
-//             }?;
-//             info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
-//             let routage = RoutageMessageReponse::new(reply_q, correlation_id);
-//             middleware.repondre(routage, reponse).await?;
-//         },
-//         None => (),  // Aucune reponse
-//     }
-//
-//     Ok(())
-// }
 
 async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -1000,12 +905,13 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
 
 #[cfg(test)]
 mod test_integration {
+    use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
+    use millegrilles_common_rust::tokio;
+
     use crate::test_setup::setup;
     use crate::validateur_pki_mongo::preparer_middleware_pki;
 
     use super::*;
-    use millegrilles_common_rust::tokio;
-    use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
 
     #[tokio::test]
     async fn test_liste_applications() {
