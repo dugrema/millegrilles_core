@@ -160,42 +160,6 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
     }
 }
 
-// /// Initialise le domaine.
-// pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
-//     -> Result<(HashMap<String, Sender<TypeMessage>>, FuturesUnordered<JoinHandle<()>>), Box<dyn Error>>
-// {
-//     // Preparer les index MongoDB
-//     preparer_index_mongodb(middleware.as_ref()).await?;
-//
-//     // Channels pour traiter messages
-//     let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(1);
-//     let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(1);
-//
-//     // Routing map pour le domaine
-//     let mut routing: HashMap<String, Sender<TypeMessage>> = HashMap::new();
-//
-//     // Mapping par Q nommee
-//     routing.insert(String::from(NOM_Q_TRANSACTIONS), tx_messages.clone());  // Legacy
-//     routing.insert(String::from(NOM_Q_VOLATILS), tx_messages.clone());  // Legacy
-//     routing.insert(String::from(NOM_Q_TRIGGERS), tx_triggers.clone());
-//
-//     // Mapping par domaine (routing key)
-//     routing.insert(String::from(DOMAINE_NOM), tx_messages.clone());
-//
-//     debug!("Routing : {:?}", routing);
-//
-//     // Thread consommation
-//     let futures = FuturesUnordered::new();
-//     futures.push(spawn(consommer_messages(middleware.clone(), rx_messages)));
-//     futures.push(spawn(consommer_messages(middleware.clone(), rx_triggers)));
-//
-//     // Thread entretien
-//     futures.push(spawn(entretien(middleware.clone())));
-//     futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
-//
-//     Ok((routing, futures))
-// }
-
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
@@ -342,23 +306,6 @@ where M: MongoDao
     Ok(())
 }
 
-async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
-    while let Some(message) = rx.recv().await {
-        trace!("Message {} recu : {:?}", DOMAINE_NOM, message);
-
-        let resultat = match message {
-            TypeMessage::ValideAction(inner) => traiter_message_valide_action(middleware.clone(), inner).await,
-            TypeMessage::Valide(inner) => {warn!("Recu MessageValide sur thread consommation, skip : {:?}", inner); Ok(())},
-            TypeMessage::Certificat(inner) => {warn!("Recu MessageCertificat sur thread consommation, skip : {:?}", inner); Ok(())},
-            TypeMessage::Regeneration => continue, // Rien a faire, on boucle
-        };
-
-        if let Err(e) = resultat {
-            error!("Erreur traitement message : {:?}\n", e);
-        }
-    }
-}
-
 async fn entretien<M>(_middleware: Arc<M>)
     where M: Middleware + 'static
 {
@@ -376,52 +323,6 @@ where M: ValidateurX509 {
     // let message = trigger.message;
 
     debug!("Traiter cedule {}", DOMAINE_NOM);
-
-    Ok(())
-}
-
-async fn traiter_message_valide_action<M>(middleware: Arc<M>, message: MessageValideAction)
-    -> Result<(), Box<dyn Error>>
-    where M: Middleware + 'static
-{
-
-    let correlation_id = match &message.correlation_id {
-        Some(inner) => Some(inner.clone()),
-        None => None,
-    };
-    let reply_q = match &message.reply_q {
-        Some(inner) => Some(inner.clone()),
-        None => None,
-    };
-    debug!("traiter_message_valide_action {:?}/{:?}", reply_q, correlation_id);
-
-    let resultat = match message.type_message {
-        TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
-        TypeMessageOut::Commande => consommer_commande(middleware.as_ref(), message).await,
-        TypeMessageOut::Transaction => consommer_transaction(middleware.as_ref(), message).await,
-        TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
-        TypeMessageOut::Evenement => consommer_evenement(middleware.as_ref(), message).await,
-    }?;
-
-    match resultat {
-        Some(reponse) => {
-            let reply_q = match reply_q {
-                Some(reply_q) => reply_q,
-                None => {
-                    debug!("Reply Q manquante pour reponse a {:?}", correlation_id);
-                    return Ok(())
-                },
-            };
-            let correlation_id = match correlation_id {
-                Some(correlation_id) => Ok(correlation_id),
-                None => Err("Correlation id manquant pour reponse"),
-            }?;
-            info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
-            let routage = RoutageMessageReponse::new(reply_q, correlation_id);
-            middleware.repondre(routage, reponse).await?;
-        },
-        None => (),  // Aucune reponse
-    }
 
     Ok(())
 }
