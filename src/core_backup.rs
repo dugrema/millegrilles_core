@@ -47,7 +47,7 @@ pub const NOM_COLLECTION_CATALOGUES_QUOTIDIENS: &str = "CoreBackup/cataloguesQuo
 pub const NOM_COLLECTION_RAPPORTS: &str = "CoreBackup/rapports";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
-const NOM_Q_TRANSACTIONS: &str = "CoreBackup/transactions2";
+const NOM_Q_TRANSACTIONS: &str = "CoreBackup/transactions";
 const NOM_Q_VOLATILS: &str = "CoreBackup/volatils";
 const NOM_Q_TRIGGERS: &str = "CoreBackup/triggers";
 
