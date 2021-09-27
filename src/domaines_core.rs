@@ -25,7 +25,7 @@ use crate::core_backup::GESTIONNAIRE_BACKUP;
 use crate::core_catalogues::GESTIONNAIRE_CATALOGUES;
 use crate::core_maitredescomptes::GESTIONNAIRE_MAITREDESCOMPTES;
 use crate::core_pki::{NOM_COLLECTION_TRANSACTIONS as PKI_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_corepki, preparer_threads as preparer_threads_corepki};
-use crate::core_topologie::{NOM_COLLECTION_TRANSACTIONS as TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_topologie, preparer_threads as preparer_threads_coretopologie};
+use crate::core_topologie::GESTIONNAIRE_TOPOLOGIE;
 use crate::validateur_pki_mongo::preparer_middleware_pki;
 
 const DUREE_ATTENTE: u64 = 20000;
@@ -36,7 +36,7 @@ pub async fn build() {
     let mut queues: Vec<QueueType> = preparer_q_corepki();
     queues.extend(preparer_q_corepki());
     queues.extend(GESTIONNAIRE_CATALOGUES.preparer_queues());
-    queues.extend(preparer_q_topologie());
+    queues.extend(GESTIONNAIRE_TOPOLOGIE.preparer_queues());
     queues.extend(GESTIONNAIRE_MAITREDESCOMPTES.preparer_queues());
     queues.extend(GESTIONNAIRE_BACKUP.preparer_queues());
 
@@ -93,7 +93,7 @@ pub async fn build() {
         let (
             routing_topologie,
             futures_topologie
-        ) = preparer_threads_coretopologie(middleware.clone()).await.expect("core topologie");
+        ) = GESTIONNAIRE_TOPOLOGIE.preparer_threads(middleware.clone()).await.expect("core topologie");
         futures.extend(futures_topologie);        // Deplacer vers futures globaux
         map_senders.extend(routing_topologie);    // Deplacer vers mapping global
 
@@ -156,8 +156,8 @@ where
         coll_docs_strings.extend(GESTIONNAIRE_BACKUP.get_collections_documents());
         coll_docs_strings.extend(GESTIONNAIRE_MAITREDESCOMPTES.get_collections_documents());
         coll_docs_strings.extend(GESTIONNAIRE_CATALOGUES.get_collections_documents());
+        coll_docs_strings.extend(GESTIONNAIRE_TOPOLOGIE.get_collections_documents());
         coll_docs_strings.push(String::from(PKI_NOM_COLLECTION_TRANSACTIONS));
-        coll_docs_strings.push(String::from(TOPOLOGIE_NOM_COLLECTION_TRANSACTIONS));
         coll_docs_strings
     };
 

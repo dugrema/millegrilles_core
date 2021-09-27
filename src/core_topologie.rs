@@ -14,7 +14,7 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
-use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine, Middleware};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -35,6 +35,7 @@ use millegrilles_common_rust::bson::Array;
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 use millegrilles_common_rust::constantes::Securite::L3Protege;
+use millegrilles_common_rust::domaines::GestionnaireDomaine;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreTopologie";
@@ -69,42 +70,126 @@ const CHAMP_NOEUD_ID: &str = "noeud_id";
 // permissionDechiffrage
 // listerNoeudsAWSS3
 
+/// Instance statique du gestionnaire de maitredescomptes
+pub const GESTIONNAIRE_TOPOLOGIE: GestionnaireDomaineTopologie = GestionnaireDomaineTopologie {};
 
-/// Initialise le domaine.
-pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
-    -> Result<(HashMap<String, Sender<TypeMessage>>, FuturesUnordered<JoinHandle<()>>), Box<dyn Error>>
-{
-    // Preparer les index MongoDB
-    preparer_index_mongodb(middleware.as_ref()).await?;
+#[derive(Clone)]
+pub struct GestionnaireDomaineTopologie {}
 
-    // Channels pour traiter messages
-    let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(1);
-    let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(1);
-
-    // Routing map pour le domaine
-    let mut routing: HashMap<String, Sender<TypeMessage>> = HashMap::new();
-
-    // Mapping par Q nommee
-    routing.insert(String::from(NOM_Q_TRANSACTIONS), tx_messages.clone());  // Legacy
-    routing.insert(String::from(NOM_Q_VOLATILS), tx_messages.clone());  // Legacy
-    routing.insert(String::from(NOM_Q_TRIGGERS), tx_triggers.clone());
-
-    // Mapping par domaine (routing key)
-    routing.insert(String::from(DOMAINE_NOM), tx_messages.clone());
-
-    debug!("Routing : {:?}", routing);
-
-    // Thread consommation
-    let futures = FuturesUnordered::new();
-    futures.push(spawn(consommer_messages(middleware.clone(), rx_messages)));
-    futures.push(spawn(consommer_messages(middleware.clone(), rx_triggers)));
-
-    // Thread entretien
-    futures.push(spawn(entretien(middleware.clone())));
-    futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
-
-    Ok((routing, futures))
+#[async_trait]
+impl TraiterTransaction for GestionnaireDomaineTopologie {
+    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
+        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    {
+        aiguillage_transaction(middleware, transaction).await
+    }
 }
+
+#[async_trait]
+impl GestionnaireDomaine for GestionnaireDomaineTopologie {
+    #[inline]
+    fn get_nom_domaine(&self) -> &str {DOMAINE_NOM}
+    #[inline]
+    fn get_collection_transactions(&self) -> &str {NOM_COLLECTION_TRANSACTIONS}
+
+    fn get_collections_documents(&self) -> Vec<String> {
+        vec![
+            String::from(NOM_COLLECTION_DOMAINES),
+            String::from(NOM_COLLECTION_NOEUDS),
+        ]
+    }
+
+    #[inline]
+    fn get_q_transactions(&self) -> &str {NOM_Q_TRANSACTIONS}
+    #[inline]
+    fn get_q_volatils(&self) -> &str {NOM_Q_VOLATILS}
+    #[inline]
+    fn get_q_triggers(&self) -> &str {NOM_Q_TRIGGERS}
+
+    fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
+
+    async fn preparer_index_mongodb_custom<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
+        preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
+    }
+
+    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware + 'static
+    {
+        consommer_requete(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware + 'static
+    {
+        consommer_commande(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware + 'static
+    {
+        consommer_transaction(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
+        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+        where M: Middleware + 'static
+    {
+        consommer_evenement(middleware, message).await  // Fonction plus bas
+    }
+
+    async fn entretien<M>(&self, middleware: Arc<M>)
+        where M: Middleware + 'static
+    {
+        entretien(middleware).await  // Fonction plus bas
+    }
+
+    async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
+        -> Result<Option<MessageMilleGrille>, String>
+        where
+            M: ValidateurX509 + GenerateurMessages + MongoDao,
+            T: Transaction
+    {
+        aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
+    }
+}
+
+// /// Initialise le domaine.
+// pub async fn preparer_threads(middleware: Arc<MiddlewareDbPki>)
+//     -> Result<(HashMap<String, Sender<TypeMessage>>, FuturesUnordered<JoinHandle<()>>), Box<dyn Error>>
+// {
+//     // Preparer les index MongoDB
+//     preparer_index_mongodb(middleware.as_ref()).await?;
+//
+//     // Channels pour traiter messages
+//     let (tx_messages, rx_messages) = mpsc::channel::<TypeMessage>(1);
+//     let (tx_triggers, rx_triggers) = mpsc::channel::<TypeMessage>(1);
+//
+//     // Routing map pour le domaine
+//     let mut routing: HashMap<String, Sender<TypeMessage>> = HashMap::new();
+//
+//     // Mapping par Q nommee
+//     routing.insert(String::from(NOM_Q_TRANSACTIONS), tx_messages.clone());  // Legacy
+//     routing.insert(String::from(NOM_Q_VOLATILS), tx_messages.clone());  // Legacy
+//     routing.insert(String::from(NOM_Q_TRIGGERS), tx_triggers.clone());
+//
+//     // Mapping par domaine (routing key)
+//     routing.insert(String::from(DOMAINE_NOM), tx_messages.clone());
+//
+//     debug!("Routing : {:?}", routing);
+//
+//     // Thread consommation
+//     let futures = FuturesUnordered::new();
+//     futures.push(spawn(consommer_messages(middleware.clone(), rx_messages)));
+//     futures.push(spawn(consommer_messages(middleware.clone(), rx_triggers)));
+//
+//     // Thread entretien
+//     futures.push(spawn(entretien(middleware.clone())));
+//     futures.push(spawn(thread_emettre_presence_domaine(middleware.clone(), DOMAINE_NOM)));
+//
+//     Ok((routing, futures))
+// }
 
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
@@ -187,7 +272,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 }
 
 /// Creer index MongoDB
-async fn preparer_index_mongodb<M>(middleware: &M) -> Result<(), String>
+async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
 where M: MongoDao
 {
 
@@ -268,24 +353,26 @@ where M: MongoDao
     Ok(())
 }
 
-async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
-    while let Some(message) = rx.recv().await {
-        trace!("Message {} recu : {:?}", DOMAINE_NOM, message);
+// async fn consommer_messages(middleware: Arc<MiddlewareDbPki>, mut rx: Receiver<TypeMessage>) {
+//     while let Some(message) = rx.recv().await {
+//         trace!("Message {} recu : {:?}", DOMAINE_NOM, message);
+//
+//         let resultat = match message {
+//             TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
+//             TypeMessage::Valide(inner) => {warn!("Recu MessageValide sur thread consommation, skip : {:?}", inner); Ok(())},
+//             TypeMessage::Certificat(inner) => {warn!("Recu MessageCertificat sur thread consommation, skip : {:?}", inner); Ok(())},
+//             TypeMessage::Regeneration => continue, // Rien a faire, on boucle
+//         };
+//
+//         if let Err(e) = resultat {
+//             error!("Erreur traitement message : {:?}\n", e);
+//         }
+//     }
+// }
 
-        let resultat = match message {
-            TypeMessage::ValideAction(inner) => traiter_message_valide_action(&middleware, inner).await,
-            TypeMessage::Valide(inner) => {warn!("Recu MessageValide sur thread consommation, skip : {:?}", inner); Ok(())},
-            TypeMessage::Certificat(inner) => {warn!("Recu MessageCertificat sur thread consommation, skip : {:?}", inner); Ok(())},
-            TypeMessage::Regeneration => continue, // Rien a faire, on boucle
-        };
-
-        if let Err(e) = resultat {
-            error!("Erreur traitement message : {:?}\n", e);
-        }
-    }
-}
-
-async fn entretien(_middleware: Arc<MiddlewareDbPki>) {
+async fn entretien<M>(_middleware: Arc<M>)
+    where M: Middleware + 'static
+{
 
     let mut catalogues_charges = false;
 
@@ -304,47 +391,47 @@ where M: ValidateurX509 {
     Ok(())
 }
 
-async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), Box<dyn Error>> {
-
-    let correlation_id = match &message.correlation_id {
-        Some(inner) => Some(inner.clone()),
-        None => None,
-    };
-    let reply_q = match &message.reply_q {
-        Some(inner) => Some(inner.clone()),
-        None => None,
-    };
-
-    let resultat = match message.type_message {
-        TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
-        TypeMessageOut::Commande => consommer_commande(middleware.clone(), message).await,
-        TypeMessageOut::Transaction => consommer_transaction(middleware.as_ref(), message).await,
-        TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
-        TypeMessageOut::Evenement => consommer_evenement(middleware.as_ref(), message).await,
-    }?;
-
-    match resultat {
-        Some(reponse) => {
-            let reply_q = match reply_q {
-                Some(reply_q) => reply_q,
-                None => {
-                    debug!("Reply Q manquante pour reponse a {:?}", correlation_id);
-                    return Ok(())
-                },
-            };
-            let correlation_id = match correlation_id {
-                Some(correlation_id) => Ok(correlation_id),
-                None => Err("Correlation id manquant pour reponse"),
-            }?;
-            info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
-            let routage = RoutageMessageReponse::new(reply_q, correlation_id);
-            middleware.repondre(routage, reponse).await?;
-        },
-        None => (),  // Aucune reponse
-    }
-
-    Ok(())
-}
+// async fn traiter_message_valide_action(middleware: &Arc<MiddlewareDbPki>, message: MessageValideAction) -> Result<(), Box<dyn Error>> {
+//
+//     let correlation_id = match &message.correlation_id {
+//         Some(inner) => Some(inner.clone()),
+//         None => None,
+//     };
+//     let reply_q = match &message.reply_q {
+//         Some(inner) => Some(inner.clone()),
+//         None => None,
+//     };
+//
+//     let resultat = match message.type_message {
+//         TypeMessageOut::Requete => consommer_requete(middleware.as_ref(), message).await,
+//         TypeMessageOut::Commande => consommer_commande(middleware.clone(), message).await,
+//         TypeMessageOut::Transaction => consommer_transaction(middleware.as_ref(), message).await,
+//         TypeMessageOut::Reponse => Err(String::from("Recu reponse sur thread consommation, drop message"))?,
+//         TypeMessageOut::Evenement => consommer_evenement(middleware.as_ref(), message).await,
+//     }?;
+//
+//     match resultat {
+//         Some(reponse) => {
+//             let reply_q = match reply_q {
+//                 Some(reply_q) => reply_q,
+//                 None => {
+//                     debug!("Reply Q manquante pour reponse a {:?}", correlation_id);
+//                     return Ok(())
+//                 },
+//             };
+//             let correlation_id = match correlation_id {
+//                 Some(correlation_id) => Ok(correlation_id),
+//                 None => Err("Correlation id manquant pour reponse"),
+//             }?;
+//             info!("Emettre reponse vers reply_q {} correlation_id {}", reply_q, correlation_id);
+//             let routage = RoutageMessageReponse::new(reply_q, correlation_id);
+//             middleware.repondre(routage, reponse).await?;
+//         },
+//         None => (),  // Aucune reponse
+//     }
+//
+//     Ok(())
+// }
 
 async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -372,7 +459,9 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
     }
 }
 
-async fn consommer_commande(middleware: Arc<MiddlewareDbPki>, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
 
@@ -464,8 +553,11 @@ where
     reponse
 }
 
-async fn aiguillage_transaction<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-where M: ValidateurX509 + GenerateurMessages + MongoDao {
+async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: ValidateurX509 + GenerateurMessages + MongoDao,
+        T: Transaction
+{
     match transaction.get_action() {
         TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
         TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
@@ -625,8 +717,10 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
     Ok(None)
 }
 
-async fn traiter_transaction_domaine<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-    where M: GenerateurMessages + MongoDao
+async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: GenerateurMessages + MongoDao,
+        T: Transaction
 {
     let mut doc = transaction.contenu();
     let domaine = match doc.get_str("domaine") {
@@ -654,8 +748,10 @@ async fn traiter_transaction_domaine<M>(middleware: &M, transaction: Transaction
     Ok(Some(reponse))
 }
 
-async fn traiter_transaction_monitor<M>(middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-    where M: GenerateurMessages + MongoDao
+async fn traiter_transaction_monitor<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: GenerateurMessages + MongoDao,
+        T: Transaction
 {
     let mut doc = transaction.contenu();
     let domaine = match doc.get_str("domaine") {
