@@ -57,6 +57,7 @@ const COMMANDE_DECLENCHER_BACKUP_QUOTIDIEN: &str = COMMANDE_BACKUP_QUOTIDIEN;
 
 const TRANSACTION_CATALOGUE_HORAIRE: &str = BACKUP_TRANSACTION_CATALOGUE_HORAIRE;
 const TRANSACTION_CATALOGUE_QUOTIDIEN: &str = BACKUP_TRANSACTION_CATALOGUE_QUOTIDIEN;
+const TRANSACTION_CATALOGUE_QUOTIDIEN_INFO: &str = "archiveQuotidienneInfo";
 
 const CHAMP_DOMAINE: &str = "domaine";
 const CHAMP_PARTITION: &str = "partition";
@@ -185,6 +186,10 @@ pub fn preparer_queues() -> Vec<QueueType> {
     });
     rk_transactions.push(ConfigRoutingExchange {
         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_CATALOGUE_QUOTIDIEN).into(),
+        exchange: Securite::L3Protege
+    });
+    rk_transactions.push(ConfigRoutingExchange {
+        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_CATALOGUE_QUOTIDIEN_INFO).into(),
         exchange: Securite::L3Protege
     });
 
@@ -351,7 +356,9 @@ where
     }?;
 
     match m.action.as_str() {
-        TRANSACTION_CATALOGUE_HORAIRE | TRANSACTION_CATALOGUE_QUOTIDIEN => {
+        TRANSACTION_CATALOGUE_HORAIRE |
+        TRANSACTION_CATALOGUE_QUOTIDIEN |
+        TRANSACTION_CATALOGUE_QUOTIDIEN_INFO => {
             sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
@@ -367,6 +374,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
     match transaction.get_action() {
         TRANSACTION_CATALOGUE_HORAIRE => transaction_catalogue_horaire(middleware, transaction).await,
         TRANSACTION_CATALOGUE_QUOTIDIEN => transaction_catalogue_quotidien(middleware, transaction).await,
+        TRANSACTION_CATALOGUE_QUOTIDIEN_INFO => transaction_catalogue_quotidien_info(middleware, transaction).await,
         _ => Err(format!("core_backup.aiguillage_transaction: Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -595,6 +603,51 @@ where
     }
 
     Ok(None)
+}
+
+async fn transaction_catalogue_quotidien_info<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: GenerateurMessages + MongoDao,
+        T: Transaction
+{
+    debug!("transaction_catalogue_quotidien_info Consommer transaction : {:?}", &transaction);
+
+    // Conserver le contenu complet du journal quotidien (override valeurs existantes)
+    let mut doc_transaction = transaction.contenu();
+    filtrer_doc_id(&mut doc_transaction);
+
+    // Enlever les champs cles (vont etre mis dans setOnInsert)
+    let domaine = doc_transaction.remove("domaine");
+    let partition = doc_transaction.remove("partition");
+    let jour = doc_transaction.remove("jour");
+
+    let filtre = doc! {
+        "jour": jour.as_ref(),
+        "domaine": domaine.as_ref(),
+        "partition": partition.as_ref(),
+    };
+
+    let ops = doc! {
+        "$set": doc_transaction,
+        "$setOnInsert": {
+            "dirty_flag": true,
+            "jour": jour.as_ref(),
+            "domaine": domaine.as_ref(),
+            "partition": partition.as_ref(),
+            CHAMP_CREATION: Utc::now(),
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES_QUOTIDIENS)?;
+    let opts: UpdateOptions = UpdateOptions::builder().upsert(true).build();
+    let resultat = match collection.update_one(filtre, ops, Some(opts)).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("core_backup.transaction_catalogue_quotidien: Erreur update document : {:?}", e))?
+    };
+    debug!("transaction_catalogue_quotidien_info resultat : {:?}", resultat);
+
+    middleware.reponse_ok()
 }
 
 #[cfg(test)]
