@@ -377,16 +377,8 @@ impl ValidateurX509 for MiddlewareDbPki {
     }
 
     async fn entretien(&self) {
-
         self.validateur.entretien().await;
-
         self.charger_certificats_chiffrage().await;
-
-        // match emettre_presence_domaine(self, PKI_DOMAINE_NOM).await {
-        //     Ok(()) => (),
-        //     Err(e) => warn!("Erreur emission presence du domaine : {}", e),
-        // };
-
     }
 }
 
