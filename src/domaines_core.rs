@@ -6,11 +6,12 @@ use std::sync::{Arc, Mutex};
 
 use log::{debug, error, info, warn};
 use millegrilles_common_rust::certificats::ValidateurX509;
+use millegrilles_common_rust::chiffrage::Chiffreur;
 use millegrilles_common_rust::chrono as chrono;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::EmetteurCertificat;
+use millegrilles_common_rust::middleware::{EmetteurCertificat, Middleware};
 use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
@@ -144,8 +145,7 @@ pub async fn build() {
 
 /// Thread d'entretien de Core
 async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
-where
-    M: GenerateurMessages + ValidateurX509 + EmetteurCertificat + MongoDao,
+    where M: Middleware
 {
 
     let mut certificat_emis = false;
@@ -164,11 +164,23 @@ where
     let mut prochain_entretien_transactions = chrono::Utc::now();
     let intervalle_entretien_transactions = chrono::Duration::minutes(5);
 
+    let mut prochain_chargement_certificats_maitredescles = chrono::Utc::now();
+    let intervalle_chargement_certificats_maitredescles = chrono::Duration::minutes(5);
+
     loop {
         let maintenant = chrono::Utc::now();
         debug!("Execution task d'entretien Core {:?}", maintenant);
 
-        middleware.entretien().await;
+        middleware.entretien_validateur().await;
+
+        if prochain_chargement_certificats_maitredescles < maintenant {
+            match middleware.charger_certificats_chiffrage().await {
+                Ok(()) => {
+                    prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
+                },
+                Err(e) => warn!("Erreur chargement certificats de maitre des cles : {:?}", e)
+            }
+        }
 
         if prochain_entretien_transactions < maintenant {
             let resultat = resoumettre_transactions(

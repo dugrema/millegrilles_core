@@ -94,9 +94,9 @@ impl TraiterTransaction for GestionnaireDomaineMaitreDesComptes {
 #[async_trait]
 impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
     #[inline]
-    fn get_nom_domaine(&self) -> &str {DOMAINE_NOM}
+    fn get_nom_domaine(&self) -> String {DOMAINE_NOM.into()}
     #[inline]
-    fn get_collection_transactions(&self) -> &str {NOM_COLLECTION_TRANSACTIONS}
+    fn get_collection_transactions(&self) -> String {NOM_COLLECTION_TRANSACTIONS.into()}
 
     fn get_collections_documents(&self) -> Vec<String> {
         vec![
@@ -105,11 +105,11 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
     }
 
     #[inline]
-    fn get_q_transactions(&self) -> &str {NOM_Q_TRANSACTIONS}
+    fn get_q_transactions(&self) -> String {NOM_Q_TRANSACTIONS.into()}
     #[inline]
-    fn get_q_volatils(&self) -> &str {NOM_Q_VOLATILS}
+    fn get_q_volatils(&self) -> String {NOM_Q_VOLATILS.into()}
     #[inline]
-    fn get_q_triggers(&self) -> &str {NOM_Q_TRIGGERS}
+    fn get_q_triggers(&self) -> String {NOM_Q_TRIGGERS.into()}
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
