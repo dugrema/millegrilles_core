@@ -177,6 +177,7 @@ async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
             match middleware.charger_certificats_chiffrage().await {
                 Ok(()) => {
                     prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
+                    debug!("Prochain chargement cert maitredescles: {:?}", prochain_chargement_certificats_maitredescles);
                 },
                 Err(e) => warn!("Erreur chargement certificats de maitre des cles : {:?}", e)
             }

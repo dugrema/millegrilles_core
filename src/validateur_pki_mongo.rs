@@ -2,10 +2,10 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 
-use log::{debug, error};
+use log::{debug, info, error};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::{doc, Document};
-use millegrilles_common_rust::certificats::{EnveloppeCertificat, EnveloppePrivee, FingerprintCertPublicKey, ValidateurX509, ValidateurX509Impl};
+use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, EnveloppeCertificat, EnveloppePrivee, FingerprintCertPublicKey, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur, Mgs2CipherData};
 use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMessagesDb, ConfigurationMq, ConfigurationNoeud, ConfigurationPki, IsConfigNoeud};
 use millegrilles_common_rust::constantes::*;
@@ -321,7 +321,6 @@ impl ValidateurX509 for MiddlewareDbPki {
 
     async fn entretien_validateur(&self) {
         self.validateur.entretien().await;
-        self.charger_certificats_chiffrage().await;
     }
 }
 
@@ -433,55 +432,104 @@ impl Chiffreur for MiddlewareDbPki {
 
     async fn charger_certificats_chiffrage(&self) -> Result<(), Box<dyn Error>> {
         debug!("Charger les certificats de maitre des cles pour chiffrage");
-        let requete = json!({});
-        let routage = RoutageMessageAction::new("MaitreDesCles", "certMaitreDesCles");
-        let message_reponse = match self.generateur_messages.transmettre_requete(routage, &requete).await {
-            Ok(r) => r,
-            Err(e) => {
-                error!("Erreur demande certificats : {}", e);
-                return Ok(())
+        emettre_commande_certificat_maitredescles(self).await?;
+
+        // Donner une chance aux certificats de rentrer
+        tokio::time::sleep(tokio::time::Duration::new(5, 0)).await;
+
+        // Verifier si on a au moins un certificat
+        let nb_certs = self.cles_chiffrage.lock().expect("lock").len();
+        if nb_certs <= 1 {  // 1 => le cert millegrille est deja charge
+            Err(format!("Echec, aucuns certificats de maitre des cles recus"))?
+        } else {
+            debug!("On a {} certificats de chiffrage valides (incluant celui de la millegrille)", nb_certs);
+        }
+
+        Ok(())
+    }
+
+    // async fn charger_certificats_chiffrage(&self) -> Result<(), Box<dyn Error>> {
+    //     debug!("Charger les certificats de maitre des cles pour chiffrage");
+    //     let requete = json!({});
+    //     let routage = RoutageMessageAction::new("MaitreDesCles", "certMaitreDesCles");
+    //     let message_reponse = match self.generateur_messages.transmettre_requete(routage, &requete).await {
+    //         Ok(r) => r,
+    //         Err(e) => {
+    //             error!("Erreur demande certificats : {}", e);
+    //             return Ok(())
+    //         }
+    //     };
+    //
+    //     debug!("Message reponse : {:?}", message_reponse);
+    //     let message = match message_reponse {
+    //         TypeMessage::Valide(m) => m,
+    //         _ => {
+    //             error!("Reponse de type non gere : {:?}", message_reponse);
+    //             return Ok(())  // Abort
+    //         }
+    //     };
+    //
+    //     let m = message.message.get_msg();
+    //     let value = match serde_json::to_value(m.contenu.clone()) {
+    //         Ok(v) => v,
+    //         Err(e) => {
+    //             error!("Erreur conversion message reponse certificats maitre des cles : {:?}", e);
+    //             return Ok(())  // Abort
+    //         }
+    //     };
+    //     let rep_cert: ReponseCertificatMaitredescles = match serde_json::from_value(value) {
+    //         Ok(c) => c,
+    //         Err(e) => {
+    //             error!("Erreur lecture message reponse certificats maitre des cles : {:?}", e);
+    //             return Ok(())  // Abort
+    //         }
+    //     };
+    //
+    //     let cert_chiffrage = match rep_cert.get_enveloppe_maitredescles(self).await {
+    //         Ok(c) => c,
+    //         Err(e) => {
+    //             error!("Erreur chargement enveloppe certificat chiffrage maitredescles : {:?}", e);
+    //             return Ok(())  // Abort
+    //         }
+    //     };
+    //
+    //     debug!("Certificat de maitre des cles charges dans {:?}", cert_chiffrage.as_ref());
+    //
+    //     // Stocker cles chiffrage du maitre des cles
+    //     {
+    //         let fps = cert_chiffrage.fingerprint_cert_publickeys().expect("public keys");
+    //         let mut guard = self.cles_chiffrage.lock().expect("lock");
+    //         for fp in fps.iter().filter(|f| ! f.est_cle_millegrille) {
+    //             guard.insert(fp.fingerprint.clone(), fp.clone());
+    //         }
+    //     }
+    //
+    //     Ok(())
+    // }
+
+    async fn recevoir_certificat_chiffrage<'a>(&'a self, message: &MessageSerialise) -> Result<(), Box<dyn Error + 'a>> {
+        let cert_chiffrage = match &message.certificat {
+            Some(c) => c.clone(),
+            None => {
+                Err(format!("recevoir_certificat_chiffrage Message de certificat de MilleGrille recu, certificat n'est pas extrait"))?
             }
         };
 
-        debug!("Message reponse : {:?}", message_reponse);
-        let message = match message_reponse {
-            TypeMessage::Valide(m) => m,
-            _ => {
-                error!("Reponse de type non gere : {:?}", message_reponse);
-                return Ok(())  // Abort
-            }
-        };
+        // Valider le certificat
+        if ! cert_chiffrage.presentement_valide {
+            Err(format!("middleware_db.recevoir_certificat_chiffrage Certificat de maitre des cles recu n'est pas presentement valide - rejete"))?;
+        }
 
-        let m = message.message.get_msg();
-        let value = match serde_json::to_value(m.contenu.clone()) {
-            Ok(v) => v,
-            Err(e) => {
-                error!("Erreur conversion message reponse certificats maitre des cles : {:?}", e);
-                return Ok(())  // Abort
-            }
-        };
-        let rep_cert: ReponseCertificatMaitredescles = match serde_json::from_value(value) {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Erreur lecture message reponse certificats maitre des cles : {:?}", e);
-                return Ok(())  // Abort
-            }
-        };
+        if ! cert_chiffrage.verifier_roles(vec![RolesCertificats::MaitreDesCles]) {
+            Err(format!("middleware_db.recevoir_certificat_chiffrage Certificat de maitre des cles recu n'a pas le role MaitreCles' - rejete"))?;
+        }
 
-        let cert_chiffrage = match rep_cert.get_enveloppe_maitredescles(self).await {
-            Ok(c) => c,
-            Err(e) => {
-                error!("Erreur chargement enveloppe certificat chiffrage maitredescles : {:?}", e);
-                return Ok(())  // Abort
-            }
-        };
-
-        debug!("Certificat de maitre des cles charges dans {:?}", cert_chiffrage.as_ref());
+        info!("Certificat maitre des cles accepte {}", cert_chiffrage.fingerprint());
 
         // Stocker cles chiffrage du maitre des cles
         {
-            let fps = cert_chiffrage.fingerprint_cert_publickeys().expect("public keys");
-            let mut guard = self.cles_chiffrage.lock().expect("lock");
+            let fps = cert_chiffrage.fingerprint_cert_publickeys()?;
+            let mut guard = self.cles_chiffrage.lock()?;
             for fp in fps.iter().filter(|f| ! f.est_cle_millegrille) {
                 guard.insert(fp.fingerprint.clone(), fp.clone());
             }
