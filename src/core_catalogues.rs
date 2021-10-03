@@ -337,23 +337,23 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
     }
 }
 
-async fn restaurer_transactions(middleware: Arc<MiddlewareDbPki>) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
-    let noms_collections_docs = vec! [
-        String::from(NOM_COLLECTION_CATALOGUES)
-    ];
-
-    let processor = ProcesseurTransactions::new();
-
-    restaurer(
-        middleware.clone(),
-        DOMAINE_NOM,
-        NOM_COLLECTION_TRANSACTIONS,
-        &noms_collections_docs,
-        &processor
-    ).await?;
-
-    Ok(None)
-}
+// async fn restaurer_transactions(middleware: Arc<MiddlewareDbPki>) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
+//     let noms_collections_docs = vec! [
+//         String::from(NOM_COLLECTION_CATALOGUES)
+//     ];
+//
+//     let processor = ProcesseurTransactions::new();
+//
+//     restaurer(
+//         middleware.clone(),
+//         DOMAINE_NOM,
+//         NOM_COLLECTION_TRANSACTIONS,
+//         &noms_collections_docs,
+//         &processor
+//     ).await?;
+//
+//     Ok(None)
+// }
 
 async fn consommer_transaction<M>(_middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
