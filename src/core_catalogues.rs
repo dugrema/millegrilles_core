@@ -7,7 +7,7 @@ use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
-use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::certificats::{RegleValidationIdmg, ValidateurX509, VerificateurPermissions, VerificateurRegles};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
@@ -53,6 +53,17 @@ const CHAMP_VERSION: &str = "version";
 
 /// Instance statique du gestionnaire de catalogues
 pub const GESTIONNAIRE_CATALOGUES: GestionnaireDomaineCatalogues = GestionnaireDomaineCatalogues {};
+
+static mut REGLES_VALIDATION_CATALOGUE: VerificateurRegles = VerificateurRegles { regles_disjointes: None, regles_conjointes: None };
+
+/// Initialise les regles de validation pour le catalogue
+pub fn init_regles_validation() {
+    let regle_idmg = RegleValidationIdmg { idmg: String::from("z2W2ECnP9eauNXD628aaiURj6tJfSYiygTaffC1bTbCNHCtomhoR7s") };
+    unsafe {
+        REGLES_VALIDATION_CATALOGUE.ajouter_disjointe(regle_idmg);
+        debug!("init_regles_validation Regles de validation catalogue chargees : {:?}", REGLES_VALIDATION_CATALOGUE);
+    }
+}
 
 #[derive(Clone)]
 pub struct GestionnaireDomaineCatalogues {}
@@ -488,9 +499,11 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
     debug!("Verifier si catalogue present pour version {:?}", version);
 
     // Valider le catalogue
-    let opts = ValidationOptions::new(true, true, true);
-    let resultat_validation = catalogue.valider(middleware, Some(&opts)).await?;
-    debug!("Resultat validation catalogue : {:?}", resultat_validation);
+    let resultat_validation = unsafe {
+        let mut opts = ValidationOptions::new(true, true, true);
+        opts.verificateur = Some(&REGLES_VALIDATION_CATALOGUE);
+        catalogue.valider(middleware, Some(&opts)).await?
+    };
 
     if resultat_validation.valide() {
         // Conserver la transaction et la traiter immediatement
@@ -503,6 +516,8 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
             TypeMessageOut::Transaction
         );
         sauvegarder_transaction_recue(middleware, mva, NOM_COLLECTION_TRANSACTIONS).await?;
+    } else {
+        debug!("Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
     }
 
     Ok(None)
