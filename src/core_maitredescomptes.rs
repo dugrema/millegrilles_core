@@ -40,6 +40,7 @@ use webauthn_rs::base64_data::Base64UrlSafeData;
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use crate::webauthn::{ClientAssertionResponse, CompteCredential, multibase_to_safe, valider_commande};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
+use millegrilles_common_rust::messages_generiques::MessageCedule;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
@@ -150,7 +151,7 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
         entretien(middleware).await  // Fonction plus bas
     }
 
-    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: MessageValideAction) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
+    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
         traiter_cedule(middleware, trigger).await
     }
 
@@ -322,7 +323,7 @@ async fn entretien<M>(_middleware: Arc<M>)
     }
 }
 
-async fn traiter_cedule<M>(_middleware: &M, _trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
+async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
 where M: ValidateurX509 {
     // let message = trigger.message;
 

@@ -33,6 +33,7 @@ use serde::Deserialize;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
+use millegrilles_common_rust::messages_generiques::MessageCedule;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreCatalogues";
@@ -136,7 +137,7 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
         entretien(middleware).await  // Fonction plus bas
     }
 
-    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: MessageValideAction) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
+    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
         traiter_cedule(middleware, trigger).await
     }
 
@@ -453,7 +454,7 @@ where
     reponse
 }
 
-async fn traiter_cedule<M>(_middleware: &M, _trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
+async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
 where M: ValidateurX509 {
     // let message = trigger.message;
 

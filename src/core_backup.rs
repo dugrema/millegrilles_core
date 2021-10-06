@@ -20,6 +20,7 @@ use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMi
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
+use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{IsConfigurationPki, Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine, sauvegarder_transaction};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao, convertir_bson_deserializable, convertir_to_bson};
 use millegrilles_common_rust::mongodb as mongodb;
@@ -141,7 +142,7 @@ impl GestionnaireDomaine for GestionnaireDomaineCoreBackup {
         entretien(middleware).await  // Fonction plus bas
     }
 
-    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: MessageValideAction) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
+    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
         traiter_cedule(middleware, trigger).await  // Fonction plus bas
     }
 
@@ -263,7 +264,7 @@ async fn entretien<M>(_middleware: Arc<M>)
     }
 }
 
-async fn traiter_cedule<M>(_middleware: &M, _trigger: MessageValideAction) -> Result<(), Box<dyn Error>>
+async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
 where M: GenerateurMessages + MongoDao {
     // let message = trigger.message;
 
@@ -694,6 +695,7 @@ mod test_integration {
             let catalogue_horaire = CatalogueHoraire::builder(
                 DateEpochSeconds::from_heure(2021, 09, 26, 08),
                 "DUMMY".into(),
+                "abcd-1234".into(),
                 "uuid-abcd-1234".into(),
                 false,
                 false
