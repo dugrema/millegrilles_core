@@ -404,7 +404,7 @@ where
     // Autorisation : doit etre de niveau 4.secure
     match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core_topologie.consommer_transaction Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
     }?;
 
     match m.action.as_str() {
@@ -412,7 +412,7 @@ where
             sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
-        _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
+        _ => Err(format!("core_topologie.consommer_transaction Mauvais type d'action pour une transaction : {}", m.action))?,
     }
 }
 

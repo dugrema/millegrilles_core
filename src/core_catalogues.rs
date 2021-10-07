@@ -376,7 +376,7 @@ where
     // Autorisation : doit etre de niveau 4.secure
     match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core.catalogue.consommer_transaction Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
     }?;
 
     match m.action.as_str() {
@@ -396,11 +396,11 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     // Autorisation : doit etre de niveau 4.secure
     match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core_catalogues.consommer_evenement Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
     }?;
 
     match m.action.as_str() {
-        _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
+        _ => Err(format!("core_catalogues.consommer_evenement Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
 

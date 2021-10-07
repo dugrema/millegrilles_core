@@ -433,7 +433,7 @@ where
     // Autorisation : doit etre de niveau 4.secure
     match m.verifier_exchanges(vec!(Securite::L4Secure)) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core_maitredescomptes.consommer_transaction Trigger cedule autorisation invalide (pas 4.secure) : {}", m.routing_key)),
     }?;
 
     match m.action.as_str() {
@@ -455,7 +455,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     // Autorisation : doit etre de niveau 4.secure
     match m.verifier_exchanges(vec!(Securite::L4Secure)) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core_maitredescomptes.consommer_evenement Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
     }?;
 
     match m.action.as_str() {
@@ -469,7 +469,7 @@ where
 {
     let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
         Ok(t) => t,
-        Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
+        Err(e) => Err(format!("core_maitredescomptes.traiter_transaction Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
 
     let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;

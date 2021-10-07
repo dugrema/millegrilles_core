@@ -282,7 +282,7 @@ async fn consommer_evenement<M>(middleware: &M, message: MessageValideAction)
     // Autorisation : doit etre de niveau 4.secure
     match message.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core_backup.consommer_evenement Evenement autorisation invalide (pas 4.secure) : {}", message.routing_key)),
     }?;
 
     match message.action.as_str() {
@@ -298,7 +298,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
     // Autorisation : doit etre de niveau 4.secure
     match message.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("consommer_requete Requete invalide (pas 3.protege ou 4.secure) : {}", message.routing_key)),
     }?;
 
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
@@ -349,7 +349,7 @@ where
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
     match m.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
         true => Ok(()),
-        false => Err(format!("core_backup.consommer_transaction: Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core_backup.consommer_transaction: Securite invalide (pas 3.protege ou 4.secure) : {}", m.routing_key)),
     }?;
 
     match m.action.as_str() {

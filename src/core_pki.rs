@@ -328,7 +328,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
     // Autorisation : doit etre de niveau 4.secure
     match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core_pki.consommer_commande Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
     }?;
 
     match m.action.as_str() {
@@ -354,7 +354,7 @@ where
     // Autorisation : doit etre de niveau 4.secure
     match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("core_pki.consommer_transaction Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
     }?;
 
     match m.action.as_str() {
