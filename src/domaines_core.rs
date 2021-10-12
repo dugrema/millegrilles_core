@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use log::{debug, error, info, warn};
+use log::{trace, debug, error, info, warn};
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::chiffrage::Chiffreur;
 use millegrilles_common_rust::chrono as chrono;
@@ -267,7 +267,8 @@ async fn consommer(
                 let action = m.action.as_str();
                 let domaine = m.domaine.as_str();
                 let nom_q = m.q.as_str();
-                info!("domaines_middleware.consommer: Traiter message valide (action: {}, rk: {}, q: {}): {:?}", action, rk, nom_q, contenu);
+                debug!("domaines_middleware.consommer: Traiter message valide (action: {}, rk: {}, q: {})", action, rk, nom_q);
+                trace!("domaines_middleware.consommer: Traiter message valide (action: {}, rk: {}, q: {}): {:?}", action, rk, nom_q, contenu);
 
                 // Tenter de mapper avec le nom de la Q (ne fonctionnera pas pour la Q de reponse)
                 let sender = match map_senders.get(nom_q) {

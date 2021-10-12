@@ -19,7 +19,7 @@ use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -658,17 +658,18 @@ async fn traiter_transaction_monitor<M, T>(middleware: &M, transaction: T) -> Re
         T: Transaction
 {
     let mut doc = transaction.contenu();
-    let domaine = match doc.get_str("domaine") {
+    let mut doc_transaction: PresenceMonitor = match convertir_bson_deserializable(doc) {
         Ok(d) => d,
-        Err(e) => Err(format!("Erreur traitement transaction domaine {:?}", e))?
+        Err(e) => Err(format!("core_topologie.traiter_transaction_monitor Erreur conversion transaction monitor : {:?}", e))?
     };
+    let noeud_id = doc_transaction.noeud_id;
 
     let ops = doc! {
-        "$set": {"dirty": false},
-        "$setOnInsert": {CHAMP_DOMAINE: domaine, CHAMP_CREATION: Utc::now()},
+        "$set": {"dirty": false, CHAMP_DOMAINE: doc_transaction.domaine},
+        "$setOnInsert": {CHAMP_NOEUD_ID: &noeud_id, CHAMP_CREATION: Utc::now()},
         "$currentDate": {CHAMP_MODIFICATION: true},
     };
-    let filtre = doc! {CHAMP_DOMAINE: domaine};
+    let filtre = doc! {CHAMP_NOEUD_ID: &noeud_id};
     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
     let options = UpdateOptions::builder().upsert(true).build();
     match collection.update_one(filtre, ops, options).await {
