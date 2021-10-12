@@ -420,9 +420,11 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges(vec![
+        Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure
+    ]) {
         true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+        false => Err(format!("Evenement autorisation invalide (pas exchange autorise)")),
     }?;
 
     match m.action.as_str() {
@@ -594,7 +596,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
     };
 
     if creer_transaction {
-        debug!("Creer transaction topologie pour monitor/noeud {}", &event.domaine);
+        debug!("Creer transaction topologie pour monitor/noeud {:?}", &event.domaine);
 
         let tval = json!({
             "domaine": event.domaine,
@@ -689,7 +691,7 @@ struct PresenceDomaine {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceMonitor {
-    domaine: String,
+    domaine: Option<String>,
     noeud_id: String,
     services: Option<HashMap<String, InfoService>>,
 }
