@@ -219,10 +219,14 @@ pub fn preparer_queues() -> Vec<QueueType> {
     ));
 
     let mut rk_transactions = Vec::new();
-    // rk_transactions.push(ConfigRoutingExchange {
-    //     routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_APPLICATION).into(),
-    //     exchange: Securite::L3Protege
-    // });
+    rk_transactions.push(ConfigRoutingExchange {
+        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_MONITOR).into(),
+        exchange: Securite::L3Protege
+    });
+    rk_transactions.push(ConfigRoutingExchange {
+        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_MONITOR).into(),
+        exchange: Securite::L4Secure
+    });
 
     // Queue de transactions
     queues.push(QueueType::ExchangeQueue (
@@ -402,9 +406,12 @@ where
     debug!("Consommer transaction : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
         true => Ok(()),
-        false => Err(format!("core_topologie.consommer_transaction Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
+        false => match m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+            true => Ok(()),
+            false => Err(format!("core_topologie.consommer_transaction Autorisation invalide (pas 4.secure) : {}", m.routing_key))
+        }
     }?;
 
     match m.action.as_str() {
@@ -725,7 +732,7 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
             // Aucun niveau de securite, abort
             let reponse = match middleware.formatter_reponse(json!({"ok": false}),None) {
                 Ok(m) => m,
-                Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+                Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur preparation reponse applications : {:?}", e))?
             };
             return Ok(Some(reponse))
         }
@@ -738,7 +745,7 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
         let ops = FindOptions::builder().projection(Some(projection)).build();
         match collection.find(filtre, Some(ops)).await {
             Ok(c) => c,
-            Err(e) => Err(format!("Erreur chargement applications : {:?}", e))?
+            Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur chargement applications : {:?}", e))?
         }
     };
 
@@ -773,7 +780,7 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
                     }
                 }
             },
-            Err(e) => warn!("Erreur chargement document : {:?}", e)
+            Err(e) => warn!("core_topologie.liste_applications_deployees  Erreur chargement document : {:?}", e)
         }
     }
 
@@ -781,14 +788,14 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
     let liste = json!({"resultats": apps});
     let reponse = match middleware.formatter_reponse(&liste,None) {
         Ok(m) => m,
-        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+        Err(e) => Err(format!("core_topologie.liste_applications_deployees  Erreur preparation reponse applications : {:?}", e))?
     };
     Ok(Some(reponse))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct InformationMonitor {
-    domaine: String,
+    domaine: Option<String>,
     noeud_id: String,
     securite: String,
     applications: Vec<ApplicationConfiguree>,
@@ -816,7 +823,7 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
         let refus = json!({"ok": false, "err": "Acces refuse"});
         let reponse = match middleware.formatter_reponse(&refus,None) {
             Ok(m) => m,
-            Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+            Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse applications : {:?}", e))?
         };
         return Ok(Some(reponse))
     }
@@ -835,7 +842,7 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
         // let ops = FindOptions::builder().projection(Some(projection)).build();
         match collection.find(filtre, None).await {
             Ok(c) => c,
-            Err(e) => Err(format!("Erreur chargement applications : {:?}", e))?
+            Err(e) => Err(format!("core_topologie.liste_noeuds Erreur chargement applications : {:?}", e))?
         }
     };
 
@@ -846,7 +853,7 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
                 filtrer_doc_id(&mut d);
                 noeuds.push(d);
             },
-            Err(e) => warn!("Erreur lecture document sous liste_noeuds() : {:?}", e)
+            Err(e) => warn!("core_topologie.liste_noeuds Erreur lecture document sous liste_noeuds() : {:?}", e)
         }
     }
 
@@ -854,7 +861,7 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
     let liste = json!({"resultats": noeuds});
     let reponse = match middleware.formatter_reponse(&liste,None) {
         Ok(m) => m,
-        Err(e) => Err(format!("Erreur preparation reponse noeuds : {:?}", e))?
+        Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse noeuds : {:?}", e))?
     };
     Ok(Some(reponse))
 }
@@ -868,7 +875,7 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
         let refus = json!({"ok": false, "err": "Acces refuse"});
         let reponse = match middleware.formatter_reponse(&refus,None) {
             Ok(m) => m,
-            Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+            Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse applications : {:?}", e))?
         };
         return Ok(Some(reponse))
     }
@@ -879,7 +886,7 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
         let ops = FindOptions::builder().projection(Some(projection)).build();
         match collection.find(doc!{}, Some(ops)).await {
             Ok(c) => c,
-            Err(e) => Err(format!("Erreur chargement domaines : {:?}", e))?
+            Err(e) => Err(format!("core_topologie.liste_domaines Erreur chargement domaines : {:?}", e))?
         }
     };
 
@@ -890,7 +897,7 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
                 filtrer_doc_id(&mut d);
                 domaines.push(d);
             },
-            Err(e) => warn!("Erreur lecture document sous liste_noeuds() : {:?}", e)
+            Err(e) => warn!("core_topologie.liste_domaines Erreur lecture document sous liste_noeuds() : {:?}", e)
         }
     }
 
@@ -898,7 +905,7 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
     let liste = json!({"resultats": domaines});
     let reponse = match middleware.formatter_reponse(&liste,None) {
         Ok(m) => m,
-        Err(e) => Err(format!("Erreur preparation reponse domaines : {:?}", e))?
+        Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse domaines : {:?}", e))?
     };
     Ok(Some(reponse))
 }
