@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 
-use log::{debug, info, error};
+use log::{debug, info, warn, error};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::{doc, Document};
 use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, EnveloppeCertificat, EnveloppePrivee, FingerprintCertPublicKey, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
@@ -26,6 +26,7 @@ use millegrilles_common_rust::tokio as tokio;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::Receiver};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptions, VerificateurMessage, verifier_message};
+use millegrilles_common_rust::redis_dao::RedisDao;
 
 use crate::core_pki::{COLLECTION_CERTIFICAT_NOM, DOMAINE_NOM as PKI_DOMAINE_NOM};
 
@@ -36,6 +37,7 @@ pub struct MiddlewareDbPki {
     pub validateur: Arc<ValidateurX509Database>,
     pub generateur_messages: Arc<GenerateurMessagesImpl>,
     pub cles_chiffrage: Mutex<HashMap<String, FingerprintCertPublicKey>>,
+    pub redis: RedisDao,
 }
 
 impl MiddlewareDbPki {}
@@ -245,12 +247,19 @@ pub fn preparer_middleware_pki(
         map
     };
 
+    let redis_url = match configuration.get_configuration_noeud().redis_url.as_ref() {
+        Some(u) => Some(u.as_str()),
+        None => None,
+    };
+    let redis_dao = RedisDao::new(redis_url).expect("connexion redis");
+
     let middleware = Arc::new(MiddlewareDbPki {
         configuration,
         mongo,
         validateur: validateur_db.clone(),
         generateur_messages: generateur_messages_arc.clone(),
         cles_chiffrage: Mutex::new(cles_chiffrage),
+        redis: redis_dao,
     });
 
     let (tx_messages_verifies, rx_messages_verifies) = mpsc::channel(3);
@@ -288,15 +297,52 @@ pub fn preparer_middleware_pki(
 #[async_trait]
 impl ValidateurX509 for MiddlewareDbPki {
     async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>) -> Result<Arc<EnveloppeCertificat>, String> {
-        self.validateur.charger_enveloppe(chaine_pem, fingerprint).await
+        let enveloppe = self.validateur.charger_enveloppe(chaine_pem, fingerprint).await?;
+
+        // Conserver dans redis (reset TTL)
+        match self.redis.save_certificat(&enveloppe).await {
+            Ok(()) => (),
+            Err(e) => warn!("MiddlewareDbPki.charger_enveloppe Erreur sauvegarde certificat dans redis : {:?}", e)
+        }
+
+        Ok(enveloppe)
     }
 
     async fn cacher(&self, certificat: EnveloppeCertificat) -> Arc<EnveloppeCertificat> {
+        match self.redis.save_certificat(&certificat).await {
+            Ok(()) => debug!("Certificat {} sauvegarde dans redis", &certificat.fingerprint),
+            Err(e) => warn!("Erreur cache certificat {} dans redis : {:?}", certificat.fingerprint(), e)
+        }
         self.validateur.cacher(certificat).await
     }
 
     async fn get_certificat(&self, fingerprint: &str) -> Option<Arc<EnveloppeCertificat>> {
-        self.validateur.get_certificat(fingerprint).await
+        match self.validateur.get_certificat(fingerprint).await {
+            Some(c) => Some(c),
+            None => {
+                // Cas special, certificat inconnu a PKI. Tenter de le charger de redis
+                let pems_vec = match self.redis.get_certificat(fingerprint).await {
+                    Ok(c) => match c {
+                        Some(cert_pem) => cert_pem,
+                        None => return None
+                    },
+                    Err(e) => {
+                        warn!("MiddlewareDbPki.get_certificat (2) Erreur acces certificat via redis : {:?}", e);
+                        return None
+                    }
+                };
+
+                // Le certificat est dans redis, on le sauvegarde localement en chargeant l'enveloppe
+                match self.validateur.charger_enveloppe(&pems_vec, None).await {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        warn!("MiddlewareDbPki.get_certificat (1) Erreur acces certificat via redis : {:?}", e);
+                        None
+                    }
+                }
+
+            }
+        }
     }
 
     fn idmg(&self) -> &str {
