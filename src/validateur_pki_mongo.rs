@@ -233,6 +233,12 @@ pub fn preparer_middleware_pki(
         generateur_messages_arc.clone(),
     ));
 
+    let redis_url = match configuration.get_configuration_noeud().redis_url.as_ref() {
+        Some(u) => Some(u.as_str()),
+        None => None,
+    };
+    let redis_dao = RedisDao::new(redis_url).expect("connexion redis");
+
     // Extraire le cert millegrille comme base pour chiffrer les cles secretes
     let cles_chiffrage = {
         let env_privee = configuration.get_configuration_pki().get_enveloppe_privee();
@@ -246,12 +252,6 @@ pub fn preparer_middleware_pki(
 
         map
     };
-
-    let redis_url = match configuration.get_configuration_noeud().redis_url.as_ref() {
-        Some(u) => Some(u.as_str()),
-        None => None,
-    };
-    let redis_dao = RedisDao::new(redis_url).expect("connexion redis");
 
     let middleware = Arc::new(MiddlewareDbPki {
         configuration,
@@ -626,12 +626,19 @@ impl VerificateurMessage for MiddlewareDbPki {
 impl EmetteurCertificat for MiddlewareDbPki {
     async fn emettre_certificat(&self, generateur_message: &impl GenerateurMessages) -> Result<(), String> {
         let enveloppe_privee = self.configuration.get_configuration_pki().get_enveloppe_privee();
-        let message = formatter_message_certificat(enveloppe_privee.enveloppe.as_ref());
+        let enveloppe_certificat = enveloppe_privee.enveloppe.as_ref();
+        let message = formatter_message_certificat(enveloppe_certificat);
         let exchanges = vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege);
 
         let routage = RoutageMessageAction::builder("certificat", "infoCertificat")
             .exchanges(exchanges)
             .build();
+
+        // Sauvegarder dans redis
+        match self.redis.save_certificat(enveloppe_certificat).await {
+            Ok(()) => (),
+            Err(e) => warn!("MiddlewareDbPki.emettre_certificat Erreur sauvegarde certificat local sous redis : {:?}", e)
+        }
 
         match generateur_message.emettre_evenement(routage, &message).await {
             Ok(_) => Ok(()),

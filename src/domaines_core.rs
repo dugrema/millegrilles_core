@@ -149,7 +149,6 @@ pub async fn build() {
 async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
     where M: Middleware
 {
-
     let mut certificat_emis = false;
 
     // Liste de collections de transactions pour tous les domaines geres par Core
