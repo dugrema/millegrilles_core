@@ -340,7 +340,6 @@ impl ValidateurX509 for MiddlewareDbPki {
                         None
                     }
                 }
-
             }
         }
     }
