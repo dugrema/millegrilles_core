@@ -918,7 +918,7 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
     let transaction: TransactionImpl = message.try_into()?;
     let reponse = transaction_ajouter_cle(middleware, transaction).await?;
-    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction.as_ref(), EtatTransaction::Complete).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
 
     Ok(reponse)
 }
@@ -1122,7 +1122,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
     let transaction: TransactionImpl = message.try_into()?;
     let _ = transaction_ajouter_delegation_signee(middleware, transaction).await?;
-    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction.as_ref(), EtatTransaction::Complete).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
 
     // Charger le document de compte et retourner comme reponse
     let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
@@ -1247,7 +1247,7 @@ pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: Message
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
     let transaction: TransactionImpl = message.try_into()?;
     let _ = transaction_maj_usager_delegations(middleware, transaction).await?;
-    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction.as_ref(), EtatTransaction::Complete).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
 
     // Charger le document de compte et retourner comme reponse
     let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
@@ -1314,7 +1314,7 @@ pub async fn commande_supprimer_cles<M>(middleware: &M, message: MessageValideAc
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
     let transaction: TransactionImpl = message.try_into()?;
     let _ = transaction_supprimer_cles(middleware, transaction).await?;
-    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction.as_ref(), EtatTransaction::Complete).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
 
     Ok(middleware.reponse_ok()?)
 }
