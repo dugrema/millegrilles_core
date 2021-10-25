@@ -756,27 +756,28 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
             Ok(mut doc) => {
                 let info_monitor: InformationMonitor = serde_json::from_value(serde_json::to_value(doc)?)?;
 
-                for app in info_monitor.applications {
+                if let Some(applications) = info_monitor.applications {
+                    for app in applications {
+                        let securite = match app.securite {
+                            Some(s) => match securite_enum(s.as_str()) {
+                                Ok(s) => s,
+                                Err(e) => continue   // Skip
+                            },
+                            None => continue  // Skip
+                        };
 
-                    let securite = match app.securite {
-                        Some(s) => match securite_enum(s.as_str()){
-                            Ok(s) => s,
-                            Err(e) => continue   // Skip
-                        },
-                        None => continue  // Skip
-                    };
+                        // Verifier si le demandeur a le niveau de securite approprie
+                        if sec_cascade.contains(&securite) {
 
-                    // Verifier si le demandeur a le niveau de securite approprie
-                    if sec_cascade.contains(&securite) {
+                            // Preparer la valeur a exporter pour les applications
+                            let info_app = json!({
+                                "application": app.application,
+                                "securite": securite_str(&securite),
+                                "url": app.url,
+                            });
 
-                        // Preparer la valeur a exporter pour les applications
-                        let info_app = json!({
-                            "application": app.application,
-                            "securite": securite_str(&securite),
-                            "url": app.url,
-                        });
-
-                        apps.push(info_app);
+                            apps.push(info_app);
+                        }
                     }
                 }
             },
@@ -797,8 +798,8 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
 struct InformationMonitor {
     domaine: Option<String>,
     noeud_id: String,
-    securite: String,
-    applications: Vec<ApplicationConfiguree>,
+    securite: Option<String>,
+    applications: Option<Vec<ApplicationConfiguree>>,
 }
 impl InformationMonitor {
     fn exporter_applications(&self) -> Vec<Value> {
