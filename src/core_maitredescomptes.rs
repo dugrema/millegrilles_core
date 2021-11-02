@@ -864,13 +864,6 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     let reponse_commande = signer_certificat_usager(
         middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
 
-    // debug!("Emettre commande d'autorisation de signature certificat navigateur : {:?}", commande_signature);
-    // let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "signerNavigateur")
-    //     .correlation_id(correlation_id)
-    //     .reply_to(reply_to)
-    //     .build();
-    // middleware.transmettre_commande(routage, &commande_signature, false).await?;
-
     Ok(Some(reponse_commande))    // Le message de reponse va etre emis par le module de signature de certificat
 }
 
@@ -897,12 +890,13 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
     let mut url_post = certissuer_url.clone();
     url_post.set_path("certissuerInterne/signerUsager");
 
-    let commande_signature = json!({
-        "nom_usager": nom_usager_str,
-        "user_id": user_id_str,
-        "csr": csr_str}
-    );
+    // let mut commande_signature = json!({
+    //     "nom_usager": nom_usager_str,
+    //     "user_id": user_id_str,
+    //     "csr": csr_str
+    // });
 
+    let commande_signature = CommandeSignatureUsager::new(nom_usager_str, user_id_str, csr_str, compte);
     let commande_signee = middleware.formatter_message(
         &commande_signature, None::<&str>, None::<&str>, None::<&str>, None)?;
 
@@ -933,6 +927,36 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
 struct ReponseCertificatUsager {
     ok: bool,
     certificat: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandeSignatureUsager {
+    nom_usager: String,
+    user_id: String,
+    csr: String,
+    delegation_globale: Option<String>,
+    compte_prive: Option<bool>,
+}
+
+impl CommandeSignatureUsager {
+    fn new<S,T,U>(nom_usager: S, user_id: T, csr: U, compte: Option<&CompteUsager>) -> Self
+        where S: Into<String>, T: Into<String>, U: Into<String>
+    {
+        let (compte_prive, delegation_globale) = match compte {
+            Some(inner) => {
+                (inner.compte_prive.to_owned(), inner.delegation_globale.to_owned())
+            },
+            None => (None, None)
+        };
+
+        CommandeSignatureUsager {
+            nom_usager: nom_usager.into(),
+            user_id: user_id.into(),
+            csr: csr.into(),
+            delegation_globale,
+            compte_prive,
+        }
+    }
 }
 
 async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -1146,6 +1170,7 @@ struct CompteUsager {
     user_id: String,
     webauthn: Option<Vec<CompteCredential>>,
 
+    compte_prive: Option<bool>,
     delegation_globale: Option<String>,
     delegations_date: Option<DateEpochSeconds>,
 }
