@@ -11,6 +11,7 @@ use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::L3Protege;
 use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMilleGrille, preparer_btree_recursif};
@@ -33,6 +34,7 @@ use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::verificateur::{ValidationOptions, verifier_message, verifier_signature_serialize, verifier_signature_str};
+use millegrilles_common_rust::{reqwest, reqwest::Url};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 use webauthn_rs::base64_data::Base64UrlSafeData;
@@ -598,7 +600,7 @@ struct RequeteListeUsagers {
 }
 
 async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("Consommer inscrire_usager : {:?}", &message.message);
     let transaction: TransactionInscrireUsager = message.message.get_msg().map_contenu(None)?;
@@ -619,11 +621,39 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Res
         },
         None => {
             let uuid_transaction = message.message.get_entete().uuid_transaction.as_str();
-            debug!("L'usager '{}' n'existe pas, on le sauvegarde sous forme de transaction", nom_usager);
+            debug!("L'usager '{}' n'existe pas, on genere un certificat", nom_usager);
+            let user_id = &transaction.user_id;
+            let securite = &transaction.securite;
+
+            // Generer certificat usager si CSR present
+            let certificat = match transaction.csr {
+                Some(csr) => {
+                    let certificat = signer_certificat_usager(middleware, nom_usager, user_id, csr, securite).await?;
+                    Some(certificat)
+                },
+                None => {
+                    debug!("inscrire_usager Inscription usager {} sans CSR initial", nom_usager);
+                    None
+                }
+            };
+
             sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
             let transaction: TransactionImpl = message.clone().try_into()?;
-            let reponse = sauvegarder_inscrire_usager(middleware, transaction).await?;
+            let resultat_inscrire_usager = sauvegarder_inscrire_usager(middleware, transaction).await?;
             marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction, EtatTransaction::Complete).await?;
+
+            let reponse = match certificat {
+                Some(inner) => Some(inner),
+                // {
+                //     // Modifier reponse, on retourne le certificat
+                //     let reponse = json!({"ok": true, "userId": user_id, "certificat": inner});
+                //     match middleware.formatter_reponse(&reponse,None) {
+                //         Ok(m) => return Ok(Some(m)),
+                //         Err(e) => Err(format!("core_maitredescomptes.inscrire_usager Erreur preparation reponse avec certificat : {:?}", e))?
+                //     }
+                // },
+                None => resultat_inscrire_usager
+            };
 
             Ok(reponse)
         }
@@ -682,12 +712,14 @@ struct TransactionInscrireUsager {
     nom_usager: String,
     #[serde(rename="userId")]
     user_id: String,
+    securite: String,
+    csr: Option<String>,
 }
 
 /// Verifie une demande de signature de certificat pour un compte usager
 /// Emet une commande autorisant la signature lorsque c'est approprie
 async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("signer_compte_usager : {:?}", message);
 
@@ -827,6 +859,8 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
         }
     }
 
+    todo!("Changer signature pour utiliser /certissuerInterne");
+
     debug!("Emettre commande d'autorisation de signature certificat navigateur : {:?}", commande_signature);
     let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "signerNavigateur")
         .correlation_id(correlation_id)
@@ -835,6 +869,69 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     middleware.transmettre_commande(routage, &commande_signature, false).await?;
 
     Ok(None)    // Le message de reponse va etre emis par le module de signature de certificat
+}
+
+/// Signe un certificat usager sans autre forme de validation. Utilise certissuerInterne/.
+async fn signer_certificat_usager<M,S,T,U,V>(middleware: &M, nom_usager: S, user_id: T, csr: U, securite: V) -> Result<MessageMilleGrille, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud,
+          S: AsRef<str>, T: AsRef<str>, U: AsRef<str>, V: AsRef<str>
+{
+    let nom_usager_str = nom_usager.as_ref();
+    let user_id_str = user_id.as_ref();
+    let csr_str = csr.as_ref();
+    let securite_str = securite.as_ref();
+    debug!("signer_certificat_usager {} (id: {}, securite: {})", nom_usager_str, user_id_str, securite_str);
+
+    let config = middleware.get_configuration_noeud();
+    let certissuer_url = match config.certissuer_url.as_ref() {
+        Some(inner) => inner,
+        None => Err(format!("core_maitredescomptes.signer_certificat_usager Certissuer URL manquant"))?
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(core::time::Duration::new(7, 0))
+        .build()?;
+
+    let mut url_post = certissuer_url.clone();
+    url_post.set_path("certissuerInterne/signerUsager");
+
+    let commande_signature = json!({
+        "nom_usager": nom_usager_str,
+        "user_id": user_id_str,
+        "securite": securite_str,
+        "csr": csr_str}
+    );
+
+    let commande_signee = middleware.formatter_message(
+        &commande_signature, None::<&str>, None::<&str>, None::<&str>, None)?;
+
+    let response = match client.post(url_post).json(&commande_signee).send().await {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e))?
+    };
+
+    debug!("ElasticSearchDaoImpl.es_preparer status: {}, {:?}", response.status(), response);
+    let reponse_commande = match response.status().is_success() {
+        true => {
+            let reponse_json: ReponseCertificatUsager = response.json().await?;
+            debug!("Reponse certificat : {:?}", reponse_json);
+            middleware.formatter_reponse(reponse_json, None)?
+        },
+        false => {
+            let status = response.status().clone();
+            let msg = response.text().await?;
+            error!("core_maitredescomptes.signer_certificat_usager Erreur signature {:?}", msg);
+            Err(format!("core_maitredescomptes.signer_certificat_usager Erreur serveur signature certificat usager, status {:?}, message serveur : {:?}", status, msg))?
+        }
+    };
+
+    Ok(reponse_commande)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseCertificatUsager {
+    ok: bool,
+    certificat: Vec<String>,
 }
 
 async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
