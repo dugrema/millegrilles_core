@@ -628,7 +628,7 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Res
             // Generer certificat usager si CSR present
             let certificat = match transaction.csr {
                 Some(csr) => {
-                    let certificat = signer_certificat_usager(middleware, nom_usager, user_id, csr, securite).await?;
+                    let certificat = signer_certificat_usager(middleware, nom_usager, user_id, csr, None).await?;
                     Some(certificat)
                 },
                 None => {
@@ -719,7 +719,7 @@ struct TransactionInscrireUsager {
 /// Verifie une demande de signature de certificat pour un compte usager
 /// Emet une commande autorisant la signature lorsque c'est approprie
 async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("signer_compte_usager : {:?}", message);
 
@@ -760,7 +760,7 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
 
     // Verifier si l'usager a deja des creds WebAuthn (doit signer sa demande) ou non
     let compte_usager: CompteUsager = convertir_bson_deserializable(doc_usager.clone())?;
-    let webauthn_present = match compte_usager.webauthn {
+    let webauthn_present = match &compte_usager.webauthn {
         Some(vc) => {
             ! vc.is_empty()
         },
@@ -859,28 +859,30 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
         }
     }
 
-    todo!("Changer signature pour utiliser /certissuerInterne");
+    let nom_usager = &compte_usager.nom_usager;
+    let securite = SECURITE_1_PUBLIC;
+    let reponse_commande = signer_certificat_usager(
+        middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
 
-    debug!("Emettre commande d'autorisation de signature certificat navigateur : {:?}", commande_signature);
-    let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "signerNavigateur")
-        .correlation_id(correlation_id)
-        .reply_to(reply_to)
-        .build();
-    middleware.transmettre_commande(routage, &commande_signature, false).await?;
+    // debug!("Emettre commande d'autorisation de signature certificat navigateur : {:?}", commande_signature);
+    // let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "signerNavigateur")
+    //     .correlation_id(correlation_id)
+    //     .reply_to(reply_to)
+    //     .build();
+    // middleware.transmettre_commande(routage, &commande_signature, false).await?;
 
-    Ok(None)    // Le message de reponse va etre emis par le module de signature de certificat
+    Ok(Some(reponse_commande))    // Le message de reponse va etre emis par le module de signature de certificat
 }
 
 /// Signe un certificat usager sans autre forme de validation. Utilise certissuerInterne/.
-async fn signer_certificat_usager<M,S,T,U,V>(middleware: &M, nom_usager: S, user_id: T, csr: U, securite: V) -> Result<MessageMilleGrille, Box<dyn Error>>
+async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_id: T, csr: U, compte: Option<&CompteUsager>) -> Result<MessageMilleGrille, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud,
-          S: AsRef<str>, T: AsRef<str>, U: AsRef<str>, V: AsRef<str>
+          S: AsRef<str>, T: AsRef<str>, U: AsRef<str>
 {
     let nom_usager_str = nom_usager.as_ref();
     let user_id_str = user_id.as_ref();
     let csr_str = csr.as_ref();
-    let securite_str = securite.as_ref();
-    debug!("signer_certificat_usager {} (id: {}, securite: {})", nom_usager_str, user_id_str, securite_str);
+    debug!("signer_certificat_usager {} (id: {})", nom_usager_str, user_id_str);
 
     let config = middleware.get_configuration_noeud();
     let certissuer_url = match config.certissuer_url.as_ref() {
@@ -898,7 +900,6 @@ async fn signer_certificat_usager<M,S,T,U,V>(middleware: &M, nom_usager: S, user
     let commande_signature = json!({
         "nom_usager": nom_usager_str,
         "user_id": user_id_str,
-        "securite": securite_str,
         "csr": csr_str}
     );
 
