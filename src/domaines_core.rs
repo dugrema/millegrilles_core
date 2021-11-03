@@ -175,7 +175,7 @@ async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
         middleware.entretien_validateur().await;
 
         if prochain_chargement_certificats_maitredescles < maintenant {
-            match middleware.charger_certificats_chiffrage().await {
+            match middleware.charger_certificats_chiffrage(middleware.get_enveloppe_privee().enveloppe.as_ref()).await {
                 Ok(()) => {
                     prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
                     debug!("Prochain chargement cert maitredescles: {:?}", prochain_chargement_certificats_maitredescles);
