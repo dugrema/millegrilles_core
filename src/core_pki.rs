@@ -20,6 +20,8 @@ use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_m
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
+use millegrilles_common_rust::{reqwest, reqwest::Url};
+use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio;
@@ -27,6 +29,7 @@ use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
+use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 
@@ -45,6 +48,7 @@ const PKI_REQUETE_CERTIFICAT: &str = "infoCertificat";
 const PKI_REQUETE_CERTIFICAT_PAR_PK: &str = "certificatParPk";
 const PKI_COMMANDE_SAUVEGARDER_CERTIFICAT: &str = "certificat";
 const PKI_COMMANDE_NOUVEAU_CERTIFICAT: &str = "nouveauCertificat";
+const PKI_COMMANDE_SIGNER_CSR: &str = "signerCsr";
 const PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
 const NOM_Q_TRANSACTIONS_PKI: &str = "CorePki/transactions";
 const NOM_Q_TRANSACTIONS_VOLATILS: &str = "CorePki/volatils";
@@ -163,6 +167,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.CorePki.certificat".into(), exchange: Securite::L3Protege});
     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.Pki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.CorePki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
+    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.CorePki.{}", PKI_COMMANDE_SIGNER_CSR), exchange: Securite::L3Protege});
 
     let mut queues = Vec::new();
 
@@ -326,9 +331,14 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
     debug!("Consommer commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
         true => Ok(()),
-        false => Err(format!("core_pki.consommer_commande Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
+        false => {
+            match m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+                true => Ok(()),
+                false => Err(format!("core_pki.consommer_commande Autorisation invalide (pas 4.secure/delegation globale) : {}", m.routing_key))
+            }
+        },
     }?;
 
     match m.action.as_str() {
@@ -339,6 +349,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
 
         // Commandes specifiques au domaine
         PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware, m).await,
+        PKI_COMMANDE_SIGNER_CSR => commande_signer_csr(middleware, m).await,
 
         // Commandes inconnues
         _ => Err(format!("Commande Pki inconnue : {}, message dropped", m.action))?,
@@ -502,6 +513,56 @@ where
 
     let reponse = middleware.formatter_reponse(json!({"ok": true}), None)?;
     Ok(Some(reponse))
+}
+
+/// Commande de relai vers le certissuer pour signer un CSR. La commande doit etre signee par
+/// une delegation globale (e.g. proprietaire) ou etre un renouvellement pour les memes roles.
+async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: GenerateurMessages + IsConfigNoeud
+{
+    let config = middleware.get_configuration_noeud();
+    let certissuer_url = match config.certissuer_url.as_ref() {
+        Some(inner) => inner,
+        None => Err(format!("core_maitredescomptes.signer_certificat_usager Certissuer URL manquant"))?
+    };
+
+    let client = reqwest::Client::builder()
+        .timeout(core::time::Duration::new(7, 0))
+        .build()?;
+
+    let mut url_post = certissuer_url.clone();
+    url_post.set_path("certissuerInterne/signerCsr");
+
+    // On retransmet le message recu tel quel
+    let commande = &m.message.parsed;
+    let response = match client.post(url_post).json(&commande).send().await {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e))?
+    };
+
+    debug!("commande_signer_csr status: {}, {:?}", response.status(), response);
+    let reponse_commande = match response.status().is_success() {
+        true => {
+            let reponse_json: ReponseCertificatSigne = response.json().await?;
+            debug!("commande_signer_csr Reponse certificat : {:?}", reponse_json);
+            middleware.formatter_reponse(reponse_json, None)?
+        },
+        false => {
+            let status = response.status().clone();
+            let msg = response.text().await?;
+            error!("core_pki.commande_signer_csr Erreur signature {:?}", msg);
+            // Err(format!("core_pki.commande_signer_csr Erreur serveur signature certificat pour CSR, status {:?}, message serveur : {:?}", status, msg))?
+            middleware.formatter_reponse(json!({"ok": false, "code": status.as_str(), "err": format!("Erreur signature : {:?}", msg).as_str()}), None)?
+        }
+    };
+
+    Ok(Some(reponse_commande))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseCertificatSigne {
+    ok: bool,
+    certificat: Vec<String>,
 }
 
 async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
