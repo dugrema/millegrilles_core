@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use log::{debug, info, warn, error};
 use millegrilles_common_rust::async_trait::async_trait;
+use millegrilles_common_rust::backup::{BackupStarter, CommandeBackup, thread_backup};
 use millegrilles_common_rust::bson::{doc, Document};
 use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, EnveloppeCertificat, EnveloppePrivee, FingerprintCertPublicKey, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur, Mgs2CipherData};
@@ -27,6 +28,7 @@ use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::Receiver};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptions, VerificateurMessage, verifier_message};
 use millegrilles_common_rust::redis_dao::RedisDao;
+use millegrilles_common_rust::tokio::sync::mpsc::Sender;
 
 use crate::core_pki::{COLLECTION_CERTIFICAT_NOM, DOMAINE_NOM as PKI_DOMAINE_NOM};
 
@@ -38,6 +40,7 @@ pub struct MiddlewareDbPki {
     pub generateur_messages: Arc<GenerateurMessagesImpl>,
     pub cles_chiffrage: Mutex<HashMap<String, FingerprintCertPublicKey>>,
     pub redis: RedisDao,
+    tx_backup: Sender<CommandeBackup>,
 }
 
 impl MiddlewareDbPki {}
@@ -253,6 +256,8 @@ pub fn preparer_middleware_pki(
         map
     };
 
+    let (tx_backup, rx_backup) = mpsc::channel::<CommandeBackup>(5);
+
     let middleware = Arc::new(MiddlewareDbPki {
         configuration,
         mongo,
@@ -260,6 +265,7 @@ pub fn preparer_middleware_pki(
         generateur_messages: generateur_messages_arc.clone(),
         cles_chiffrage: Mutex::new(cles_chiffrage),
         redis: redis_dao,
+        tx_backup,
     });
 
     let (tx_messages_verifies, rx_messages_verifies) = mpsc::channel(3);
@@ -290,6 +296,8 @@ pub fn preparer_middleware_pki(
         mq_executor.tx_interne.clone(),
         true   // On ne fait par de requete.certificat.FP (cause avalanche avec CorePki)
     )));
+
+    futures.push(tokio::spawn(thread_backup(middleware.clone(), rx_backup)));
 
     (middleware, rx_messages_verifies, rx_triggers, futures)
 }
@@ -654,5 +662,12 @@ impl EmetteurCertificat for MiddlewareDbPki {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Erreur emettre_certificat: {:?}", e)),
         }
+    }
+}
+
+#[async_trait]
+impl BackupStarter for MiddlewareDbPki {
+    fn get_tx_backup(&self) -> Sender<CommandeBackup> {
+        self.tx_backup.clone()
     }
 }
