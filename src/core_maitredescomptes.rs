@@ -870,6 +870,16 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
         };
         let resultat_update_activations = collection_usagers.update_one(filtre, ops, None).await?;
         debug!("commande_signer_compte_usager Update activations : {:?}", resultat_update_activations);
+
+        // Emettre evenement de signature de cle
+        let evenement_activation = json!({"fingerprint_pk": fingerprint_pk});
+        // domaine_action = 'evenement.MaitreDesComptes.' + ConstantesMaitreDesComptes.EVENEMENT_ACTIVATION_FINGERPRINTPK
+        let routage_evenement = RoutageMessageAction::builder(
+            DOMAINE_NOM, "activationFingerprintPk")
+            .exchanges(vec![Securite::L2Prive])
+            .build();
+        middleware.emettre_evenement(routage_evenement, &evenement_activation).await?;
+
     } else {
       debug!("commande_signer_compte_usager Activation compte {} via meme appareil (pas tierce)", nom_usager);
     }
