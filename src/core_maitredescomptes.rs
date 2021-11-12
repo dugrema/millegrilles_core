@@ -841,28 +841,40 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
         }
     };
 
-    // Signature est autorisee, on genere la commande de signature
-    // Emettre le compte usager pour qu'il soit signe et retourne au demandeur (serveur web)
-    let mut commande_signature = json!({
-        CHAMP_USER_ID: user_id,
-        "compte": convertir_bson_value(doc_usager)?,
-        "csr": csr,
-        "activationTierce": activation_tierce,
-    });
-
-    // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
-    // Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
-    if let Some(activation_tierce) = commande.activation_tierce {
-        if activation_tierce {
-            let commande_signature_obj = commande_signature.as_object_mut().expect("mut");
-            commande_signature_obj.insert("activation_tierce".into(), Value::Bool(true));
-        }
-    }
-
     let nom_usager = &compte_usager.nom_usager;
     let securite = SECURITE_1_PUBLIC;
     let reponse_commande = signer_certificat_usager(
         middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
+
+    // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
+    debug!("commande_signer_compte_usager Activation tierce : {:?}", activation_tierce);
+    if let Some(true) = activation_tierce {
+        // Calculer fingerprint du nouveau certificat
+        let reponsecert_obj: ReponseCertificatUsager = reponse_commande.map_contenu(None)?;
+        let pem = reponsecert_obj.certificat;
+        let enveloppe_cert = middleware.charger_enveloppe(&pem, None).await?;
+        let fingerprint_pk = enveloppe_cert.fingerprint_pk()?;
+
+        // let fingerprint_pk = String::from("FINGERPRINT_DUMMY");
+        // Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
+        let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+        let filtre = doc! {CHAMP_USER_ID: user_id};
+        let mut commande_set = doc! {
+            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): false,
+            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_activation"): Utc::now(),
+            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_association"): None::<&str>,
+        };
+        let ops = doc! {
+            "$set": commande_set,
+            "$currentDate": {CHAMP_MODIFICATION: true}
+        };
+        let resultat_update_activations = collection_usagers.update_one(filtre, ops, None).await?;
+        debug!("commande_signer_compte_usager Update activations : {:?}", resultat_update_activations);
+    } else {
+      debug!("commande_signer_compte_usager Activation compte {} via meme appareil (pas tierce)", nom_usager);
+    }
+
+    debug!("commande_signer_compte_usager Reponse commande : {:?}", reponse_commande);
 
     Ok(Some(reponse_commande))    // Le message de reponse va etre emis par le module de signature de certificat
 }
@@ -905,7 +917,7 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
         Err(e) => Err(format!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e))?
     };
 
-    debug!("ElasticSearchDaoImpl.es_preparer status: {}, {:?}", response.status(), response);
+    debug!("core_maitredescomptes.signer_certificat_usager status: {}, {:?}", response.status(), response);
     let reponse_commande = match response.status().is_success() {
         true => {
             let reponse_json: ReponseCertificatUsager = response.json().await?;
