@@ -58,7 +58,7 @@ const REQUETE_LISTE_USAGERS: &str = "getListeUsagers";
 
 // const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
 const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
-const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
+// const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
 
 const TRANSACTION_INSCRIRE_USAGER: &str = "inscrireUsager";
 const TRANSACTION_AJOUTER_CLE: &str = "ajouterCle";
@@ -75,6 +75,7 @@ const CHAMP_USER_ID: &str = "userId";
 const CHAMP_USAGER_NOM: &str = "nomUsager";
 const CHAMP_COMPTE_PRIVE: &str = "compte_prive";
 const CHAMP_DELEGATION_GLOBALE: &str = "delegation_globale";
+const CHAMP_DELEGATION_DATE: &str = "delegations_date";
 const CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
 const CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: &str = "activations_par_fingerprint_pk";
 const CHAMP_WEBAUTHN: &str = "webauthn";
@@ -190,7 +191,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
         // Commandes
         COMMANDE_SIGNER_COMPTEUSAGER,
-        COMMANDE_ACTIVATION_TIERCE,
+        // COMMANDE_ACTIVATION_TIERCE,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L2Prive});
@@ -381,7 +382,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
 
             // Commandes standard
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
-            COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware, m).await,
+            // COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware, m).await,
 
             // Commandes 3.protegees
             _ => {
@@ -1332,42 +1333,42 @@ struct ConfirmationSigneeDelegationGlobale {
 }
 
 /// Conserver confirmation d'activation tierce (certificat signe)
-async fn activation_tierce<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao,
-{
-    debug!("Consommer activation_tierce : {:?}", &message.message);
-    let reponse_activation: ReponseActivationTierce = message.message.get_msg().map_contenu(None)?;
-    let fingerprint_pk = reponse_activation.fingerprint_pk.as_str();
-
-    let filtre = doc! {CHAMP_USER_ID: reponse_activation.user_id};
-    let ops = doc! {
-        "$set": {
-            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): false,
-        },
-        "$currentDate": {
-            CHAMP_MODIFICATION: true,
-            format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_activation"): true,
-        }
-    };
-    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    let resultat = collection.update_one(filtre, ops, None).await?;
-    debug!("Resultat maj activation_tierce {:?}", resultat);
-
-    // Emettre evenement de maj pour le navigateur en attente
-    let activation = json!({CHAMP_FINGERPRINT_PK: fingerprint_pk});
-    let routage = RoutageMessageAction::builder("CoreMaitreDesComptes", "activationFingerprintPk")
-        .exchanges(vec!(Securite::L2Prive, Securite::L3Protege))
-        .build();
-    middleware.emettre_evenement(routage, &activation).await?;
-
-    // Ok
-    let ok = json!({"ok": true, CHAMP_FINGERPRINT_PK: fingerprint_pk});
-    debug!("activation_tierce ok : {:?}", ok);
-    match middleware.formatter_reponse(&ok, None) {
-        Ok(m) => return Ok(Some(m)),
-        Err(e) => Err(format!("activation_tierce Erreur preparation reponse (2) : {:?}", e))?
-    }
-}
+// async fn activation_tierce<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+//     where M: ValidateurX509 + GenerateurMessages + MongoDao,
+// {
+//     debug!("Consommer activation_tierce : {:?}", &message.message);
+//     let reponse_activation: ReponseActivationTierce = message.message.get_msg().map_contenu(None)?;
+//     let fingerprint_pk = reponse_activation.fingerprint_pk.as_str();
+//
+//     let filtre = doc! {CHAMP_USER_ID: reponse_activation.user_id};
+//     let ops = doc! {
+//         "$set": {
+//             format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): false,
+//         },
+//         "$currentDate": {
+//             CHAMP_MODIFICATION: true,
+//             format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_activation"): true,
+//         }
+//     };
+//     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+//     let resultat = collection.update_one(filtre, ops, None).await?;
+//     debug!("Resultat maj activation_tierce {:?}", resultat);
+//
+//     // Emettre evenement de maj pour le navigateur en attente
+//     let activation = json!({CHAMP_FINGERPRINT_PK: fingerprint_pk});
+//     let routage = RoutageMessageAction::builder("CoreMaitreDesComptes", "activationFingerprintPk")
+//         .exchanges(vec!(Securite::L2Prive, Securite::L3Protege))
+//         .build();
+//     middleware.emettre_evenement(routage, &activation).await?;
+//
+//     // Ok
+//     let ok = json!({"ok": true, CHAMP_FINGERPRINT_PK: fingerprint_pk});
+//     debug!("activation_tierce ok : {:?}", ok);
+//     match middleware.formatter_reponse(&ok, None) {
+//         Ok(m) => return Ok(Some(m)),
+//         Err(e) => Err(format!("activation_tierce Erreur preparation reponse (2) : {:?}", e))?
+//     }
+// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ReponseActivationTierce {
@@ -1424,8 +1425,9 @@ pub async fn transaction_maj_usager_delegations<M, T>(middleware: &M, transactio
 
     let filtre = doc! {CHAMP_USER_ID: user_id};
     let set_ops = doc! {
-        "compte_prive": commande.compte_prive,
-        "delegation_globale": commande.delegation_globale,
+        CHAMP_COMPTE_PRIVE: commande.compte_prive,
+        CHAMP_DELEGATION_GLOBALE: commande.delegation_globale,
+        CHAMP_DELEGATION_DATE: &DateEpochSeconds::now(),
     };
     let ops = doc! {
         "$set": set_ops,
