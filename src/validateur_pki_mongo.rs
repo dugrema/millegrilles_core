@@ -219,7 +219,7 @@ impl ValidateurX509 for ValidateurX509Database {
 pub fn preparer_middleware_pki(
     queues: Vec<QueueType>,
     listeners: Option<Mutex<Callback<'static, EventMq>>>
-) -> (Arc<MiddlewareDbPki>, Receiver<TypeMessage>, Receiver<TypeMessage>, FuturesUnordered<JoinHandle<()>>) {
+) -> (Arc<MiddlewareDbPki>, Receiver<TypeMessage>, Receiver<TypeMessage>, Receiver<TypeMessage>, FuturesUnordered<JoinHandle<()>>) {
     let (
         configuration,
         validateur,
@@ -269,6 +269,7 @@ pub fn preparer_middleware_pki(
     });
 
     let (tx_messages_verifies, rx_messages_verifies) = mpsc::channel(3);
+    let (tx_messages_verif_reply, rx_messages_verif_reply) = mpsc::channel(3);
     let (tx_triggers, rx_triggers) = mpsc::channel(3);
 
     let (tx_certificats_manquants, rx_certificats_manquants) = mpsc::channel(10);
@@ -284,6 +285,13 @@ pub fn preparer_middleware_pki(
 
     futures.push(tokio::spawn(recevoir_messages(
         middleware.clone(),
+        mq_executor.rx_reply,
+        tx_messages_verif_reply.clone(),
+        tx_certificats_manquants.clone()
+    )));
+
+    futures.push(tokio::spawn(recevoir_messages(
+        middleware.clone(),
         mq_executor.rx_triggers,
         tx_triggers,
         tx_certificats_manquants.clone()
@@ -293,13 +301,13 @@ pub fn preparer_middleware_pki(
     futures.push(tokio::spawn(task_requetes_certificats(
         middleware.clone(),
         rx_certificats_manquants,
-        mq_executor.tx_interne.clone(),
+        mq_executor.tx_reply.clone(),
         true   // On ne fait par de requete.certificat.FP (cause avalanche avec CorePki)
     )));
 
     futures.push(tokio::spawn(thread_backup(middleware.clone(), rx_backup)));
 
-    (middleware, rx_messages_verifies, rx_triggers, futures)
+    (middleware, rx_messages_verifies, rx_messages_verif_reply, rx_triggers, futures)
 }
 
 #[async_trait]

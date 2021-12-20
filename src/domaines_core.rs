@@ -65,6 +65,7 @@ pub async fn build() {
     let (
         middleware,
         rx_messages_verifies,
+        rs_messages_verif_reply,
         rx_triggers,
         future_recevoir_messages
     ) = preparer_middleware_pki(queues, listeners);
@@ -125,6 +126,9 @@ pub async fn build() {
         // Creer consommateurs MQ globaux pour rediriger messages recus vers Q internes appropriees
         futures.push(spawn(
             consommer( middleware.clone(), rx_messages_verifies, map_senders.clone())
+        ));
+        futures.push(spawn(
+            consommer( middleware.clone(), rs_messages_verif_reply, map_senders.clone())
         ));
         futures.push(spawn(
             consommer( middleware.clone(), rx_triggers, map_senders)
