@@ -225,7 +225,7 @@ fn verifier_commande<S>(commande: &CommandeWebauthn, message: &S) -> Result<bool
         CommandeWebauthn::DemandeSignerCertificat(h) => {
             // match contenu.get("demandeCertificat") {
             //     Some(d) => Ok(
-                    Ok(verifier_hachage_serializable(h.as_slice(), Code::Sha2_512, &contenu)?)
+                    Ok(verifier_hachage_serializable(h.as_slice(), Code::Blake2b512, &contenu)?)
             //     ),
             //     None => Err("Element 'demandeCertificat' absent de la commande")?
             // }
