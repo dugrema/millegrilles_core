@@ -59,7 +59,7 @@ static mut REGLES_VALIDATION_CATALOGUE: VerificateurRegles = VerificateurRegles 
 
 /// Initialise les regles de validation pour le catalogue
 pub fn init_regles_validation() {
-    let regle_idmg = RegleValidationIdmg { idmg: String::from("z2W2ECnP9eauNXD628aaiURj6tJfSYiygTaffC1bTbCNHCtomhoR7s") };
+    let regle_idmg = RegleValidationIdmg { idmg: String::from("zeYncRqEqZ6eTEmUZ8whJFuHG796eSvCTWE4M432izXrp22bAtwGm7Jf") };
     unsafe {
         REGLES_VALIDATION_CATALOGUE.ajouter_disjointe(regle_idmg);
         debug!("init_regles_validation Regles de validation catalogue chargees : {:?}", REGLES_VALIDATION_CATALOGUE);
