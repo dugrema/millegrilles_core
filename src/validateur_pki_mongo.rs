@@ -7,7 +7,8 @@ use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::{BackupStarter, CommandeBackup, thread_backup};
 use millegrilles_common_rust::bson::{doc, Document};
 use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, EnveloppeCertificat, EnveloppePrivee, FingerprintCertPublicKey, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
-use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur, Mgs2CipherData};
+use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur, MgsCipherData};
+use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, DecipherMgs3, Mgs3CipherData, Mgs3CipherKeys};
 use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMessagesDb, ConfigurationMq, ConfigurationNoeud, ConfigurationPki, IsConfigNoeud};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMilleGrille, MessageSerialise};
@@ -481,7 +482,7 @@ impl IsConfigNoeud for MiddlewareDbPki {
 }
 
 #[async_trait]
-impl Chiffreur for MiddlewareDbPki {
+impl Chiffreur<CipherMgs3, Mgs3CipherKeys> for MiddlewareDbPki {
     fn get_publickeys_chiffrage(&self) -> Vec<FingerprintCertPublicKey> {
         let guard = self.cles_chiffrage.lock().expect("lock");
 
@@ -489,6 +490,11 @@ impl Chiffreur for MiddlewareDbPki {
         let vals: Vec<FingerprintCertPublicKey> = guard.iter().map(|v| v.1.to_owned()).collect();
 
         vals
+    }
+
+    fn get_cipher(&self) -> Result<CipherMgs3, Box<dyn Error>> {
+        let fp_public_keys = self.get_publickeys_chiffrage();
+        Ok(CipherMgs3::new(&fp_public_keys)?)
     }
 
     async fn charger_certificats_chiffrage(&self, cert_local: &EnveloppeCertificat) -> Result<(), Box<dyn Error>> {
@@ -612,9 +618,9 @@ impl Chiffreur for MiddlewareDbPki {
 }
 
 #[async_trait]
-impl Dechiffreur for MiddlewareDbPki {
+impl Dechiffreur<DecipherMgs3, Mgs3CipherData> for MiddlewareDbPki {
 
-    async fn get_cipher_data(&self, hachage_bytes: &str) -> Result<Mgs2CipherData, Box<dyn Error>> {
+    async fn get_cipher_data(&self, hachage_bytes: &str) -> Result<Mgs3CipherData, Box<dyn Error>> {
         let requete = {
             let mut liste_hachage_bytes = Vec::new();
             liste_hachage_bytes.push(hachage_bytes);
@@ -637,9 +643,15 @@ impl Dechiffreur for MiddlewareDbPki {
         contenu_dechiffrage.to_cipher_data()
     }
 
-    // fn get_enveloppe_privee_dechiffrage(&self) -> Arc<EnveloppePrivee> {
-    //     self.configuration.get_configuration_pki().get_enveloppe_privee().clone()
-    // }
+    async fn get_decipher(&self, hachage_bytes: &str) -> Result<DecipherMgs3, Box<dyn Error>> {
+        let mut info_cle = self.get_cipher_data(hachage_bytes).await?;
+        let env_privee = self.get_enveloppe_privee();
+        let cle_privee = env_privee.cle_privee();
+        info_cle.dechiffrer_cle(cle_privee)?;
+
+        Ok(DecipherMgs3::new(&info_cle)?)
+    }
+
 }
 
 impl VerificateurMessage for MiddlewareDbPki {

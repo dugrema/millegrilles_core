@@ -12,6 +12,7 @@ use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur};
+use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, DecipherMgs3, Mgs3CipherData, Mgs3CipherKeys};
 use millegrilles_common_rust::chrono::{Utc, Timelike};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::constantes::*;
@@ -254,7 +255,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
 }
 
 async fn entretien<M>(_middleware: Arc<M>)
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigurationPki + IsConfigNoeud + FormatteurMessage + Chiffreur + Dechiffreur
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigurationPki + IsConfigNoeud + FormatteurMessage + Chiffreur<CipherMgs3, Mgs3CipherKeys> + Dechiffreur<DecipherMgs3, Mgs3CipherData>
 {
     let mut catalogues_charges = false;
 
