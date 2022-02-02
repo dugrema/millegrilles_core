@@ -332,7 +332,12 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
     match m.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
+        false => {
+            match m.verifier_delegation_globale(String::from(DELEGATION_GLOBALE_PROPRIETAIRE)) {
+                true => Ok(()),
+                false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)"))
+            }
+        },
     }?;
 
     match m.action.as_str() {
@@ -467,12 +472,14 @@ async fn traiter_commande_application<M>(middleware: &M, commande: MessageValide
 where M: ValidateurX509 + MongoDao + GenerateurMessages
 {
     // let message = commande.message.get_msg();
+    debug!("Traitement catalogue application {:?}", commande);
 
     let value_catalogue: MessageMilleGrille = match commande.message.parsed.contenu.get("catalogue") {
         Some(v) => serde_json::from_value(v.to_owned())?,
         None => Err(format!("Commande application sans champ catalogue"))?
     };
     let mut catalogue = MessageSerialise::from_parsed(value_catalogue)?;
+    debug!("Catalogue charge : {:?}", catalogue);
 
     let info_catalogue: CatalogueApplication = serde_json::from_value(Value::Object(catalogue.get_msg().contenu.to_owned()))?;
     debug!("Information catalogue charge : {:?}", info_catalogue);
