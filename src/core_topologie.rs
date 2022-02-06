@@ -55,6 +55,7 @@ const REQUETE_LISTE_DOMAINES: &str = "listeDomaines";
 const REQUETE_LISTE_NOEUDS: &str = "listeNoeuds";
 const REQUETE_INFO_DOMAINE: &str = "infoDomaine";
 const REQUETE_INFO_NOEUD: &str = "infoNoeud";
+const REQUETE_RESOLVE_IDMG: &str = "resolveIdmg";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_MONITOR: &str = "monitor";
@@ -176,11 +177,12 @@ pub fn preparer_queues() -> Vec<QueueType> {
     }
 
     // RK 2.prive
-    let requetes_protegees = vec![
+    let requetes_privees = vec![
         REQUETE_APPLICATIONS_DEPLOYEES,
         REQUETE_INFO_NOEUD,
+        REQUETE_RESOLVE_IDMG,
     ];
-    for req in requetes_protegees {
+    for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
     }
 
@@ -360,6 +362,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
                 REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
                 REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
+                REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -909,6 +912,50 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
         Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse domaines : {:?}", e))?
     };
     Ok(Some(reponse))
+}
+
+async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("resolve_idmg");
+    if ! message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+        let refus = json!({"ok": false, "err": "Acces refuse"});
+        let reponse = match middleware.formatter_reponse(&refus,None) {
+            Ok(m) => m,
+            Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse applications : {:?}", e))?
+        };
+        return Ok(Some(reponse))
+    }
+
+    let requete: RequeteResolveIdmg = message.message.parsed.map_contenu(None)?;
+
+    // TODO Faire requete pour trouver idmg
+    // Stub, retourner toujours local
+    let idmg = middleware.get_enveloppe_privee().idmg()?;
+    let resolved_dns = match requete.dns {
+        Some(d) => {
+            let mut map_reponse: HashMap<String,String> = HashMap::new();
+            for dns in d {
+                map_reponse.insert(dns.clone(), idmg.clone());
+            }
+            Some(map_reponse)
+        },
+        None => None,
+    };
+
+    let liste = json!({"dns": resolved_dns});
+    let reponse = match middleware.formatter_reponse(&liste,None) {
+        Ok(m) => m,
+        Err(e) => Err(format!("core_topologie.resolve_idmg Erreur preparation reponse resolve idmg : {:?}", e))?
+    };
+
+    Ok(Some(reponse))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteResolveIdmg {
+    dns: Option<Vec<String>>,
 }
 
 #[cfg(test)]
