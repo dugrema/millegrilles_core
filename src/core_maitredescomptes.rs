@@ -621,6 +621,7 @@ async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValideActio
 
     {   // Extraire la liste des usagers de la DB
         let filtre = doc! { CHAMP_USAGER_NOM: {"$in": requete.noms_usagers}};
+        debug!("get_userid_par_nomusager Requete noms usagers, filtre : {:?}", filtre);
         let projection = doc! {
             CHAMP_USAGER_NOM: true,
             CHAMP_USER_ID: true,
@@ -631,6 +632,7 @@ async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValideActio
 
         while let Some(d) = curseur.next().await {
             let mut doc_usager = d?;
+            debug!("get_userid_par_nomusager Usager trouve : {:?}", doc_usager);
             let nom_usager = doc_usager.get_str(CHAMP_USAGER_NOM)?;
             let user_id = doc_usager.get_str(CHAMP_USER_ID)?;
             usagers.insert(nom_usager.into(), Some(user_id.into()));
