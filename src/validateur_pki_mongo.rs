@@ -225,7 +225,7 @@ pub fn preparer_middleware_pki(
         configuration,
         validateur,
         mongo,
-        mq_executor,
+        mq_executor_config,
         generateur_messages
     ) = configurer_queues(queues, listeners);
 
@@ -276,24 +276,26 @@ pub fn preparer_middleware_pki(
     let (tx_certificats_manquants, rx_certificats_manquants) = mpsc::channel(10);
 
     let futures: FuturesUnordered<JoinHandle<()>> = FuturesUnordered::new();
+    let mq_executor = mq_executor_config.executor;  // Move
+    let mq_executor_rx = mq_executor_config.rx_queues;
 
     futures.push(tokio::spawn(recevoir_messages(
         middleware.clone(),
-        mq_executor.rx_messages,
+        mq_executor_rx.rx_messages,
         tx_messages_verifies.clone(),
         tx_certificats_manquants.clone()
     )));
 
     futures.push(tokio::spawn(recevoir_messages(
         middleware.clone(),
-        mq_executor.rx_reply,
+        mq_executor_rx.rx_reply,
         tx_messages_verif_reply.clone(),
         tx_certificats_manquants.clone()
     )));
 
     futures.push(tokio::spawn(recevoir_messages(
         middleware.clone(),
-        mq_executor.rx_triggers,
+        mq_executor_rx.rx_triggers,
         tx_triggers,
         tx_certificats_manquants.clone()
     )));

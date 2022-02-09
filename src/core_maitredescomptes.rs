@@ -55,6 +55,7 @@ const NOM_Q_TRIGGERS: &str = "CoreMaitreDesComptes/triggers";
 
 const REQUETE_CHARGER_USAGER: &str = "chargerUsager";
 const REQUETE_LISTE_USAGERS: &str = "getListeUsagers";
+const REQUETE_USERID_PAR_NOMUSAGER: &str = "getUserIdParNomUsager";
 
 // const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
 const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
@@ -180,6 +181,9 @@ pub fn preparer_queues() -> Vec<QueueType> {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
     }
+
+    // RK 4.secure pour requetes internes
+    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_USERID_PAR_NOMUSAGER), exchange: Securite::L4Secure});
 
     let commandes: Vec<&str> = vec![
         // Transactions recues sous forme de commande pour validation
@@ -352,6 +356,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 // liste_applications_deployees(middleware, message).await,
                 REQUETE_CHARGER_USAGER => charger_usager(middleware, message).await,
                 REQUETE_LISTE_USAGERS => liste_usagers(middleware, message).await,
+                REQUETE_USERID_PAR_NOMUSAGER => get_userid_par_nomusager(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -599,6 +604,55 @@ struct RequeteUsager {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RequeteListeUsagers {
     liste_userids: Option<Vec<String>>,
+}
+
+async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("get_userid_par_nomusager : {:?}", &message.message);
+    let requete: RequeteUserIdParNomUsager = message.message.get_msg().map_contenu(None)?;
+
+    // Inserer tous les nom_usagers demandes avec None. Assurer de retourner la reponse complete
+    // si certains usagers sont inconnus.
+    let mut usagers: HashMap<String, Option<String>> = HashMap::new();
+    for nom_usager in &requete.noms_usagers {
+        usagers.insert(nom_usager.into(), None);
+    }
+
+    {   // Extraire la liste des usagers de la DB
+        let filtre = doc! { CHAMP_USAGER_NOM: {"$in": requete.noms_usagers}};
+        let projection = doc! {
+            CHAMP_USAGER_NOM: true,
+            CHAMP_USER_ID: true,
+        };
+        let ops = FindOptions::builder().projection(Some(projection)).build();
+        let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+        let mut curseur = collection.find(filtre, ops).await?;
+
+        while let Some(d) = curseur.next().await {
+            let mut doc_usager = d?;
+            let nom_usager = doc_usager.get_str(CHAMP_USAGER_NOM)?;
+            let user_id = doc_usager.get_str(CHAMP_USER_ID)?;
+            usagers.insert(nom_usager.into(), Some(user_id.into()));
+        }
+    };
+
+    let reponse = ReponseUserIdParNomUsager { usagers };
+
+    match middleware.formatter_reponse(&reponse,None) {
+        Ok(m) => Ok(Some(m)),
+        Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteUserIdParNomUsager {
+    noms_usagers: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseUserIdParNomUsager {
+    usagers: HashMap<String, Option<String>>,
 }
 
 async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
