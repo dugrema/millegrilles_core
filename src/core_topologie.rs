@@ -11,7 +11,7 @@ use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{Timelike, Utc};
 use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::constantes::Securite::L3Protege;
+use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
@@ -990,6 +990,8 @@ async fn produire_fiche_publique<M>(middleware: &M)
     let mut curseur = collection.find(filtre, None).await?;
 
     let mut adresses = Vec::new();
+    let mut applications: HashMap<String, Vec<ApplicationPublique>> = HashMap::new();
+
     for inst in curseur.next().await {
         let doc_instance = inst?;
         let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
@@ -997,10 +999,50 @@ async fn produire_fiche_publique<M>(middleware: &M)
         if let Some(d) = &info_instance.domaine {
             adresses.push(d.to_owned());
         }
+
+        // Conserver la liste des applications/versions par nom d'application
+        let mut app_versions = HashMap::new();
+        if let Some(apps_config) = info_instance.applications_configurees {
+            for app_config in apps_config {
+                app_versions.insert(app_config.nom.clone(), app_config);
+            }
+        }
+
+        // Generer la liste des applications avec leur url
+        if let Some(apps) = info_instance.applications {
+            for app in apps {
+                match &app.securite {
+                    Some(s) => {
+                        if s.as_str() != SECURITE_1_PUBLIC && s.as_str() != SECURITE_2_PRIVE {
+                            continue  // Pas public ou prive, on skip l'application
+                        }
+                    },
+                    None => continue  // On assume securite protege ou secure, skip
+                }
+
+                let mut app_publique: ApplicationPublique = app.try_into()?;
+                let nom_app = app_publique.application.clone();
+                if let Some(v) = app_versions.get(nom_app.as_str()) {
+                    app_publique.version = v.version.to_owned();
+                }
+
+                match applications.get_mut(nom_app.as_str()) {
+                    Some(a) => {
+                        a.push(app_publique);
+                    },
+                    None => {
+                        let mut vec_apps = Vec::new();
+                        vec_apps.push(app_publique);
+                        applications.insert(nom_app.clone(), vec_apps);
+                    }
+                }
+            }
+        }
     }
 
     let fiche = FichePublique {
-        adresses: Some(adresses)
+        adresses: Some(adresses),
+        applications,
     };
 
     let routage = RoutageMessageAction::builder(
@@ -1015,6 +1057,30 @@ async fn produire_fiche_publique<M>(middleware: &M)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct FichePublique {
     adresses: Option<Vec<String>>,
+    applications: HashMap<String, Vec<ApplicationPublique>>
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ApplicationPublique {
+    application: String,
+    version: Option<String>,
+    url: String
+}
+
+impl TryInto<ApplicationPublique> for InformationApplication {
+    type Error = String;
+
+    fn try_into(self) -> Result<ApplicationPublique, Self::Error> {
+        let url = match self.url {
+            Some(u) => u,
+            None => Err(format!("core_topologie.TryInto<ApplicationPublique> URL manquant"))?
+        };
+        Ok(ApplicationPublique{
+            application: self.application,
+            version: None,
+            url
+        })
+    }
 }
 
 #[cfg(test)]
