@@ -9,18 +9,18 @@ use millegrilles_common_rust::bson::{Bson, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::chrono::{Timelike, Utc};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::L3Protege;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
-use millegrilles_common_rust::mongodb as mongodb;
+use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -62,6 +62,7 @@ const TRANSACTION_MONITOR: &str = "monitor";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "monitor";
 const EVENEMENT_PRESENCE_DOMAINE: &str = "domaine";
+const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 
 const INDEX_DOMAINE: &str = "domaine";
 const INDEX_NOEUDS: &str = "noeuds";
@@ -328,11 +329,16 @@ where M: MongoDao
     Ok(())
 }
 
-async fn entretien<M>(_middleware: Arc<M>)
+async fn entretien<M>(middleware: Arc<M>)
     where M: Middleware + 'static
 {
-
     let mut catalogues_charges = false;
+
+    // Production fiche publique initiale
+    sleep(Duration::new(5, 0)).await;
+    if let Err(e) = produire_fiche_publique(middleware.as_ref()).await {
+        error!("core_topoologie.entretien Erreur production fiche publique initiale : {:?}", e);
+    }
 
     loop {
         sleep(Duration::new(30, 0)).await;
@@ -340,11 +346,20 @@ async fn entretien<M>(_middleware: Arc<M>)
     }
 }
 
-async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
-where M: ValidateurX509 {
-    // let message = trigger.message;
+async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
+where M: ValidateurX509 + GenerateurMessages + MongoDao {
+    let date_epoch = trigger.get_date();
+    debug!("Traiter cedule {}\n{:?}", DOMAINE_NOM, date_epoch);
 
-    debug!("Traiter cedule {}", DOMAINE_NOM);
+    let minutes = date_epoch.get_datetime().minute();
+
+    // Executer a toutes les 5 minutes
+    if minutes % 1 == 0 {
+        debug!("Produire fiche publique");
+        if let Err(e) = produire_fiche_publique(middleware).await {
+            error!("core_topoologie.entretien Erreur production fiche publique initiale : {:?}", e);
+        }
+    }
 
     Ok(())
 }
@@ -802,7 +817,8 @@ struct InformationMonitor {
     domaine: Option<String>,
     noeud_id: String,
     securite: Option<String>,
-    applications: Option<Vec<ApplicationConfiguree>>,
+    applications: Option<Vec<InformationApplication>>,
+    applications_configurees: Option<Vec<ApplicationConfiguree>>,
 }
 impl InformationMonitor {
     fn exporter_applications(&self) -> Vec<Value> {
@@ -811,11 +827,17 @@ impl InformationMonitor {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct ApplicationConfiguree {
+struct InformationApplication {
     application: String,
     securite: Option<String>,
     url: Option<String>,
     millegrille: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ApplicationConfiguree {
+    nom: String,
+    version: Option<String>,
 }
 
 async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
@@ -956,6 +978,43 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RequeteResolveIdmg {
     dns: Option<Vec<String>>,
+}
+
+async fn produire_fiche_publique<M>(middleware: &M)
+    -> Result<(), Box<dyn Error>>
+    where M: GenerateurMessages + MongoDao
+{
+    debug!("produire_fiche_publique");
+    let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+    let filtre = doc! {};
+    let mut curseur = collection.find(filtre, None).await?;
+
+    let mut adresses = Vec::new();
+    for inst in curseur.next().await {
+        let doc_instance = inst?;
+        let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
+        debug!("Information instance : {:?}", info_instance);
+        if let Some(d) = &info_instance.domaine {
+            adresses.push(d.to_owned());
+        }
+    }
+
+    let fiche = FichePublique {
+        adresses: Some(adresses)
+    };
+
+    let routage = RoutageMessageAction::builder(
+        DOMAINE_NOM, EVENEMENT_FICHE_PUBLIQUE)
+        .exchanges(vec![Securite::L1Public])
+        .build();
+    middleware.emettre_evenement(routage, &fiche).await?;
+
+    Ok(())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct FichePublique {
+    adresses: Option<Vec<String>>,
 }
 
 #[cfg(test)]
