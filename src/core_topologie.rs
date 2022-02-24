@@ -43,6 +43,7 @@ pub const DOMAINE_NOM: &str = "CoreTopologie";
 pub const NOM_COLLECTION_DOMAINES: &str = "CoreTopologie/domaines";
 pub const NOM_COLLECTION_NOEUDS: &str = "CoreTopologie/noeuds";
 pub const NOM_COLLECTION_MILLEGRILLES: &str = "CoreTopologie/millegrilles";
+pub const NOM_COLLECTION_MILLEGRILLES_ADRESSES: &str = "CoreTopologie/millegrillesAdresses";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
 pub const DOMAINE_PRESENCE_NOM: &str = "presence";
@@ -67,9 +68,14 @@ const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 
 const INDEX_DOMAINE: &str = "domaine";
 const INDEX_NOEUDS: &str = "noeuds";
+const INDEX_IDMG: &str = "idmg";
+const INDEX_ADRESSES: &str = "adresses";
+const INDEX_ADRESSE: &str = "adresse";
 
 const CHAMP_DOMAINE: &str = "domaine";
 const CHAMP_NOEUD_ID: &str = "noeud_id";
+const CHAMP_ADRESSE: &str = "adresse";
+const CHAMP_ADRESSES: &str = "adresses";
 
 // permissionDechiffrage
 // listerNoeudsAWSS3
@@ -327,6 +333,48 @@ where M: MongoDao
         Some(options_unique_domaine)
     ).await?;
 
+    // Index table millegilles (idmg)
+    let options_unique_millegrilles = IndexOptions {
+        nom_index: Some(String::from(INDEX_IDMG)),
+        unique: true
+    };
+    let champs_index_millegrilles = vec!(
+        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_IDMG), direction: 1},
+    );
+    middleware.create_index(
+        NOM_COLLECTION_MILLEGRILLES,
+        champs_index_millegrilles,
+        Some(options_unique_millegrilles)
+    ).await?;
+
+    // Index table millegilles (adresses)
+    let options_unique_adresses = IndexOptions {
+        nom_index: Some(String::from(INDEX_ADRESSES)),
+        unique: false
+    };
+    let champs_index_adresses = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_ADRESSES), direction: 1},
+    );
+    middleware.create_index(
+        NOM_COLLECTION_MILLEGRILLES,
+        champs_index_adresses,
+        Some(options_unique_adresses)
+    ).await?;
+
+    // Index table millegillesAdresses
+    let options_unique_mg_adresses = IndexOptions {
+        nom_index: Some(String::from(INDEX_ADRESSE)),
+        unique: true
+    };
+    let champs_index_mg_adresses = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_ADRESSE), direction: 1},
+    );
+    middleware.create_index(
+        NOM_COLLECTION_MILLEGRILLES_ADRESSES,
+        champs_index_mg_adresses,
+        Some(options_unique_mg_adresses)
+    ).await?;
+
     Ok(())
 }
 
@@ -367,11 +415,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao {
 
     // Mettre a jour information locale a toutes les 5 minutes
     if minutes % 5 == 2 {
-        if let Err(e) = produire_information_locale(middleware.as_ref()).await {
+        if let Err(e) = produire_information_locale(middleware).await {
             error!("core_topoologie.entretien Erreur production information locale : {:?}", e);
         }
     }
-
 
     Ok(())
 }
@@ -963,20 +1010,22 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
     }
 
     let requete: RequeteResolveIdmg = message.message.parsed.map_contenu(None)?;
+    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
 
-    // TODO Faire requete pour trouver idmg
-    // Stub, retourner toujours local
-    let idmg = middleware.get_enveloppe_privee().idmg()?;
-    let resolved_dns = match requete.dns {
-        Some(d) => {
-            let mut map_reponse: HashMap<String,String> = HashMap::new();
-            for dns in d {
-                map_reponse.insert(dns.clone(), idmg.clone());
-            }
-            Some(map_reponse)
-        },
-        None => None,
-    };
+    // Map reponse, associe toutes les adresses dans la requete aux idmg trouves
+    let mut resolved_dns: HashMap<String,Option<String>> = HashMap::new();
+
+    if let Some(adresses) = requete.dns {
+        for dns in &adresses {
+            resolved_dns.insert(dns.clone(), None);
+        }
+        let filtre = doc! {CHAMP_ADRESSE: {"$in": adresses}};
+        let mut curseur = collection.find(filtre, None).await?;
+        for record_adresse in curseur.next().await {
+            let doc_adresse: AdresseIdmg = convertir_bson_deserializable(record_adresse?)?;
+            resolved_dns.insert(doc_adresse.adresse, Some(doc_adresse.idmg));
+        }
+    }
 
     let liste = json!({"dns": resolved_dns});
     let reponse = match middleware.formatter_reponse(&liste,None) {
@@ -990,6 +1039,12 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RequeteResolveIdmg {
     dns: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct AdresseIdmg {
+    adresse: String,
+    idmg: String,
 }
 
 async fn produire_fiche_publique<M>(middleware: &M)
@@ -1105,24 +1160,45 @@ async fn produire_information_locale<M>(middleware: &M)
         adresses
     };
 
-    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
-    let filtre = doc! {"idmg": &idmg_local};
-    let ops = doc! {
-        "$setOnInsert": {
-            "idmg": &idmg_local,
-            CHAMP_CREATION: Utc::now(),
-        },
-        "$set": {
-            "adresses": adresses,
-        },
-        "$currentDate": {CHAMP_MODIFICATION: true}
-    };
+    {   // Collection millegrilles
+        let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
+        let filtre = doc! {TRANSACTION_CHAMP_IDMG: &idmg_local};
+        let ops = doc! {
+            "$setOnInsert": {
+                TRANSACTION_CHAMP_IDMG: &idmg_local,
+                CHAMP_CREATION: Utc::now(),
+            },
+            "$set": {
+                CHAMP_ADRESSES: &adresses,
+            },
+            "$currentDate": {CHAMP_MODIFICATION: true}
+        };
+        let options = UpdateOptions::builder()
+            .upsert(true)
+            .build();
+        collection.update_one(filtre, ops, Some(options)).await?;
+    }
 
-    let options = UpdateOptions::builder()
-        .upsert(true)
-        .build();
-
-    collection.update_one(filtre, ops,Some(options)).await?;
+    {   // Collection millegrillesAdresses pour resolve par adresse (unique)
+        let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
+        for adresse in &adresses {
+            let filtre = doc! {CHAMP_ADRESSE: adresse};
+            let ops = doc! {
+                "$setOnInsert": {
+                    CHAMP_ADRESSE: &adresse,
+                    CHAMP_CREATION: Utc::now(),
+                },
+                "$set": {
+                    TRANSACTION_CHAMP_IDMG: &idmg_local,
+                },
+                "$currentDate": {CHAMP_MODIFICATION: true}
+            };
+            let options = UpdateOptions::builder()
+                .upsert(true)
+                .build();
+            collection.update_one(filtre, ops, Some(options)).await?;
+        }
+    }
 
     Ok(())
 }
