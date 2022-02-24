@@ -42,6 +42,7 @@ use crate::validateur_pki_mongo::MiddlewareDbPki;
 pub const DOMAINE_NOM: &str = "CoreTopologie";
 pub const NOM_COLLECTION_DOMAINES: &str = "CoreTopologie/domaines";
 pub const NOM_COLLECTION_NOEUDS: &str = "CoreTopologie/noeuds";
+pub const NOM_COLLECTION_MILLEGRILLES: &str = "CoreTopologie/millegrilles";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
 pub const DOMAINE_PRESENCE_NOM: &str = "presence";
@@ -339,6 +340,9 @@ async fn entretien<M>(middleware: Arc<M>)
     if let Err(e) = produire_fiche_publique(middleware.as_ref()).await {
         error!("core_topoologie.entretien Erreur production fiche publique initiale : {:?}", e);
     }
+    if let Err(e) = produire_information_locale(middleware.as_ref()).await {
+        error!("core_topoologie.entretien Erreur production information locale : {:?}", e);
+    }
 
     loop {
         sleep(Duration::new(30, 0)).await;
@@ -353,13 +357,21 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao {
 
     let minutes = date_epoch.get_datetime().minute();
 
-    // Executer a toutes les 5 minutes
-    if minutes % 1 == 0 {
+    // Generer une fiche a toutes les 15 minutes
+    if minutes % 15 == 1 {
         debug!("Produire fiche publique");
         if let Err(e) = produire_fiche_publique(middleware).await {
             error!("core_topoologie.entretien Erreur production fiche publique initiale : {:?}", e);
         }
     }
+
+    // Mettre a jour information locale a toutes les 5 minutes
+    if minutes % 5 == 2 {
+        if let Err(e) = produire_information_locale(middleware.as_ref()).await {
+            error!("core_topoologie.entretien Erreur production information locale : {:?}", e);
+        }
+    }
+
 
     Ok(())
 }
@@ -1065,6 +1077,54 @@ struct ApplicationPublique {
     application: String,
     version: Option<String>,
     url: String
+}
+
+/// Genere information de resolution locale (urls, etc)
+async fn produire_information_locale<M>(middleware: &M)
+    -> Result<(), Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("produire_information_locale");
+    let enveloppe_privee = middleware.get_enveloppe_privee();
+    let idmg_local = enveloppe_privee.idmg()?;
+
+    let adresses = {
+        let mut adresses = Vec::new();
+
+        let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+        let filtre = doc! {};
+        let mut curseur = collection.find(filtre, None).await?;
+        for inst in curseur.next().await {
+            let doc_instance = inst?;
+            let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
+            debug!("Information instance : {:?}", info_instance);
+            if let Some(d) = &info_instance.domaine {
+                adresses.push(d.to_owned());
+            }
+        }
+        adresses
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
+    let filtre = doc! {"idmg": &idmg_local};
+    let ops = doc! {
+        "$setOnInsert": {
+            "idmg": &idmg_local,
+            CHAMP_CREATION: Utc::now(),
+        },
+        "$set": {
+            "adresses": adresses,
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+
+    let options = UpdateOptions::builder()
+        .upsert(true)
+        .build();
+
+    collection.update_one(filtre, ops,Some(options)).await?;
+
+    Ok(())
 }
 
 impl TryInto<ApplicationPublique> for InformationApplication {
