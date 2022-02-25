@@ -1190,6 +1190,7 @@ async fn produire_information_locale<M>(middleware: &M)
             },
             "$set": {
                 CHAMP_ADRESSES: &adresses,
+                "local": true,
             },
             "$currentDate": {CHAMP_MODIFICATION: true}
         };
