@@ -60,6 +60,7 @@ const REQUETE_LISTE_NOEUDS: &str = "listeNoeuds";
 const REQUETE_INFO_DOMAINE: &str = "infoDomaine";
 const REQUETE_INFO_NOEUD: &str = "infoNoeud";
 const REQUETE_RESOLVE_IDMG: &str = "resolveIdmg";
+const REQUETE_FICHE_MILLEGRILLE: &str = "ficheMillegrille";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_MONITOR: &str = "monitor";
@@ -191,6 +192,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         REQUETE_APPLICATIONS_DEPLOYEES,
         REQUETE_INFO_NOEUD,
         REQUETE_RESOLVE_IDMG,
+        REQUETE_FICHE_MILLEGRILLE,
     ];
     for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
@@ -439,6 +441,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
                 REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
                 REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
+                REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -1508,6 +1511,38 @@ impl TryInto<ApplicationPublique> for InformationApplication {
         })
     }
 }
+
+async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+{
+    debug!("requete_fiche_millegrille");
+    let requete: RequeteFicheMillegrille = message.message.parsed.map_contenu(None)?;
+    debug!("requete_fiche_millegrille Parsed : {:?}", requete);
+
+    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
+    let filtre = doc! {
+        TRANSACTION_CHAMP_IDMG: &requete.idmg,
+    };
+
+    let reponse = match collection.find_one(filtre, None).await? {
+        Some(doc_fiche) => {
+            let fiche: FichePublique = convertir_bson_deserializable(doc_fiche)?;
+            middleware.formatter_reponse(fiche, None)
+        },
+        None => {
+            middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)
+        }
+    }?;
+
+    Ok(Some(reponse))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteFicheMillegrille {
+    idmg: String,
+}
+
 
 #[cfg(test)]
 mod test_integration {
