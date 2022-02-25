@@ -1029,6 +1029,13 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
         }
     }
 
+    // Lancer requetes pour DNS inconnus
+    for (url, idmg) in resolved_dns.iter() {
+        if idmg.is_none() {
+            let reponse = resoudre_url(middleware, url.as_str()).await?;
+        }
+    }
+
     let liste = json!({"dns": resolved_dns});
     let reponse = match middleware.formatter_reponse(&liste,None) {
         Ok(m) => m,
@@ -1047,6 +1054,24 @@ struct RequeteResolveIdmg {
 struct AdresseIdmg {
     adresse: String,
     idmg: String,
+}
+
+async fn resoudre_url<M>(middleware: &M, url: &str)
+    -> Result<Option<String>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("resoudre_url {}", url);
+
+    let routage = RoutageMessageAction::builder("servicemonitor", "relaiWeb")
+        .exchanges(vec![L3Protege])
+        .build();
+
+    let url_fiche = format!("https://{}/fiche.json", url);
+    let requete = json!({"url": url_fiche});
+    let reponse = middleware.transmettre_commande(routage, &requete, true).await?;
+    debug!("Reponse resource url : {:?}", reponse);
+
+    Ok(None)
 }
 
 async fn produire_fiche_publique<M>(middleware: &M)
