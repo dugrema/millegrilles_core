@@ -1250,29 +1250,29 @@ mod test_integration {
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_liste_applications() {
-        setup("test_liste_applications");
-        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
-        futures.push(spawn(async move {
-
-            let message = {
-                let contenu = json!({});
-                let mm = middleware.formatter_message(&contenu, None::<&str>, None, None, None).expect("mm");
-                let ms = MessageSerialise::from_parsed(mm).expect("ms");
-                let mut mva = MessageValideAction::new(ms, "", "", "", "", TypeMessageOut::Transaction);
-                mva.exchange = Some(String::from("3.protege"));
-                mva
-            };
-
-            debug!("Duree test_liste_applications");
-            let reponse = liste_applications_deployees(middleware.as_ref(), message).await.expect("reponse");
-            debug!("Reponse test_liste_applications : {:?}", reponse);
-
-        }));
-        // Execution async du test
-        futures.next().await.expect("resultat").expect("ok");
-    }
+    // #[tokio::test]
+    // async fn test_liste_applications() {
+    //     setup("test_liste_applications");
+    //     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+    //     futures.push(spawn(async move {
+    //
+    //         let message = {
+    //             let contenu = json!({});
+    //             let mm = middleware.formatter_message(&contenu, None::<&str>, None, None, None).expect("mm");
+    //             let ms = MessageSerialise::from_parsed(mm).expect("ms");
+    //             let mut mva = MessageValideAction::new(ms, "", "", "", "", TypeMessageOut::Transaction);
+    //             mva.exchange = Some(String::from("3.protege"));
+    //             mva
+    //         };
+    //
+    //         debug!("Duree test_liste_applications");
+    //         let reponse = liste_applications_deployees(middleware.as_ref(), message).await.expect("reponse");
+    //         debug!("Reponse test_liste_applications : {:?}", reponse);
+    //
+    //     }));
+    //     // Execution async du test
+    //     futures.next().await.expect("resultat").expect("ok");
+    // }
 
 
 }

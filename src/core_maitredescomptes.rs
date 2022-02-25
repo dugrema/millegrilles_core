@@ -1572,17 +1572,17 @@ mod test_integration {
 
     use super::*;
 
-    #[tokio::test]
-    async fn test_() {
-        setup("test_liste_applications");
-        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
-        futures.push(spawn(async move {
-
-            todo!("Test!")
-
-        }));
-        // Execution async du test
-        futures.next().await.expect("resultat").expect("ok");
-    }
+    // #[tokio::test]
+    // async fn test_() {
+    //     setup("test_liste_applications");
+    //     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+    //     futures.push(spawn(async move {
+    //
+    //         todo!("Test!")
+    //
+    //     }));
+    //     // Execution async du test
+    //     futures.next().await.expect("resultat").expect("ok");
+    // }
 
 }

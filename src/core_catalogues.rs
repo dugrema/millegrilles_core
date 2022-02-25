@@ -670,34 +670,34 @@ mod test_integration {
 
 // use millegrilles_common_rust::middleware::preparer_middleware_pki;
 
-    #[tokio::test]
-    async fn test_liste_applications() {
-        setup("test_liste_applications");
-        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
-        futures.push(spawn(async move {
-
-            debug!("Duree test_liste_applications");
-            let reponse = liste_applications(middleware.as_ref()).await.expect("reponse");
-            debug!("Reponse test_liste_applications : {:?}", reponse);
-
-        }));
-        // Execution async du test
-        futures.next().await.expect("resultat").expect("ok");
-    }
-
-    #[tokio::test]
-    async fn test_application() {
-        setup("test_application");
-        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
-        futures.push(spawn(async move {
-
-            debug!("Duree test_application");
-            let param = middleware.formatter_reponse(json!({"nom": "blynk"}), None).expect("param");
-            let reponse = repondre_application(middleware.as_ref(), &param).await.expect("reponse");
-            debug!("Reponse test_application : {:?}", reponse);
-
-        }));
-        // Execution async du test
-        futures.next().await.expect("resultat").expect("ok");
-    }
+    // #[tokio::test]
+    // async fn test_liste_applications() {
+    //     setup("test_liste_applications");
+    //     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+    //     futures.push(spawn(async move {
+    //
+    //         debug!("Duree test_liste_applications");
+    //         let reponse = liste_applications(middleware.as_ref()).await.expect("reponse");
+    //         debug!("Reponse test_liste_applications : {:?}", reponse);
+    //
+    //     }));
+    //     // Execution async du test
+    //     futures.next().await.expect("resultat").expect("ok");
+    // }
+    //
+    // #[tokio::test]
+    // async fn test_application() {
+    //     setup("test_application");
+    //     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+    //     futures.push(spawn(async move {
+    //
+    //         debug!("Duree test_application");
+    //         let param = middleware.formatter_reponse(json!({"nom": "blynk"}), None).expect("param");
+    //         let reponse = repondre_application(middleware.as_ref(), &param).await.expect("reponse");
+    //         debug!("Reponse test_application : {:?}", reponse);
+    //
+    //     }));
+    //     // Execution async du test
+    //     futures.next().await.expect("resultat").expect("ok");
+    // }
 }

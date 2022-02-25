@@ -659,61 +659,61 @@ mod test_integration {
     use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
     use millegrilles_common_rust::mongo_dao::convertir_to_bson;
 
-    #[tokio::test]
-    async fn test_requete_dernier_horaire() {
-        setup("test_requete_dernier_horaire");
-        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
-        futures.push(spawn(async move {
-
-            let message = {
-                let contenu = json!({"domaine": "DUMMY"});
-                let mm = middleware.formatter_message(&contenu, None::<&str>, None, None, None).expect("mm");
-                let ms = MessageSerialise::from_parsed(mm).expect("ms");
-                let mut mva = MessageValideAction::new(ms, "", "", "", "", TypeMessageOut::Transaction);
-                mva.exchange = Some(String::from("3.protege"));
-                mva
-            };
-            let resultat = requete_dernier_horaire(
-                middleware.as_ref(), message).await
-                .expect("requete").expect("option");
-            debug!("Resultat dernier horaire : {:?}", resultat);
-
-            assert_eq!(resultat.contenu.get("ok").expect("ok").as_bool().expect("bool"), true);
-            // assert_eq!(resultat.contenu.get("dernier_backup").expect("dernier_backup").as_null().expect("null"), ());
-            // assert_eq!(resultat.contenu.get("dernier_backup").expect("dernier_backup").as_object().expect("not null"), ());
-
-        }));
-        // Execution async du test
-        futures.next().await.expect("resultat").expect("ok");
-    }
-
-    #[tokio::test]
-    async fn test_generer_catalogue_horaire() {
-        setup("test_generer_catalogue_horaire");
-        let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
-        futures.push(spawn(async move {
-
-            let catalogue_horaire = CatalogueHoraire::builder(
-                DateEpochSeconds::from_heure(2021, 09, 26, 08),
-                "DUMMY".into(),
-                "abcd-1234".into(),
-                "uuid-abcd-1234".into(),
-                false,
-                false
-            ).build();
-            let message = middleware.formatter_message(&catalogue_horaire, Some("Backup"), Some("catalogueHoraire"), None, None).expect("format");
-            let mut doc_catalogue = convertir_to_bson(message).expect("bson");
-            doc_catalogue.insert("_evenements", doc!{"_estampille": millegrilles_common_rust::bson::DateTime::now()});
-
-            let transaction = TransactionImpl::new(doc_catalogue, None);
-
-            let resultat = transaction_catalogue_horaire(middleware.as_ref(), transaction).await.expect("traitement");
-
-            debug!("Resultat traitement nouveau catalogue backup : {:?}", resultat);
-
-        }));
-        // Execution async du test
-        futures.next().await.expect("resultat").expect("ok");
-    }
+    // #[tokio::test]
+    // async fn test_requete_dernier_horaire() {
+    //     setup("test_requete_dernier_horaire");
+    //     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+    //     futures.push(spawn(async move {
+    //
+    //         let message = {
+    //             let contenu = json!({"domaine": "DUMMY"});
+    //             let mm = middleware.formatter_message(&contenu, None::<&str>, None, None, None).expect("mm");
+    //             let ms = MessageSerialise::from_parsed(mm).expect("ms");
+    //             let mut mva = MessageValideAction::new(ms, "", "", "", "", TypeMessageOut::Transaction);
+    //             mva.exchange = Some(String::from("3.protege"));
+    //             mva
+    //         };
+    //         let resultat = requete_dernier_horaire(
+    //             middleware.as_ref(), message).await
+    //             .expect("requete").expect("option");
+    //         debug!("Resultat dernier horaire : {:?}", resultat);
+    //
+    //         assert_eq!(resultat.contenu.get("ok").expect("ok").as_bool().expect("bool"), true);
+    //         // assert_eq!(resultat.contenu.get("dernier_backup").expect("dernier_backup").as_null().expect("null"), ());
+    //         // assert_eq!(resultat.contenu.get("dernier_backup").expect("dernier_backup").as_object().expect("not null"), ());
+    //
+    //     }));
+    //     // Execution async du test
+    //     futures.next().await.expect("resultat").expect("ok");
+    // }
+    //
+    // #[tokio::test]
+    // async fn test_generer_catalogue_horaire() {
+    //     setup("test_generer_catalogue_horaire");
+    //     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+    //     futures.push(spawn(async move {
+    //
+    //         let catalogue_horaire = CatalogueHoraire::builder(
+    //             DateEpochSeconds::from_heure(2021, 09, 26, 08),
+    //             "DUMMY".into(),
+    //             "abcd-1234".into(),
+    //             "uuid-abcd-1234".into(),
+    //             false,
+    //             false
+    //         ).build();
+    //         let message = middleware.formatter_message(&catalogue_horaire, Some("Backup"), Some("catalogueHoraire"), None, None).expect("format");
+    //         let mut doc_catalogue = convertir_to_bson(message).expect("bson");
+    //         doc_catalogue.insert("_evenements", doc!{"_estampille": millegrilles_common_rust::bson::DateTime::now()});
+    //
+    //         let transaction = TransactionImpl::new(doc_catalogue, None);
+    //
+    //         let resultat = transaction_catalogue_horaire(middleware.as_ref(), transaction).await.expect("traitement");
+    //
+    //         debug!("Resultat traitement nouveau catalogue backup : {:?}", resultat);
+    //
+    //     }));
+    //     // Execution async du test
+    //     futures.next().await.expect("resultat").expect("ok");
+    // }
 
 }
