@@ -13,7 +13,7 @@ use millegrilles_common_rust::chrono::{Timelike, Utc};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
-use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
+use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMilleGrille};
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
@@ -1011,6 +1011,8 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
         return Ok(Some(reponse))
     }
 
+    let idmg_local = middleware.get_enveloppe_privee().idmg()?;
+
     let requete: RequeteResolveIdmg = message.message.parsed.map_contenu(None)?;
     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
 
@@ -1022,17 +1024,73 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
             resolved_dns.insert(dns.clone(), None);
         }
         let filtre = doc! {CHAMP_ADRESSE: {"$in": adresses}};
+        debug!("liste_domaines Filtre adresses : {:?}", filtre);
         let mut curseur = collection.find(filtre, None).await?;
-        for record_adresse in curseur.next().await {
-            let doc_adresse: AdresseIdmg = convertir_bson_deserializable(record_adresse?)?;
-            resolved_dns.insert(doc_adresse.adresse, Some(doc_adresse.idmg));
+        while let Some(record_adresse) = curseur.next().await {
+            let record_adresse = record_adresse?;
+            debug!("Record adresse: {:?}", record_adresse);
+            let date_modification = record_adresse.get("_mg-derniere-modification").cloned();
+            let doc_adresse: AdresseIdmg = convertir_bson_deserializable(record_adresse)?;
+
+            if doc_adresse.idmg.as_str() == idmg_local.as_str() {
+                // L'adresse correspond a la millegrille locale
+                resolved_dns.insert(doc_adresse.adresse.clone(), Some(doc_adresse.idmg.clone()));
+                continue
+            }
+
+            let date_modification = match date_modification {
+                Some(dm) => {
+                    if let Some(date_modification) = dm.as_datetime() {
+                        let date_chrono = date_modification.to_chrono();
+                        let duration = chrono::Duration::minutes(1);
+                        if Utc::now() - duration > date_chrono {
+                            debug!("Expire, on recharge");
+
+                            let etag = doc_adresse.etag.as_ref();
+                            let hostname = doc_adresse.adresse.as_str();
+                            match resoudre_url(middleware, hostname, etag).await {
+                                Ok(idmg_option) => {
+                                    match idmg_option {
+                                        Some(i) => {
+                                            resolved_dns.insert(hostname.into(), i.into());
+                                        },
+                                        None => {
+                                            // Aucuns changements (e.g. 304). Utiliser la version de la DB.
+                                            resolved_dns.insert(hostname.into(), Some(doc_adresse.idmg.clone()));
+                                        }
+                                    }
+                                    Some(date_chrono)
+                                },
+                                Err(e) => {
+                                    error!("core_topologie.resolve_idmg Erreur chargement hostname {} : {:?}", hostname, e);
+                                    None
+                                }
+                            }
+                        } else {
+                            Some(date_chrono)
+                        }
+                    } else {
+                        None
+                    }
+                },
+                None => None
+            };
+
+            match date_modification {
+                Some(d) => {
+                    resolved_dns.insert(doc_adresse.adresse, Some(doc_adresse.idmg));
+                },
+                None => {
+                    debug!("Recharger information idmg {}", doc_adresse.idmg);
+                }
+            }
         }
     }
 
     // Lancer requetes pour DNS inconnus
     for (hostname, idmg) in resolved_dns.clone().iter() {
         if idmg.is_none() {
-            match resoudre_url(middleware, hostname.as_str()).await {
+            match resoudre_url(middleware, hostname.as_str(), None).await {
                 Ok(idmg_option) => {
                     if let Some(idmg) = idmg_option {
                         resolved_dns.insert(hostname.into(), idmg.into());
@@ -1061,9 +1119,12 @@ struct RequeteResolveIdmg {
 struct AdresseIdmg {
     adresse: String,
     idmg: String,
+    etag: Option<String>,
+    // #[serde(rename = "_mg-derniere-modification", skip_serializing)]
+    // derniere_modification: DateEpochSeconds,
 }
 
-async fn resoudre_url<M>(middleware: &M, hostname: &str)
+async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
                          -> Result<Option<String>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
@@ -1074,7 +1135,13 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str)
         .build();
 
     let url_fiche = format!("https://{}/fiche.json", hostname);
-    let requete = json!({"url": url_fiche});
+    let requete = json!({
+        "url": url_fiche,
+        "headers": {
+            "Cache-Control": "public, max-age=604800",
+            "If-None-Match": etag,
+        }
+    });
 
     let reponse = {
         let reponse_http = middleware.transmettre_commande(routage, &requete, true).await?;
@@ -1095,7 +1162,15 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str)
     // Verifier code reponse HTTP
     match reponse_fiche.code {
         Some(c) => {
-            if c != 200 {
+            if c == 304 {
+                // Aucun changement sur le serveur
+                // On fait juste faire un touch sur l'adresse du hostname verifie
+                let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
+                let filtre = doc! {"adresse": hostname};
+                let ops = doc! {"$currentDate": {CHAMP_MODIFICATION: true}};
+                collection.update_one(filtre, ops, None).await?;
+                return Ok(None);
+            } else if c != 200 {
                 Err(format!("core_topologie.resoudre_url Code reponse http {}", c))
             } else {
                 Ok(())
@@ -1112,11 +1187,14 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str)
     debug!("resoudre_url Message json string : {}", fiche_json_value);
     let mut fiche_publique_message = MessageSerialise::from_serializable(fiche_json_value)?;
     debug!("resoudre_url Fiche publique message serialize : {:?}", fiche_publique_message);
-    let fiche_publique: FichePublique = fiche_publique_message.get_msg().map_contenu(None)?;
+    let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu(None)?;
     debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
 
     // Charger certificat CA du tiers
-    let certificat_ca_tiers = middleware.charger_enveloppe(&vec![fiche_publique.ca.clone()], None).await?;
+    let certificat_ca_tiers = match &fiche_publique.ca {
+        Some(c) => middleware.charger_enveloppe(&vec![c.to_owned()], None).await,
+        None => Err(format!("core_topologie.resoudre_url Fiche publique manquante"))
+    }?;
     debug!("resoudre_url Certificat CA tiers : {:?}", certificat_ca_tiers);
     let idmg_tiers = certificat_ca_tiers.calculer_idmg()?;
     debug!("resoudre_url Certificat idmg tiers : {}", idmg_tiers);
@@ -1151,27 +1229,60 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str)
     }
 
     // Sauvegarder/mettre a jour fiche publique
-    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
-    let filtre = doc! {"idmg": &idmg_tiers};
-    let ops = doc! {
-        "$set": {
-            "adresses": fiche_publique.adresses,
-            // "applications": fiche_publique.applications,
-            "chiffrage": fiche_publique.chiffrage,
-            "ca": fiche_publique.ca,
-        },
-        "$setOnInsert": {
-            "idmg": &idmg_tiers,
-            CHAMP_CREATION: Utc::now(),
-        },
-        "$currentDate": {CHAMP_MODIFICATION: true},
-    };
-    let options = UpdateOptions::builder()
-        .upsert(true)
-        .build();
-    let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
-    if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
-        error!("resoudre_url Erreur, fiche publique idmg {} n'a pas ete sauvegardee", idmg_tiers);
+    {
+        let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
+        let filtre = doc! {"idmg": &idmg_tiers};
+        let ops = doc! {
+            "$set": {
+                "adresses": &fiche_publique.adresses,
+                // "applications": fiche_publique.applications,
+                "chiffrage": &fiche_publique.chiffrage,
+                "ca": &fiche_publique.ca,
+            },
+            "$setOnInsert": {
+                "idmg": &idmg_tiers,
+                CHAMP_CREATION: Utc::now(),
+            },
+            "$currentDate": {CHAMP_MODIFICATION: true},
+        };
+        let options = UpdateOptions::builder()
+            .upsert(true)
+            .build();
+        let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
+        if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
+            error!("resoudre_url Erreur, fiche publique idmg {} n'a pas ete sauvegardee", idmg_tiers);
+        }
+    }
+
+    // Sauvegarder adresses
+    {
+        let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
+        debug!("Verification headers : {:?}", reponse_fiche.headers);
+        let etag = match reponse_fiche.headers.as_ref() {
+            Some(e) => e.get("ETag").cloned(),
+            None => None
+        };
+        if let Some(adresses) = fiche_publique.adresses.as_ref() {
+            for adresse in adresses {
+                let filtre = doc! { "adresse": adresse };
+                let ops = doc! {
+                    "$set": {
+                        "idmg": &idmg_tiers,
+                        "etag": &etag,
+                    },
+                    "$setOnInsert": {
+                        "adresse": adresse,
+                        CHAMP_CREATION: Utc::now(),
+                    },
+                    "$currentDate": {CHAMP_MODIFICATION: true},
+                };
+                let options = UpdateOptions::builder().upsert(true).build();
+                let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
+                if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
+                    error!("resoudre_url Erreur, adresse {} pour idmg {} n'a pas ete sauvegardee", adresse, idmg_tiers);
+                }
+            }
+        }
     }
 
     Ok(Some(idmg_tiers))
@@ -1184,6 +1295,14 @@ struct ReponseFichePubliqueTierce {
     headers: Option<HashMap<String, String>>,
     json: Option<Value>,
     text: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct FichePubliqueReception {
+    adresses: Option<Vec<String>>,
+    applications: Option<HashMap<String, Vec<ApplicationPublique>>>,
+    chiffrage: Option<Vec<Vec<String>>>,
+    ca: Option<String>,
 }
 
 async fn produire_fiche_publique<M>(middleware: &M)
