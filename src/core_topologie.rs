@@ -34,7 +34,7 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::ValidationOptions;
+use millegrilles_common_rust::verificateur::{ValidationOptions, VerificateurMessage};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
@@ -426,7 +426,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + Chiffreur<CipherMgs3, 
 }
 
 async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("Consommer requete : {:?}", &message.message);
 
@@ -999,7 +999,7 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
 
 async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("resolve_idmg");
     if ! message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
@@ -1030,9 +1030,14 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
     }
 
     // Lancer requetes pour DNS inconnus
-    for (url, idmg) in resolved_dns.iter() {
+    for (hostname, idmg) in resolved_dns.iter() {
         if idmg.is_none() {
-            let reponse = resoudre_url(middleware, url.as_str()).await?;
+            match resoudre_url(middleware, hostname.as_str()).await {
+                Ok(reponse) => {
+
+                },
+                Err(e) => error!("core_topologie.resolve_idmg Erreur chargement hostname {} : {:?}", hostname, e)
+            }
         }
     }
 
@@ -1056,22 +1061,113 @@ struct AdresseIdmg {
     idmg: String,
 }
 
-async fn resoudre_url<M>(middleware: &M, url: &str)
-    -> Result<Option<String>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao
+async fn resoudre_url<M>(middleware: &M, hostname: &str)
+                         -> Result<Option<String>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
-    debug!("resoudre_url {}", url);
+    debug!("resoudre_url {}", hostname);
 
     let routage = RoutageMessageAction::builder("servicemonitor", "relaiWeb")
         .exchanges(vec![L3Protege])
         .build();
 
-    let url_fiche = format!("https://{}/fiche.json", url);
+    let url_fiche = format!("https://{}/fiche.json", hostname);
     let requete = json!({"url": url_fiche});
-    let reponse = middleware.transmettre_commande(routage, &requete, true).await?;
-    debug!("Reponse resource url : {:?}", reponse);
+
+    let reponse = {
+        let reponse_http = middleware.transmettre_commande(routage, &requete, true).await?;
+        debug!("Reponse http : {:?}", reponse_http);
+        match reponse_http {
+            Some(reponse) => match reponse {
+                TypeMessage::Valide(reponse) => Ok(reponse),
+                _ => Err(format!("core_topologie.resoudre_url Mauvais type de message recu en reponse"))
+            },
+            None => Err(format!("core_topologie.resoudre_url Aucun message recu en reponse"))
+        }
+    }?;
+
+    // Mapper message avec la fiche
+    let reponse_fiche: ReponseFichePubliqueTierce = reponse.message.get_msg().map_contenu(None)?;
+    debug!("Reponse fiche : {:?}", reponse);
+
+    // Verifier code reponse HTTP
+    match reponse_fiche.code {
+        Some(c) => {
+            if c != 200 {
+                Err(format!("core_topologie.resoudre_url Code reponse http {}", c))
+            } else {
+                Ok(())
+            }
+        },
+        None => Err(format!("core_topologie.resoudre_url Code reponse http manquant"))
+    }?;
+
+    // Verifier presence fiche publique
+    let fiche_json_value = match reponse_fiche.json {
+        Some(f) => Ok(f),
+        None => Err(format!("core_topologie.resoudre_url Fiche publique manquante"))
+    }?;
+    debug!("resoudre_url Message json string : {}", fiche_json_value);
+    let mut fiche_publique_message = MessageSerialise::from_serializable(fiche_json_value)?;
+    debug!("resoudre_url Fiche publique message serialize : {:?}", fiche_publique_message);
+    let fiche_publique: FichePublique = fiche_publique_message.get_msg().map_contenu(None)?;
+    debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
+
+    // Charger certificat CA du tiers
+    let certificat_ca_tiers = middleware.charger_enveloppe(&vec![fiche_publique.ca], None).await?;
+    debug!("resoudre_url Certificat CA tiers : {:?}", certificat_ca_tiers);
+    let idmg_tiers = certificat_ca_tiers.calculer_idmg()?;
+    debug!("resoudre_url Certificat idmg tiers : {}", idmg_tiers);
+    fiche_publique_message.set_millegrille(certificat_ca_tiers.clone());
+
+    let certificat_tiers = match &fiche_publique_message.parsed.certificat {
+        Some(c) => match middleware.charger_enveloppe(&c, None).await {
+            Ok(enveloppe) => {
+                let valide = middleware.valider_chaine(
+                    enveloppe.as_ref(), Some(certificat_ca_tiers.as_ref()))?;
+                if valide {
+                    Ok(enveloppe)
+                } else {
+                    Err(format!("core_topologie.resoudre_url Erreur verification certificat fiche publique : chaine invalide"))
+                }
+            },
+            Err(e) => Err(format!("core_topologie.resoudre_url Certificat fiche publique ne peut pas etre charge : {:?}", e))
+        },
+        None => Err(format!("core_topologie.resoudre_url Certificat fiche publique manquant"))
+    }?;
+    fiche_publique_message.set_certificat(certificat_tiers);
+
+    let validation_option = ValidationOptions::new(true, true, true);
+    let resultat_validation = fiche_publique_message.valider(middleware, Some(&validation_option)).await?;
+    debug!("resoudre_url Resultat validation : {:?}", resultat_validation);
+    if ! resultat_validation.valide() {
+        Err(format!("core_topologie.resoudre_url Validation de la fiche publique a echoue (message invalide : {:?})", resultat_validation))?;
+    }
+
+    // match reponse.message.get_msg().map_contenu(Some("json")) {
+    //     Some(message_json) => {
+    //
+    //     },
+    //     None => Err(format!("core_topologie.resoudre_url Fiche manquante de la reponse"))
+    // }
+    //
+    // // Verifier le certificat
+    // let certificat = match &reponse.message.certificat {
+    //     Some(c) => Ok(c),
+    //     None => Err(format!("core_topologie.resoudre_url Certificat manquant de la reponse"))
+    // }?;
+
 
     Ok(None)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseFichePubliqueTierce {
+    code: Option<u16>,
+    verify_ok: Option<bool>,
+    headers: Option<HashMap<String, String>>,
+    json: Option<Value>,
+    text: Option<String>,
 }
 
 async fn produire_fiche_publique<M>(middleware: &M)
