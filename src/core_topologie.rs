@@ -1030,11 +1030,13 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
     }
 
     // Lancer requetes pour DNS inconnus
-    for (hostname, idmg) in resolved_dns.iter() {
+    for (hostname, idmg) in resolved_dns.clone().iter() {
         if idmg.is_none() {
             match resoudre_url(middleware, hostname.as_str()).await {
-                Ok(reponse) => {
-
+                Ok(idmg_option) => {
+                    if let Some(idmg) = idmg_option {
+                        resolved_dns.insert(hostname.into(), idmg.into());
+                    }
                 },
                 Err(e) => error!("core_topologie.resolve_idmg Erreur chargement hostname {} : {:?}", hostname, e)
             }
@@ -1114,18 +1116,21 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str)
     debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
 
     // Charger certificat CA du tiers
-    let certificat_ca_tiers = middleware.charger_enveloppe(&vec![fiche_publique.ca], None).await?;
+    let certificat_ca_tiers = middleware.charger_enveloppe(&vec![fiche_publique.ca.clone()], None).await?;
     debug!("resoudre_url Certificat CA tiers : {:?}", certificat_ca_tiers);
     let idmg_tiers = certificat_ca_tiers.calculer_idmg()?;
     debug!("resoudre_url Certificat idmg tiers : {}", idmg_tiers);
     fiche_publique_message.set_millegrille(certificat_ca_tiers.clone());
 
+    // Charger et verificat certificat tiers
     let certificat_tiers = match &fiche_publique_message.parsed.certificat {
         Some(c) => match middleware.charger_enveloppe(&c, None).await {
             Ok(enveloppe) => {
                 let valide = middleware.valider_chaine(
                     enveloppe.as_ref(), Some(certificat_ca_tiers.as_ref()))?;
-                if valide {
+                if valide &&
+                    enveloppe.verifier_exchanges(vec![Securite::L4Secure]) &&
+                    enveloppe.verifier_roles(vec![RolesCertificats::Core]) {
                     Ok(enveloppe)
                 } else {
                     Err(format!("core_topologie.resoudre_url Erreur verification certificat fiche publique : chaine invalide"))
@@ -1137,6 +1142,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str)
     }?;
     fiche_publique_message.set_certificat(certificat_tiers);
 
+    // Valider le message avec certificat de la millegrille tierce
     let validation_option = ValidationOptions::new(true, true, true);
     let resultat_validation = fiche_publique_message.valider(middleware, Some(&validation_option)).await?;
     debug!("resoudre_url Resultat validation : {:?}", resultat_validation);
@@ -1144,21 +1150,31 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str)
         Err(format!("core_topologie.resoudre_url Validation de la fiche publique a echoue (message invalide : {:?})", resultat_validation))?;
     }
 
-    // match reponse.message.get_msg().map_contenu(Some("json")) {
-    //     Some(message_json) => {
-    //
-    //     },
-    //     None => Err(format!("core_topologie.resoudre_url Fiche manquante de la reponse"))
-    // }
-    //
-    // // Verifier le certificat
-    // let certificat = match &reponse.message.certificat {
-    //     Some(c) => Ok(c),
-    //     None => Err(format!("core_topologie.resoudre_url Certificat manquant de la reponse"))
-    // }?;
+    // Sauvegarder/mettre a jour fiche publique
+    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
+    let filtre = doc! {"idmg": &idmg_tiers};
+    let ops = doc! {
+        "$set": {
+            "adresses": fiche_publique.adresses,
+            // "applications": fiche_publique.applications,
+            "chiffrage": fiche_publique.chiffrage,
+            "ca": fiche_publique.ca,
+        },
+        "$setOnInsert": {
+            "idmg": &idmg_tiers,
+            CHAMP_CREATION: Utc::now(),
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    let options = UpdateOptions::builder()
+        .upsert(true)
+        .build();
+    let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
+    if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
+        error!("resoudre_url Erreur, fiche publique idmg {} n'a pas ete sauvegardee", idmg_tiers);
+    }
 
-
-    Ok(None)
+    Ok(Some(idmg_tiers))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
