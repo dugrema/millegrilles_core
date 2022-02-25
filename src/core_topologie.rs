@@ -5,7 +5,7 @@ use std::sync::Arc;
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
-use millegrilles_common_rust::bson::{Bson, doc};
+use millegrilles_common_rust::bson::{Bson, doc, to_bson};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
@@ -19,14 +19,14 @@ use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::Chiffreur;
 use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, Mgs3CipherKeys};
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
-use millegrilles_common_rust::serde_json::{json, Value};
+use millegrilles_common_rust::serde_json::{json, Map, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
@@ -1232,13 +1232,26 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     {
         let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
         let filtre = doc! {"idmg": &idmg_tiers};
-        let ops = doc! {
-            "$set": {
-                "adresses": &fiche_publique.adresses,
-                // "applications": fiche_publique.applications,
-                "chiffrage": &fiche_publique.chiffrage,
-                "ca": &fiche_publique.ca,
+        let apps = match &fiche_publique.applications {
+            Some(a) => {
+                let mut map = Map::new();
+                for (key, value) in a.iter() {
+                    let value_serde = serde_json::to_value(value)?;
+                    map.insert(key.into(), value_serde);
+                }
+                Some(map)
             },
+            None => None
+        };
+        let set_json = json!({
+            "adresses": &fiche_publique.adresses,
+            "applications": apps,
+            "chiffrage": &fiche_publique.chiffrage,
+            "ca": &fiche_publique.ca,
+        });
+        let set_bson = convertir_to_bson(set_json)?;
+        let ops = doc! {
+            "$set": set_bson,
             "$setOnInsert": {
                 "idmg": &idmg_tiers,
                 CHAMP_CREATION: Utc::now(),
