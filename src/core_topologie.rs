@@ -34,7 +34,7 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::{ValidationOptions, VerificateurMessage};
+use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptions, VerificateurMessage};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
@@ -101,9 +101,9 @@ impl TraiterTransaction for GestionnaireDomaineTopologie {
 #[async_trait]
 impl GestionnaireDomaine for GestionnaireDomaineTopologie {
     #[inline]
-    fn get_nom_domaine(&self) -> String {DOMAINE_NOM.into()}
+    fn get_nom_domaine(&self) -> String { DOMAINE_NOM.into() }
     #[inline]
-    fn get_collection_transactions(&self) -> String {NOM_COLLECTION_TRANSACTIONS.into()}
+    fn get_collection_transactions(&self) -> String { NOM_COLLECTION_TRANSACTIONS.into() }
 
     fn get_collections_documents(&self) -> Vec<String> {
         vec![
@@ -113,11 +113,11 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
     }
 
     #[inline]
-    fn get_q_transactions(&self) -> String {NOM_Q_TRANSACTIONS.into()}
+    fn get_q_transactions(&self) -> String { NOM_Q_TRANSACTIONS.into() }
     #[inline]
-    fn get_q_volatils(&self) -> String {NOM_Q_VOLATILS.into()}
+    fn get_q_volatils(&self) -> String { NOM_Q_VOLATILS.into() }
     #[inline]
-    fn get_q_triggers(&self) -> String {NOM_Q_TRIGGERS.into()}
+    fn get_q_triggers(&self) -> String { NOM_Q_TRIGGERS.into() }
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
@@ -126,14 +126,14 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
     }
 
     async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+                                  -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_requete(middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+                                   -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_commande(middleware, message).await  // Fonction plus bas
@@ -146,7 +146,7 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
     }
 
     async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+                                    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_evenement(middleware, message).await  // Fonction plus bas
@@ -163,7 +163,7 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-        -> Result<Option<MessageMilleGrille>, String>
+                                          -> Result<Option<MessageMilleGrille>, String>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
             T: Transaction
@@ -184,7 +184,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         REQUETE_INFO_NOEUD,
     ];
     for req in requetes_protegees {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege });
     }
 
     // RK 2.prive
@@ -195,35 +195,35 @@ pub fn preparer_queues() -> Vec<QueueType> {
         REQUETE_FICHE_MILLEGRILLE,
     ];
     for req in requetes_privees {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive });
     }
 
     let commandes: Vec<&str> = vec![
         //TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
     ];
     for commande in commandes {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege});
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
     }
 
     let evenements: Vec<&str> = vec![
         EVENEMENT_PRESENCE_MONITOR,
     ];
     for evenement in &evenements {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L3Protege});
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L3Protege });
     }
     for evenement in &evenements {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L2Prive});
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L2Prive });
     }
     for evenement in &evenements {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L1Public});
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L1Public });
     }
 
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, EVENEMENT_PRESENCE_DOMAINE), exchange: Securite::L3Protege});
+    rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, EVENEMENT_PRESENCE_DOMAINE), exchange: Securite::L3Protege });
 
     let mut queues = Vec::new();
 
     // Queue de messages volatils (requete, commande, evenements)
-    queues.push(QueueType::ExchangeQueue (
+    queues.push(QueueType::ExchangeQueue(
         ConfigQueue {
             nom_queue: NOM_Q_VOLATILS.into(),
             routing_keys: rk_volatils,
@@ -235,15 +235,15 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_transactions = Vec::new();
     rk_transactions.push(ConfigRoutingExchange {
         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_MONITOR).into(),
-        exchange: Securite::L3Protege
+        exchange: Securite::L3Protege,
     });
     rk_transactions.push(ConfigRoutingExchange {
         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_MONITOR).into(),
-        exchange: Securite::L4Secure
+        exchange: Securite::L4Secure,
     });
 
     // Queue de transactions
-    queues.push(QueueType::ExchangeQueue (
+    queues.push(QueueType::ExchangeQueue(
         ConfigQueue {
             nom_queue: NOM_Q_TRANSACTIONS.into(),
             routing_keys: rk_transactions,
@@ -253,14 +253,14 @@ pub fn preparer_queues() -> Vec<QueueType> {
     ));
 
     // Queue de triggers pour Pki
-    queues.push(QueueType::Triggers (DOMAINE_NOM.into()));
+    queues.push(QueueType::Triggers(DOMAINE_NOM.into()));
 
     queues
 }
 
 /// Creer index MongoDB
 async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
-where M: MongoDao
+    where M: MongoDao
 {
 
     // Transactions
@@ -268,115 +268,115 @@ where M: MongoDao
     // Index transactions par uuid-transaction
     let options_unique_transactions = IndexOptions {
         nom_index: Some(String::from(TRANSACTION_CHAMP_UUID_TRANSACTION)),
-        unique: true
+        unique: true,
     };
     let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_ENTETE_UUID_TRANSACTION), direction: 1}
+        ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_ENTETE_UUID_TRANSACTION), direction: 1 }
     );
     middleware.create_index(
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
-        Some(options_unique_transactions)
+        Some(options_unique_transactions),
     ).await?;
 
     // Index transactions completes
     let options_unique_transactions = IndexOptions {
         nom_index: Some(String::from(TRANSACTION_CHAMP_COMPLETE)),
-        unique: false
+        unique: false,
     };
     let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1}
+        ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1 }
     );
     middleware.create_index(
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
-        Some(options_unique_transactions)
+        Some(options_unique_transactions),
     ).await?;
 
     // Index backup transactions
     let options_unique_transactions = IndexOptions {
         nom_index: Some(String::from(BACKUP_CHAMP_BACKUP_TRANSACTIONS)),
-        unique: false
+        unique: false,
     };
     let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_TRANSACTION_TRAITEE), direction: 1},
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_BACKUP_FLAG), direction: 1},
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
+        ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_TRANSACTION_TRAITEE), direction: 1 },
+        ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_BACKUP_FLAG), direction: 1 },
+        ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1 },
     );
     middleware.create_index(
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
-        Some(options_unique_transactions)
+        Some(options_unique_transactions),
     ).await?;
 
     // Index noeuds
     let options_unique_noeuds = IndexOptions {
         nom_index: Some(String::from(INDEX_NOEUDS)),
-        unique: true
+        unique: true,
     };
     let champs_index_noeuds = vec!(
-        ChampIndex {nom_champ: String::from(CHAMP_NOEUD_ID), direction: 1},
+        ChampIndex { nom_champ: String::from(CHAMP_NOEUD_ID), direction: 1 },
     );
     middleware.create_index(
         NOM_COLLECTION_NOEUDS,
         champs_index_noeuds,
-        Some(options_unique_noeuds)
+        Some(options_unique_noeuds),
     ).await?;
 
     // Index domaines
     let options_unique_domaine = IndexOptions {
         nom_index: Some(String::from(INDEX_DOMAINE)),
-        unique: true
+        unique: true,
     };
     let champs_index_domaine = vec!(
-        ChampIndex {nom_champ: String::from(CHAMP_DOMAINE), direction: 1},
+        ChampIndex { nom_champ: String::from(CHAMP_DOMAINE), direction: 1 },
     );
     middleware.create_index(
         NOM_COLLECTION_DOMAINES,
         champs_index_domaine,
-        Some(options_unique_domaine)
+        Some(options_unique_domaine),
     ).await?;
 
     // Index table millegilles (idmg)
     let options_unique_millegrilles = IndexOptions {
         nom_index: Some(String::from(INDEX_IDMG)),
-        unique: true
+        unique: true,
     };
     let champs_index_millegrilles = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_IDMG), direction: 1},
+        ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_IDMG), direction: 1 },
     );
     middleware.create_index(
         NOM_COLLECTION_MILLEGRILLES,
         champs_index_millegrilles,
-        Some(options_unique_millegrilles)
+        Some(options_unique_millegrilles),
     ).await?;
 
     // Index table millegilles (adresses)
     let options_unique_adresses = IndexOptions {
         nom_index: Some(String::from(INDEX_ADRESSES)),
-        unique: false
+        unique: false,
     };
     let champs_index_adresses = vec!(
-        ChampIndex {nom_champ: String::from(CHAMP_ADRESSES), direction: 1},
+        ChampIndex { nom_champ: String::from(CHAMP_ADRESSES), direction: 1 },
     );
     middleware.create_index(
         NOM_COLLECTION_MILLEGRILLES,
         champs_index_adresses,
-        Some(options_unique_adresses)
+        Some(options_unique_adresses),
     ).await?;
 
     // Index table millegillesAdresses
     let options_unique_mg_adresses = IndexOptions {
         nom_index: Some(String::from(INDEX_ADRESSE)),
-        unique: true
+        unique: true,
     };
     let champs_index_mg_adresses = vec!(
-        ChampIndex {nom_champ: String::from(CHAMP_ADRESSE), direction: 1},
+        ChampIndex { nom_champ: String::from(CHAMP_ADRESSE), direction: 1 },
     );
     middleware.create_index(
         NOM_COLLECTION_MILLEGRILLES_ADRESSES,
         champs_index_mg_adresses,
-        Some(options_unique_mg_adresses)
+        Some(options_unique_mg_adresses),
     ).await?;
 
     Ok(())
@@ -403,7 +403,7 @@ async fn entretien<M>(middleware: Arc<M>)
 }
 
 async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
-where M: ValidateurX509 + GenerateurMessages + MongoDao + Chiffreur<CipherMgs3, Mgs3CipherKeys> {
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + Chiffreur<CipherMgs3, Mgs3CipherKeys> {
     let date_epoch = trigger.get_date();
     debug!("Traiter cedule {}\n{:?}", DOMAINE_NOM, date_epoch);
 
@@ -445,18 +445,18 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
-                },
+                }
             }
-        },
+        }
         _ => {
             error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
             Ok(None)
-        },
+        }
     }
 }
 
 async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+                               -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
@@ -469,21 +469,21 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
 
     match m.action.as_str() {
         // Commandes standard
-    //     TRANSACTION_APPLICATION => traiter_commande_application(middleware.as_ref(), m).await,
-    //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
-    //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
-    //
-    //     // Commandes specifiques au domaine
-    //     PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
-    //
-    //     // Commandes inconnues
+        //     TRANSACTION_APPLICATION => traiter_commande_application(middleware.as_ref(), m).await,
+        //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
+        //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
+        //
+        //     // Commandes specifiques au domaine
+        //     PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
+        //
+        //     // Commandes inconnues
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
     }
 }
 
 async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where
+        M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer transaction : {:?}", &m.message);
 
@@ -500,7 +500,7 @@ where
         TRANSACTION_DOMAINE | TRANSACTION_MONITOR => {
             sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
-        },
+        }
         _ => Err(format!("core_topologie.consommer_transaction Mauvais type d'action pour une transaction : {}", m.action))?,
     }
 }
@@ -510,7 +510,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
 
     // Autorisation : doit etre de niveau 4.secure
     match m.verifier_exchanges(vec![
-        Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure
+        Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure,
     ]) {
         true => Ok(()),
         false => Err(format!("Evenement autorisation invalide (pas exchange autorise)")),
@@ -524,8 +524,8 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
 }
 
 async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where
+        M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
         Ok(t) => t,
@@ -581,7 +581,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
 
     let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
     let options = FindOneAndUpdateOptions::builder().upsert(true).build();
-    let result = match collection.find_one_and_update(filtre,ops, Some(options)).await {
+    let result = match collection.find_one_and_update(filtre, ops, Some(options)).await {
         Ok(r) => r,
         Err(e) => Err(format!("Erreur find document sur transaction domaine : {:?}", e))?
     };
@@ -603,7 +603,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
             Some(DOMAINE_NOM),
             Some(TRANSACTION_DOMAINE),
             None,
-            None
+            None,
         )?;
 
         // Sauvegarder la transation
@@ -631,7 +631,6 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
     if let Some(map) = &event.services {
         for (nom_service, info_service) in map.iter() {
             if let Some(labels) = &info_service.labels {
-
                 let nom_application = match labels.get("application") {
                     Some(a) => a.as_str(),
                     None => nom_service.as_str()
@@ -675,7 +674,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
     debug!("Document monitor a sauvegarder : {:?}", ops);
     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
     let options = FindOneAndUpdateOptions::builder().upsert(true).build();
-    let result = collection.find_one_and_update(filtre,ops, Some(options)).await?;
+    let result = collection.find_one_and_update(filtre, ops, Some(options)).await?;
     debug!("Result update monitor : {:?}", result);
 
     // Verifier si on doit creer une nouvelle transaction
@@ -794,7 +793,7 @@ struct InfoService {
 }
 
 async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+                                         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     // Valider le niveau de securite
@@ -805,18 +804,18 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
                 Some(sec) => Some(sec),
                 None => None
             }
-        },
+        }
         None => None,
     };
     let sec_cascade = match sec_enum_opt {
         Some(s) => securite_cascade_public(&s),
         None => {
             // Aucun niveau de securite, abort
-            let reponse = match middleware.formatter_reponse(json!({"ok": false}),None) {
+            let reponse = match middleware.formatter_reponse(json!({"ok": false}), None) {
                 Ok(m) => m,
                 Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur preparation reponse applications : {:?}", e))?
             };
-            return Ok(Some(reponse))
+            return Ok(Some(reponse));
         }
     };
 
@@ -862,14 +861,14 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
                         }
                     }
                 }
-            },
+            }
             Err(e) => warn!("core_topologie.liste_applications_deployees  Erreur chargement document : {:?}", e)
         }
     }
 
     debug!("Apps : {:?}", apps);
     let liste = json!({"resultats": apps});
-    let reponse = match middleware.formatter_reponse(&liste,None) {
+    let reponse = match middleware.formatter_reponse(&liste, None) {
         Ok(m) => m,
         Err(e) => Err(format!("core_topologie.liste_applications_deployees  Erreur preparation reponse applications : {:?}", e))?
     };
@@ -884,6 +883,7 @@ struct InformationMonitor {
     applications: Option<Vec<InformationApplication>>,
     applications_configurees: Option<Vec<ApplicationConfiguree>>,
 }
+
 impl InformationMonitor {
     fn exporter_applications(&self) -> Vec<Value> {
         vec!()
@@ -905,17 +905,17 @@ struct ApplicationConfiguree {
 }
 
 async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+                         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_noeuds");
-    if ! message.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    if !message.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         let refus = json!({"ok": false, "err": "Acces refuse"});
-        let reponse = match middleware.formatter_reponse(&refus,None) {
+        let reponse = match middleware.formatter_reponse(&refus, None) {
             Ok(m) => m,
             Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse applications : {:?}", e))?
         };
-        return Ok(Some(reponse))
+        return Ok(Some(reponse));
     }
 
     let mut curseur = {
@@ -942,14 +942,14 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
             Ok(mut d) => {
                 filtrer_doc_id(&mut d);
                 noeuds.push(d);
-            },
+            }
             Err(e) => warn!("core_topologie.liste_noeuds Erreur lecture document sous liste_noeuds() : {:?}", e)
         }
     }
 
     debug!("Noeuds : {:?}", noeuds);
     let liste = json!({"resultats": noeuds});
-    let reponse = match middleware.formatter_reponse(&liste,None) {
+    let reponse = match middleware.formatter_reponse(&liste, None) {
         Ok(m) => m,
         Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse noeuds : {:?}", e))?
     };
@@ -957,24 +957,24 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
 }
 
 async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+                           -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_domaines");
-    if ! message.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    if !message.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         let refus = json!({"ok": false, "err": "Acces refuse"});
-        let reponse = match middleware.formatter_reponse(&refus,None) {
+        let reponse = match middleware.formatter_reponse(&refus, None) {
             Ok(m) => m,
             Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse applications : {:?}", e))?
         };
-        return Ok(Some(reponse))
+        return Ok(Some(reponse));
     }
 
     let mut curseur = {
         let projection = doc! {"noeud_id": true, "domaine": true, CHAMP_MODIFICATION: true};
         let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
         let ops = FindOptions::builder().projection(Some(projection)).build();
-        match collection.find(doc!{}, Some(ops)).await {
+        match collection.find(doc! {}, Some(ops)).await {
             Ok(c) => c,
             Err(e) => Err(format!("core_topologie.liste_domaines Erreur chargement domaines : {:?}", e))?
         }
@@ -986,14 +986,14 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
             Ok(mut d) => {
                 filtrer_doc_id(&mut d);
                 domaines.push(d);
-            },
+            }
             Err(e) => warn!("core_topologie.liste_domaines Erreur lecture document sous liste_noeuds() : {:?}", e)
         }
     }
 
     debug!("Domaines : {:?}", domaines);
     let liste = json!({"resultats": domaines});
-    let reponse = match middleware.formatter_reponse(&liste,None) {
+    let reponse = match middleware.formatter_reponse(&liste, None) {
         Ok(m) => m,
         Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse domaines : {:?}", e))?
     };
@@ -1001,17 +1001,17 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
 }
 
 async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+                         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("resolve_idmg");
-    if ! message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    if !message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         let refus = json!({"ok": false, "err": "Acces refuse"});
-        let reponse = match middleware.formatter_reponse(&refus,None) {
+        let reponse = match middleware.formatter_reponse(&refus, None) {
             Ok(m) => m,
             Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse applications : {:?}", e))?
         };
-        return Ok(Some(reponse))
+        return Ok(Some(reponse));
     }
 
     let idmg_local = middleware.get_enveloppe_privee().idmg()?;
@@ -1020,7 +1020,7 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
 
     // Map reponse, associe toutes les adresses dans la requete aux idmg trouves
-    let mut resolved_dns: HashMap<String,Option<String>> = HashMap::new();
+    let mut resolved_dns: HashMap<String, Option<String>> = HashMap::new();
 
     if let Some(adresses) = requete.dns {
         for dns in &adresses {
@@ -1038,7 +1038,7 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
             if doc_adresse.idmg.as_str() == idmg_local.as_str() {
                 // L'adresse correspond a la millegrille locale
                 resolved_dns.insert(doc_adresse.adresse.clone(), Some(doc_adresse.idmg.clone()));
-                continue
+                continue;
             }
 
             let date_modification = match date_modification {
@@ -1056,14 +1056,14 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
                                     match idmg_option {
                                         Some(i) => {
                                             resolved_dns.insert(hostname.into(), i.into());
-                                        },
+                                        }
                                         None => {
                                             // Aucuns changements (e.g. 304). Utiliser la version de la DB.
                                             resolved_dns.insert(hostname.into(), Some(doc_adresse.idmg.clone()));
                                         }
                                     }
                                     Some(date_chrono)
-                                },
+                                }
                                 Err(e) => {
                                     error!("core_topologie.resolve_idmg Erreur chargement hostname {} : {:?}", hostname, e);
                                     None
@@ -1075,14 +1075,14 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
                     } else {
                         None
                     }
-                },
+                }
                 None => None
             };
 
             match date_modification {
                 Some(d) => {
                     resolved_dns.insert(doc_adresse.adresse, Some(doc_adresse.idmg));
-                },
+                }
                 None => {
                     debug!("Recharger information idmg {}", doc_adresse.idmg);
                 }
@@ -1098,14 +1098,14 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
                     if let Some(idmg) = idmg_option {
                         resolved_dns.insert(hostname.into(), idmg.into());
                     }
-                },
+                }
                 Err(e) => error!("core_topologie.resolve_idmg Erreur chargement hostname {} : {:?}", hostname, e)
             }
         }
     }
 
     let liste = json!({"dns": resolved_dns});
-    let reponse = match middleware.formatter_reponse(&liste,None) {
+    let reponse = match middleware.formatter_reponse(&liste, None) {
         Ok(m) => m,
         Err(e) => Err(format!("core_topologie.resolve_idmg Erreur preparation reponse resolve idmg : {:?}", e))?
     };
@@ -1178,7 +1178,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
             } else {
                 Ok(())
             }
-        },
+        }
         None => Err(format!("core_topologie.resoudre_url Code reponse http manquant"))
     }?;
 
@@ -1191,45 +1191,21 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     let mut fiche_publique_message = MessageSerialise::from_serializable(fiche_json_value)?;
     debug!("resoudre_url Fiche publique message serialize : {:?}", fiche_publique_message);
     let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu(None)?;
+    match fiche_publique.ca.clone() {
+        Some(c) => {
+            let enveloppe = middleware.charger_enveloppe(&vec![c], None).await?;
+            fiche_publique_message.set_millegrille(enveloppe);
+            Ok(())
+        }
+        None => Err(format!("core_topologie.resoudre_url Certificat CA manquant de la fiche publique"))
+    }?;
     debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
 
-    // Charger certificat CA du tiers
-    let certificat_ca_tiers = match &fiche_publique.ca {
-        Some(c) => middleware.charger_enveloppe(&vec![c.to_owned()], None).await,
-        None => Err(format!("core_topologie.resoudre_url Fiche publique manquante"))
+    // Valider la fiche (certificats et signature message)
+    let idmg_tiers = match fiche_publique_message.valider_message_tiers(middleware).await {
+        Ok(idmg_tiers) => Ok(idmg_tiers),
+        Err(e) => Err(format!("core_topologie.resoudre_url Erreur validation fiche publique : {:?}", e))
     }?;
-    debug!("resoudre_url Certificat CA tiers : {:?}", certificat_ca_tiers);
-    let idmg_tiers = certificat_ca_tiers.calculer_idmg()?;
-    debug!("resoudre_url Certificat idmg tiers : {}", idmg_tiers);
-    fiche_publique_message.set_millegrille(certificat_ca_tiers.clone());
-
-    // Charger et verificat certificat tiers
-    let certificat_tiers = match &fiche_publique_message.parsed.certificat {
-        Some(c) => match middleware.charger_enveloppe(&c, None).await {
-            Ok(enveloppe) => {
-                let valide = middleware.valider_chaine(
-                    enveloppe.as_ref(), Some(certificat_ca_tiers.as_ref()))?;
-                if valide &&
-                    enveloppe.verifier_exchanges(vec![Securite::L4Secure]) &&
-                    enveloppe.verifier_roles(vec![RolesCertificats::Core]) {
-                    Ok(enveloppe)
-                } else {
-                    Err(format!("core_topologie.resoudre_url Erreur verification certificat fiche publique : chaine invalide"))
-                }
-            },
-            Err(e) => Err(format!("core_topologie.resoudre_url Certificat fiche publique ne peut pas etre charge : {:?}", e))
-        },
-        None => Err(format!("core_topologie.resoudre_url Certificat fiche publique manquant"))
-    }?;
-    fiche_publique_message.set_certificat(certificat_tiers);
-
-    // Valider le message avec certificat de la millegrille tierce
-    let validation_option = ValidationOptions::new(true, true, true);
-    let resultat_validation = fiche_publique_message.valider(middleware, Some(&validation_option)).await?;
-    debug!("resoudre_url Resultat validation : {:?}", resultat_validation);
-    if ! resultat_validation.valide() {
-        Err(format!("core_topologie.resoudre_url Validation de la fiche publique a echoue (message invalide : {:?})", resultat_validation))?;
-    }
 
     // Sauvegarder/mettre a jour fiche publique
     {
@@ -1243,7 +1219,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
                     map.insert(key.into(), value_serde);
                 }
                 Some(map)
-            },
+            }
             None => None
         };
         let set_json = json!({
@@ -1304,6 +1280,85 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     Ok(Some(idmg_tiers))
 }
 
+struct ResultatValidationTierce {
+    idmg: Option<String>,
+
+}
+
+// async fn valider_message_tiers<M>(middleware: &M, fiche_publique_message: &mut MessageSerialise)
+//                                   -> Result<String, ResultatValidation>
+//     where M: ValidateurX509
+// {
+//     // Charger certificat CA du tiers
+//     let certificat_ca_tiers = match &fiche_publique_message.millegrille {
+//         Some(c) => Ok(c.clone()),
+//         None => {
+//             info!("valider_message_tiers Fiche publique manquante");
+//             Err(ResultatValidation::new(false, None, false, false))
+//         }
+//     }?;
+//
+//     debug!("resoudre_url Certificat CA tiers : {:?}", certificat_ca_tiers);
+//     let idmg_tiers = match certificat_ca_tiers.calculer_idmg() {
+//         Ok(i) => Ok(i),
+//         Err(e) => {
+//             info!("valider_message_tiers Erreur calcul idmg sur certificat de millegrille : {}", e);
+//             Err(ResultatValidation::new(false, None, false, false))
+//         }
+//     }?;
+//     debug!("resoudre_url Certificat idmg tiers : {}", idmg_tiers);
+//     fiche_publique_message.set_millegrille(certificat_ca_tiers.clone());
+//
+//     // Charger et verificat certificat tiers
+//     let certificat_tiers = match &fiche_publique_message.parsed.certificat {
+//         Some(c) => match middleware.charger_enveloppe(&c, None).await {
+//             Ok(enveloppe) => {
+//                 let valide = match middleware.valider_chaine(
+//                     enveloppe.as_ref(), Some(certificat_ca_tiers.as_ref())) {
+//                     Ok(v) => Ok(v),
+//                     Err(e) => {
+//                         info!("valider_message_tiers Erreur valider chaine de certificat : {}", e);
+//                         Err(ResultatValidation::new(false, None, false, false))
+//                     }
+//                 }?;
+//                 if valide &&
+//                     enveloppe.verifier_exchanges(vec![Securite::L4Secure]) &&
+//                     enveloppe.verifier_roles(vec![RolesCertificats::Core]) {
+//                     Ok(enveloppe)
+//                 } else {
+//                     info!("core_topologie.resoudre_url Erreur verification certificat fiche publique : chaine invalide");
+//                     Err(ResultatValidation::new(false, None, false, false))
+//                 }
+//             }
+//             Err(e) => {
+//                 info!("core_topologie.resoudre_url Certificat fiche publique ne peut pas etre charge : {:?}", e);
+//                 Err(ResultatValidation::new(false, None, false, false))
+//             }
+//         },
+//         None => {
+//             info!("core_topologie.resoudre_url Certificat fiche publique manquant");
+//             Err(ResultatValidation::new(false, None, false, false))
+//         }
+//     }?;
+//     fiche_publique_message.set_certificat(certificat_tiers);
+//
+//     // Valider le message avec certificat de la millegrille tierce
+//     let validation_option = ValidationOptions::new(true, true, true);
+//     let resultat_validation = match fiche_publique_message.valider(middleware, Some(&validation_option)).await {
+//         Ok(r) => Ok(r),
+//         Err(e) => {
+//             info!("valider_message_tiers Erreur execution de la validation : {}", e);
+//             Err(ResultatValidation::new(false, None, true, false))
+//         }
+//     }?;
+//
+//     debug!("resoudre_url Resultat validation : {:?}", resultat_validation);
+//     match resultat_validation.valide() {
+//         true => Ok(idmg_tiers),
+//         false => Err(resultat_validation)
+//     }
+// }
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ReponseFichePubliqueTierce {
     code: Option<u16>,
@@ -1322,7 +1377,7 @@ struct FichePubliqueReception {
 }
 
 async fn produire_fiche_publique<M>(middleware: &M)
-    -> Result<(), Box<dyn Error>>
+                                    -> Result<(), Box<dyn Error>>
     where M: ValidateurX509 + Chiffreur<CipherMgs3, Mgs3CipherKeys> + GenerateurMessages + MongoDao
 {
     debug!("produire_fiche_publique");
@@ -1369,9 +1424,9 @@ async fn produire_fiche_publique<M>(middleware: &M)
                 match &app.securite {
                     Some(s) => {
                         if s.as_str() != SECURITE_1_PUBLIC && s.as_str() != SECURITE_2_PRIVE {
-                            continue  // Pas public ou prive, on skip l'application
+                            continue;  // Pas public ou prive, on skip l'application
                         }
-                    },
+                    }
                     None => continue  // On assume securite protege ou secure, skip
                 }
 
@@ -1384,7 +1439,7 @@ async fn produire_fiche_publique<M>(middleware: &M)
                 match applications.get_mut(nom_app.as_str()) {
                     Some(a) => {
                         a.push(app_publique);
-                    },
+                    }
                     None => {
                         let mut vec_apps = Vec::new();
                         vec_apps.push(app_publique);
@@ -1423,12 +1478,12 @@ struct FichePublique {
 struct ApplicationPublique {
     application: String,
     version: Option<String>,
-    url: String
+    url: String,
 }
 
 /// Genere information de resolution locale (urls, etc)
 async fn produire_information_locale<M>(middleware: &M)
-    -> Result<(), Box<dyn Error>>
+                                        -> Result<(), Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("produire_information_locale");
@@ -1456,16 +1511,16 @@ async fn produire_information_locale<M>(middleware: &M)
         let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
         let filtre = doc! {TRANSACTION_CHAMP_IDMG: &idmg_local};
         let ops = doc! {
-            "$setOnInsert": {
-                TRANSACTION_CHAMP_IDMG: &idmg_local,
-                CHAMP_CREATION: Utc::now(),
-            },
-            "$set": {
-                CHAMP_ADRESSES: &adresses,
-                "local": true,
-            },
-            "$currentDate": {CHAMP_MODIFICATION: true}
-        };
+"$setOnInsert": {
+TRANSACTION_CHAMP_IDMG: &idmg_local,
+CHAMP_CREATION: Utc::now(),
+},
+"$set": {
+CHAMP_ADRESSES: &adresses,
+"local": true,
+},
+"$currentDate": {CHAMP_MODIFICATION: true}
+};
         let options = UpdateOptions::builder()
             .upsert(true)
             .build();
@@ -1477,15 +1532,15 @@ async fn produire_information_locale<M>(middleware: &M)
         for adresse in &adresses {
             let filtre = doc! {CHAMP_ADRESSE: adresse};
             let ops = doc! {
-                "$setOnInsert": {
-                    CHAMP_ADRESSE: &adresse,
-                    CHAMP_CREATION: Utc::now(),
-                },
-                "$set": {
-                    TRANSACTION_CHAMP_IDMG: &idmg_local,
-                },
-                "$currentDate": {CHAMP_MODIFICATION: true}
-            };
+"$setOnInsert": {
+CHAMP_ADRESSE: &adresse,
+CHAMP_CREATION: Utc::now(),
+},
+"$set": {
+TRANSACTION_CHAMP_IDMG: &idmg_local,
+},
+"$currentDate": {CHAMP_MODIFICATION: true}
+};
             let options = UpdateOptions::builder()
                 .upsert(true)
                 .build();
@@ -1504,16 +1559,16 @@ impl TryInto<ApplicationPublique> for InformationApplication {
             Some(u) => u,
             None => Err(format!("core_topologie.TryInto<ApplicationPublique> URL manquant"))?
         };
-        Ok(ApplicationPublique{
+        Ok(ApplicationPublique {
             application: self.application,
             version: None,
-            url
+            url,
         })
     }
 }
 
 async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+                                      -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("requete_fiche_millegrille");
@@ -1522,14 +1577,14 @@ async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideActi
 
     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
     let filtre = doc! {
-        TRANSACTION_CHAMP_IDMG: &requete.idmg,
-    };
+TRANSACTION_CHAMP_IDMG: &requete.idmg,
+};
 
     let reponse = match collection.find_one(filtre, None).await? {
         Some(doc_fiche) => {
             let fiche: FichePublique = convertir_bson_deserializable(doc_fiche)?;
             middleware.formatter_reponse(fiche, None)
-        },
+        }
         None => {
             middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)
         }
@@ -1554,29 +1609,27 @@ mod test_integration {
 
     use super::*;
 
-    // #[tokio::test]
-    // async fn test_liste_applications() {
-    //     setup("test_liste_applications");
-    //     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
-    //     futures.push(spawn(async move {
-    //
-    //         let message = {
-    //             let contenu = json!({});
-    //             let mm = middleware.formatter_message(&contenu, None::<&str>, None, None, None).expect("mm");
-    //             let ms = MessageSerialise::from_parsed(mm).expect("ms");
-    //             let mut mva = MessageValideAction::new(ms, "", "", "", "", TypeMessageOut::Transaction);
-    //             mva.exchange = Some(String::from("3.protege"));
-    //             mva
-    //         };
-    //
-    //         debug!("Duree test_liste_applications");
-    //         let reponse = liste_applications_deployees(middleware.as_ref(), message).await.expect("reponse");
-    //         debug!("Reponse test_liste_applications : {:?}", reponse);
-    //
-    //     }));
-    //     // Execution async du test
-    //     futures.next().await.expect("resultat").expect("ok");
-    // }
-
-
+// #[tokio::test]
+// async fn test_liste_applications() {
+//     setup("test_liste_applications");
+//     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+//     futures.push(spawn(async move {
+//
+//         let message = {
+//             let contenu = json!({});
+//             let mm = middleware.formatter_message(&contenu, None::<&str>, None, None, None).expect("mm");
+//             let ms = MessageSerialise::from_parsed(mm).expect("ms");
+//             let mut mva = MessageValideAction::new(ms, "", "", "", "", TypeMessageOut::Transaction);
+//             mva.exchange = Some(String::from("3.protege"));
+//             mva
+//         };
+//
+//         debug!("Duree test_liste_applications");
+//         let reponse = liste_applications_deployees(middleware.as_ref(), message).await.expect("reponse");
+//         debug!("Reponse test_liste_applications : {:?}", reponse);
+//
+//     }));
+//     // Execution async du test
+//     futures.next().await.expect("resultat").expect("ok");
+// }
 }
