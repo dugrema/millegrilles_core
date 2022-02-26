@@ -604,6 +604,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
             Some(TRANSACTION_DOMAINE),
             None,
             None,
+            false
         )?;
 
         // Sauvegarder la transation
@@ -692,7 +693,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
         });
 
         let transaction = middleware.formatter_message(
-            &tval, Some(DOMAINE_NOM), Some(TRANSACTION_MONITOR), None, None)?;
+            &tval, Some(DOMAINE_NOM), Some(TRANSACTION_MONITOR), None, None, false)?;
 
         // Sauvegarder la transation
         let msg = MessageSerialise::from_parsed(transaction)?;
@@ -1470,6 +1471,7 @@ async fn produire_fiche_publique<M>(middleware: &M)
     let routage = RoutageMessageAction::builder(
         DOMAINE_NOM, EVENEMENT_FICHE_PUBLIQUE)
         .exchanges(vec![Securite::L1Public])
+        .ajouter_ca(true)
         .build();
     middleware.emettre_evenement(routage, &fiche).await?;
 
@@ -1521,16 +1523,16 @@ async fn produire_information_locale<M>(middleware: &M)
         let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
         let filtre = doc! {TRANSACTION_CHAMP_IDMG: &idmg_local};
         let ops = doc! {
-"$setOnInsert": {
-TRANSACTION_CHAMP_IDMG: &idmg_local,
-CHAMP_CREATION: Utc::now(),
-},
-"$set": {
-CHAMP_ADRESSES: &adresses,
-"local": true,
-},
-"$currentDate": {CHAMP_MODIFICATION: true}
-};
+            "$setOnInsert": {
+                TRANSACTION_CHAMP_IDMG: &idmg_local,
+                CHAMP_CREATION: Utc::now(),
+            },
+            "$set": {
+                CHAMP_ADRESSES: &adresses,
+                "local": true,
+            },
+            "$currentDate": {CHAMP_MODIFICATION: true}
+        };
         let options = UpdateOptions::builder()
             .upsert(true)
             .build();
@@ -1542,15 +1544,15 @@ CHAMP_ADRESSES: &adresses,
         for adresse in &adresses {
             let filtre = doc! {CHAMP_ADRESSE: adresse};
             let ops = doc! {
-"$setOnInsert": {
-CHAMP_ADRESSE: &adresse,
-CHAMP_CREATION: Utc::now(),
-},
-"$set": {
-TRANSACTION_CHAMP_IDMG: &idmg_local,
-},
-"$currentDate": {CHAMP_MODIFICATION: true}
-};
+                "$setOnInsert": {
+                    CHAMP_ADRESSE: &adresse,
+                    CHAMP_CREATION: Utc::now(),
+                },
+                "$set": {
+                    TRANSACTION_CHAMP_IDMG: &idmg_local,
+                },
+                "$currentDate": {CHAMP_MODIFICATION: true}
+            };
             let options = UpdateOptions::builder()
                 .upsert(true)
                 .build();

@@ -584,7 +584,7 @@ where
                 filtrer_doc_id(&mut doc_catalogue);
                 doc_catalogue.remove("dirty_flag");
                 let catalogue_signe = middleware.formatter_message(
-                    &doc_catalogue, BACKUP_NOM_DOMAINE.into(), TRANSACTION_CATALOGUE_QUOTIDIEN.into(), None, None)?;
+                    &doc_catalogue, BACKUP_NOM_DOMAINE.into(), TRANSACTION_CATALOGUE_QUOTIDIEN.into(), None, None, false)?;
 
                 let commande_backup_domaine = json!({
                     "catalogue": catalogue_signe,

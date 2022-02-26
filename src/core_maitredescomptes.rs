@@ -988,7 +988,7 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
 
     let commande_signature = CommandeSignatureUsager::new(nom_usager_str, user_id_str, csr_str, compte);
     let commande_signee = middleware.formatter_message(
-        &commande_signature, None::<&str>, None::<&str>, None::<&str>, None)?;
+        &commande_signature, None::<&str>, None::<&str>, None::<&str>, None, false)?;
 
     let response = match client.post(url_post).json(&commande_signee).send().await {
         Ok(inner) => inner,
