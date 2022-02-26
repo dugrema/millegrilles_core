@@ -920,7 +920,7 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
         // Calculer fingerprint du nouveau certificat
         let reponsecert_obj: ReponseCertificatUsager = reponse_commande.map_contenu(None)?;
         let pem = reponsecert_obj.certificat;
-        let enveloppe_cert = middleware.charger_enveloppe(&pem, None).await?;
+        let enveloppe_cert = middleware.charger_enveloppe(&pem, None, None).await?;
         let fingerprint_pk = enveloppe_cert.fingerprint_pk()?;
 
         // let fingerprint_pk = String::from("FINGERPRINT_DUMMY");

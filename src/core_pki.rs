@@ -58,6 +58,13 @@ const NOM_DOMAINE_CERTIFICATS: &str = "certificat";
 /// Instance statique du gestionnaire de maitredescomptes
 pub const GESTIONNAIRE_PKI: GestionnaireDomainePki = GestionnaireDomainePki {};
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CorePkiCertificat {
+    pub fingerprint: String,
+    pub certificat: Vec<String>,
+    pub ca: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct GestionnaireDomainePki {}
 
@@ -477,7 +484,7 @@ where
         None => None,
     };
 
-    let enveloppe = middleware.charger_enveloppe(&chaine_pem, fingerprint).await?;
+    let enveloppe = middleware.charger_enveloppe(&chaine_pem, fingerprint, None).await?;
 
     // Certificat trouve, repondre
     debug!("requete_certificat_par_pk repondre fingerprint {:?} pour fingerprint_pk {}", fingerprint, fingerprint_pk);
@@ -492,27 +499,38 @@ async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageVa
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let pems = match m.message.get_msg().contenu.get("chaine_pem") {
-        Some(c) => match c.as_array() {
-            Some(c) => Ok(c),
-            None => Err("chaine_pem n'est pas une array"),
-        },
-        None => Err("chaine_pem manquante d'une commande de sauvegarde de certificat")
-    }?;
+    let commande: CommandeSauvegarderCertificat = m.message.get_msg().map_contenu(None)?;
 
-    let mut pems_str = Vec::new();
-    for pem in pems {
-        match pem.as_str() {
-            Some(p) => Ok(pems_str.push(p.to_owned())),
-            None => Err("pem n'est pas une str")
-        }?;
-    }
+    // let pems = match m.message.get_msg().contenu.get("chaine_pem") {
+    //     Some(c) => match c.as_array() {
+    //         Some(c) => Ok(c),
+    //         None => Err("chaine_pem n'est pas une array"),
+    //     },
+    //     None => Err("chaine_pem manquante d'une commande de sauvegarde de certificat")
+    // }?;
 
-    let enveloppe = middleware.charger_enveloppe(&pems_str, None).await?;
+    // let mut pems_str = Vec::new();
+    // for pem in &commande.chaine_pem {
+    //     match pem.as_str() {
+    //         Some(p) => Ok(pems_str.push(p.to_owned())),
+    //         None => Err("pem n'est pas une str")
+    //     }?;
+    // }
+    let ca_pem = match &commande.ca {
+        Some(c) => Some(c.as_str()),
+        None => None
+    };
+    let enveloppe = middleware.charger_enveloppe(&commande.chaine_pem, None, ca_pem).await?;
     debug!("Commande de sauvegarde de certificat {} traitee", enveloppe.fingerprint);
 
     let reponse = middleware.formatter_reponse(json!({"ok": true}), None)?;
     Ok(Some(reponse))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandeSauvegarderCertificat {
+    chaine_pem: Vec<String>,
+    ca: Option<String>
 }
 
 /// Commande de relai vers le certissuer pour signer un CSR. La commande doit etre signee par

@@ -1190,22 +1190,32 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     debug!("resoudre_url Message json string : {}", fiche_json_value);
     let mut fiche_publique_message = MessageSerialise::from_serializable(fiche_json_value)?;
     debug!("resoudre_url Fiche publique message serialize : {:?}", fiche_publique_message);
-    let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu(None)?;
-    match fiche_publique.ca.clone() {
-        Some(c) => {
-            let enveloppe = middleware.charger_enveloppe(&vec![c], None).await?;
-            fiche_publique_message.set_millegrille(enveloppe);
-            Ok(())
-        }
-        None => Err(format!("core_topologie.resoudre_url Certificat CA manquant de la fiche publique"))
+    let idmg_tiers = match &fiche_publique_message.certificat {
+        Some(c) => c.idmg(),
+        None => Err(format!("core_topologie.resoudre_url Erreur chargement certificat de fiche publique"))
     }?;
-    debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
+    let validation_option = ValidationOptions::new(true, true, true);
+    let resultat_validation = fiche_publique_message.valider(middleware, Some(&validation_option)).await?;
+    if ! resultat_validation.valide() {
+        Err(format!("core_topologie.resoudre_url Erreur validation fiche publique : {:?}", resultat_validation))?
+    }
 
-    // Valider la fiche (certificats et signature message)
-    let idmg_tiers = match fiche_publique_message.valider_message_tiers(middleware).await {
-        Ok(idmg_tiers) => Ok(idmg_tiers),
-        Err(e) => Err(format!("core_topologie.resoudre_url Erreur validation fiche publique : {:?}", e))
-    }?;
+    let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu(None)?;
+    // match fiche_publique.ca.clone() {
+    //     Some(c) => {
+    //         let enveloppe = middleware.charger_enveloppe(&vec![c], None).await?;
+    //         fiche_publique_message.set_millegrille(enveloppe);
+    //         Ok(())
+    //     }
+    //     None => Err(format!("core_topologie.resoudre_url Certificat CA manquant de la fiche publique"))
+    // }?;
+    debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
+    //
+    // // Valider la fiche (certificats et signature message)
+    // let idmg_tiers = match fiche_publique_message.valider_message_tiers(middleware).await {
+    //     Ok(idmg_tiers) => Ok(idmg_tiers),
+    //     Err(e) => Err(format!("core_topologie.resoudre_url Erreur validation fiche publique : {:?}", e))
+    // }?;
 
     // Sauvegarder/mettre a jour fiche publique
     {

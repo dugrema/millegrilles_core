@@ -15,7 +15,7 @@ use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMi
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{configurer as configurer_queues, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, ReponseDechiffrageCle, upsert_certificat, Middleware};
-use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoImpl};
+use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao, MongoDaoImpl};
 use millegrilles_common_rust::mongodb::Database;
 use millegrilles_common_rust::openssl::x509::store::X509Store;
 use millegrilles_common_rust::openssl::x509::X509;
@@ -31,7 +31,7 @@ use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptio
 use millegrilles_common_rust::redis_dao::RedisDao;
 use millegrilles_common_rust::tokio::sync::mpsc::Sender;
 
-use crate::core_pki::{COLLECTION_CERTIFICAT_NOM, DOMAINE_NOM as PKI_DOMAINE_NOM};
+use crate::core_pki::{COLLECTION_CERTIFICAT_NOM, CorePkiCertificat, DOMAINE_NOM as PKI_DOMAINE_NOM};
 
 // Middleware avec MongoDB et validateur X509 lie a la base de donnees
 pub struct MiddlewareDbPki {
@@ -118,11 +118,11 @@ impl ValidateurX509Database {
 #[async_trait]
 impl ValidateurX509 for ValidateurX509Database {
 
-    async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>) -> Result<Arc<EnveloppeCertificat>, String> {
+    async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>, ca_pem: Option<&str>) -> Result<Arc<EnveloppeCertificat>, String> {
         debug!("ValidateurX509Database: charger_enveloppe!");
         // let resultat = self.charger_cert_db();
 
-        let enveloppe = self.validateur.charger_enveloppe(chaine_pem, fingerprint).await?;
+        let enveloppe = self.validateur.charger_enveloppe(chaine_pem, fingerprint, ca_pem).await?;
 
         // Verifier si le certificat existe dans la base de donnes, creer transaction au besoin
         self.upsert_enveloppe(&enveloppe).await?;
@@ -152,22 +152,50 @@ impl ValidateurX509 for ValidateurX509Database {
                         match result {
                             Ok(option) => match option {
                                 Some(document) => {
-                                    match document.get(PKI_DOCUMENT_CHAMP_CERTIFICAT) {
-                                        Some(chaine_pem) => {
-                                            let mut vec_pems = Vec::new();
-                                            for pem in chaine_pem.as_array().expect("pems") {
-                                                vec_pems.push(String::from(pem.as_str().expect("un pem")));
-                                            }
-                                            match self.validateur.charger_enveloppe(&vec_pems, None).await {
-                                                Ok(enveloppe) => {
-                                                    debug!("Certificat {} charge de la DB", fingerprint);
-                                                    Some(enveloppe)
-                                                },
-                                                Err(_) => None,
-                                            }
+                                    let certificat_pki: CorePkiCertificat = match convertir_bson_deserializable(document) {
+                                        Ok(c) => c,
+                                        Err(e) => {
+                                            error!("get_certificat Erreur mapping certificat bson : {:?}", e);
+                                            return None
+                                        }
+                                    };
+
+                                    let ca_pem = match &certificat_pki.ca {
+                                        Some(c) => Some(c.as_str()),
+                                        None => None
+                                    };
+                                    match self.validateur.charger_enveloppe(
+                                        &certificat_pki.certificat,
+                                        Some(certificat_pki.fingerprint.as_str()),
+                                        ca_pem
+                                    ).await {
+                                        Ok(enveloppe) => {
+                                            debug!("Certificat {} charge de la DB", fingerprint);
+                                            Some(enveloppe)
                                         },
-                                        None => None,
+                                        Err(_) => None,
                                     }
+
+                                    // match document.get(PKI_DOCUMENT_CHAMP_CERTIFICAT) {
+                                    //     Some(chaine_pem) => {
+                                    //         let mut vec_pems = Vec::new();
+                                    //         for pem in chaine_pem.as_array().expect("pems") {
+                                    //             vec_pems.push(String::from(pem.as_str().expect("un pem")));
+                                    //         }
+                                    //         match self.validateur.charger_enveloppe(&vec_pems, None).await {
+                                    //             Ok(enveloppe) => {
+                                    //                 debug!("Certificat {} charge de la DB", fingerprint);
+                                    //                 Some(enveloppe)
+                                    //             },
+                                    //             Err(_) => None,
+                                    //         }
+                                    //     },
+                                    //     None => None,
+                                    // }
+
+
+
+
                                 },
                                 None => {
                                     debug!("Certificat inconnu (pas dans la DB) {:?}", fingerprint);
@@ -315,8 +343,8 @@ pub fn preparer_middleware_pki(
 
 #[async_trait]
 impl ValidateurX509 for MiddlewareDbPki {
-    async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>) -> Result<Arc<EnveloppeCertificat>, String> {
-        let enveloppe = self.validateur.charger_enveloppe(chaine_pem, fingerprint).await?;
+    async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>, ca_pem: Option<&str>) -> Result<Arc<EnveloppeCertificat>, String> {
+        let enveloppe = self.validateur.charger_enveloppe(chaine_pem, fingerprint, ca_pem).await?;
 
         // Conserver dans redis (reset TTL)
         match self.redis.save_certificat(&enveloppe).await {
@@ -340,7 +368,7 @@ impl ValidateurX509 for MiddlewareDbPki {
             Some(c) => Some(c),
             None => {
                 // Cas special, certificat inconnu a PKI. Tenter de le charger de redis
-                let pems_vec = match self.redis.get_certificat(fingerprint).await {
+                let redis_certificat = match self.redis.get_certificat(fingerprint).await {
                     Ok(c) => match c {
                         Some(cert_pem) => cert_pem,
                         None => return None
@@ -352,7 +380,11 @@ impl ValidateurX509 for MiddlewareDbPki {
                 };
 
                 // Le certificat est dans redis, on le sauvegarde localement en chargeant l'enveloppe
-                match self.validateur.charger_enveloppe(&pems_vec, None).await {
+                let ca_pem = match &redis_certificat.ca {
+                    Some(c) => Some(c.as_str()),
+                    None => None
+                };
+                match self.validateur.charger_enveloppe(&redis_certificat.pems, None, ca_pem).await {
                     Ok(c) => Some(c),
                     Err(e) => {
                         warn!("MiddlewareDbPki.get_certificat (1) Erreur acces certificat via redis : {:?}", e);
