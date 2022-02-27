@@ -426,7 +426,7 @@ where
 
     debug!("Requete certificat sur fingerprint {} trouve", fingerprint);
 
-    let reponse_value = formatter_message_certificat(enveloppe.as_ref());
+    let reponse_value = formatter_message_certificat(enveloppe.as_ref())?;
 
     // C'est une requete sur le domaine certificat, on emet l'evenement.infocertificat.fingerprint
     let mut builder_routage = RoutageMessageAction::builder("certificat", "infoCertificat");
@@ -489,7 +489,7 @@ where
     // Certificat trouve, repondre
     debug!("requete_certificat_par_pk repondre fingerprint {:?} pour fingerprint_pk {}", fingerprint, fingerprint_pk);
     // repondre_enveloppe(middleware, &m, enveloppe.as_ref()).await?;
-    let reponse_value = formatter_message_certificat(enveloppe.as_ref());
+    let reponse_value = formatter_message_certificat(enveloppe.as_ref())?;
     let reponse = middleware.formatter_reponse(reponse_value, None)?;
     debug!("requete_certificat_par_pk reponse pour fingerprint_pk {}\n{:?}", fingerprint_pk, reponse);
     Ok(Some(reponse))
