@@ -624,21 +624,32 @@ where
 {
     debug!("Sauvegarder certificat recu via transaction");
 
-    let contenu = transaction.get_contenu();
-    let certificat = match contenu.get_str("pem") {
+    let contenu: TransactionCertificat = match transaction.convertir() {
         Ok(c) => Ok(c),
-        Err(e) => Err(format!("Champ PEM manquant de transaction nouveauCertificat: {:?}", e)),
+        Err(e) => Err(format!("core_pki.sauvegarder_certificat Erreur conversion transaction en TransactionCertificat : {:?}", e)),
     }?;
+    let certificat_pems = contenu.pem;
+    let ca_pem = match &contenu.ca {
+        Some(ca) => Some(ca.as_str()),
+        None => None
+    };
 
     // Utiliser validateur.charger_enveloppe. Va automatiquement sauvegarder le certificat (si manquant).
-    let enveloppe = match charger_enveloppe(certificat, Some(middleware.store())) {
+    let enveloppe = match charger_enveloppe(certificat_pems.as_str(), None, ca_pem) {
         Ok(e) => Ok(e),
         Err(e) => Err(format!("Erreur preparation enveloppe pour sauvegarder certificat : {:?}", e)),
     }?;
+
     let collection_doc_pki = middleware.get_collection(COLLECTION_CERTIFICAT_NOM)?;
     upsert_certificat(&enveloppe, collection_doc_pki, Some(false)).await?;
 
     Ok(None)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TransactionCertificat {
+    pem: String,
+    ca: Option<String>
 }
 
 async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule) -> Result<(), Box<dyn Error>>

@@ -72,7 +72,7 @@ impl ValidateurX509Database {
     }
 
     async fn upsert_enveloppe(&self, enveloppe: &EnveloppeCertificat) -> Result<(), String> {
-        debug!("Upserting enveloppe");
+        debug!("Upserting enveloppe {:?}, CA: {:?}", enveloppe.get_pem_vec(), enveloppe.get_pem_ca());
 
         let db = self.mongo_dao.get_database()?;
         let collection = db.collection(COLLECTION_CERTIFICAT_NOM);
@@ -88,9 +88,11 @@ impl ValidateurX509Database {
                     pem_vec.push(fp_cert.pem);
                 }
                 let pems = pem_vec.join("\n");
+                let ca = enveloppe.get_pem_ca()?;
 
                 let contenu = json!({
-                    "pem": pems
+                    "pem": pems,
+                    "ca": ca,
                 });
                 // let message = self.generateur_messages.formatter_message(
                 //     contenu,

@@ -1191,15 +1191,16 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     debug!("resoudre_url Message json string : {}", fiche_json_value);
     let mut fiche_publique_message = MessageSerialise::from_serializable(fiche_json_value)?;
     debug!("resoudre_url Fiche publique message serialize : {:?}", fiche_publique_message);
-    let idmg_tiers = match &fiche_publique_message.certificat {
-        Some(c) => c.idmg(),
-        None => Err(format!("core_topologie.resoudre_url Erreur chargement certificat de fiche publique"))
-    }?;
     let validation_option = ValidationOptions::new(true, true, true);
     let resultat_validation = fiche_publique_message.valider(middleware, Some(&validation_option)).await?;
     if ! resultat_validation.valide() {
         Err(format!("core_topologie.resoudre_url Erreur validation fiche publique : {:?}", resultat_validation))?
     }
+
+    let idmg_tiers = match &fiche_publique_message.certificat {
+        Some(c) => c.idmg(),
+        None => Err(format!("core_topologie.resoudre_url Erreur chargement certificat de fiche publique, certificat manquant"))
+    }?;
 
     let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu(None)?;
     // match fiche_publique.ca.clone() {
