@@ -23,7 +23,7 @@ use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializa
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::Chiffreur;
 use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, Mgs3CipherKeys};
-use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
+use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Map, Value};
@@ -61,6 +61,7 @@ const REQUETE_INFO_DOMAINE: &str = "infoDomaine";
 const REQUETE_INFO_NOEUD: &str = "infoNoeud";
 const REQUETE_RESOLVE_IDMG: &str = "resolveIdmg";
 const REQUETE_FICHE_MILLEGRILLE: &str = "ficheMillegrille";
+const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_MONITOR: &str = "monitor";
@@ -193,6 +194,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         REQUETE_INFO_NOEUD,
         REQUETE_RESOLVE_IDMG,
         REQUETE_FICHE_MILLEGRILLE,
+        REQUETE_APPLICATIONS_TIERS,
     ];
     for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive });
@@ -442,6 +444,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
                 REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
                 REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
+                REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -1494,6 +1497,71 @@ struct ApplicationPublique {
     url: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DocumentApplicationsTiers {
+    idmg: String,
+    adresses: Option<Vec<String>>,
+    applications: HashMap<String, Vec<ApplicationPublique>>,
+    chiffrage: Vec<Vec<String>>,
+    ca: String,
+}
+
+// impl TryInto<ReponseApplicationsTiers> for DocumentApplicationsTiers {
+//     type Error = String;
+//
+//     fn try_into(self) -> Result<ReponseApplicationsTiers, Self::Error> {
+//
+//         let application = match self.applications.len() {
+//             1 => {
+//                 let (_, app_info) = self.applications.into_iter().next();
+//                 app_info
+//             },
+//             _ => Err(format!("core_topologie.TryInto<ReponseApplicationsTiers> Erreur conversion, "))
+//         }?;
+//
+//         Ok(ReponseApplicationsTiers {
+//             idmg: self.idmg,
+//             adresses: self.adresses,
+//             application,
+//             chiffrage: self.chiffrage,
+//             ca: self.ca,
+//         })
+//     }
+// }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseApplicationsTiers {
+    idmg: String,
+    adresses: Option<Vec<String>>,
+    application: Vec<ApplicationPublique>,
+    chiffrage: Vec<Vec<String>>,
+    ca: String,
+}
+
+impl TryFrom<DocumentApplicationsTiers> for ReponseApplicationsTiers {
+    type Error = String;
+
+    fn try_from(value: DocumentApplicationsTiers) -> Result<Self, Self::Error> {
+         let application = match value.applications.len() {
+            1 => {
+                 match value.applications.into_iter().next() {
+                     Some((_, app_info)) => Ok(app_info),
+                     None => Err(format!("core_topologie.TryFrom<DocumentApplicationsTiers> Erreur conversion"))
+                 }
+            },
+            _ => Err(format!("core_topologie.TryFrom<DocumentApplicationsTiers> Erreur conversion, nombre d'applications doit etre 1"))
+        }?;
+
+        Ok(ReponseApplicationsTiers {
+            idmg: value.idmg,
+            adresses: value.adresses,
+            application,
+            chiffrage: value.chiffrage,
+            ca: value.ca,
+        })
+    }
+}
+
 /// Genere information de resolution locale (urls, etc)
 async fn produire_information_locale<M>(middleware: &M)
                                         -> Result<(), Box<dyn Error>>
@@ -1590,8 +1658,8 @@ async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideActi
 
     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
     let filtre = doc! {
-TRANSACTION_CHAMP_IDMG: &requete.idmg,
-};
+        TRANSACTION_CHAMP_IDMG: &requete.idmg,
+    };
 
     let reponse = match collection.find_one(filtre, None).await? {
         Some(doc_fiche) => {
@@ -1611,6 +1679,59 @@ struct RequeteFicheMillegrille {
     idmg: String,
 }
 
+async fn requete_applications_tiers<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+{
+    debug!("requete_applications_tiers");
+    let requete: RequeteApplicationsTiers = message.message.parsed.map_contenu(None)?;
+    debug!("requete_applications_tiers Parsed : {:?}", requete);
+
+    let projection = doc! {
+        "idmg": 1,
+        "adresses": 1,
+        "ca": 1,
+        "chiffrage": 1,
+        format!("applications.{}", requete.application): 1
+    };
+
+    let options = FindOptions::builder().projection(projection).build();
+
+    let filtre = doc! {
+        TRANSACTION_CHAMP_IDMG: {"$in": &requete.idmgs},
+        format!("applications.{}", requete.application): {"$exists": true},
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
+    let mut curseur = collection.find(filtre, Some(options)).await?;
+    let mut fiches = Vec::new();
+    while let Some(doc_fiche) = curseur.next().await {
+        let document_applications: DocumentApplicationsTiers = convertir_bson_deserializable(doc_fiche?)?;
+        debug!("Document applications mappe : {:?}", document_applications);
+        let reponse_applications: ReponseApplicationsTiers = document_applications.try_into()?;
+        fiches.push(reponse_applications);
+    }
+    let reponse = middleware.formatter_reponse(&json!({"fiches": fiches}), None)?;
+
+    // let reponse = match collection.find_one(filtre, Some(options)).await? {
+    //     Some(d) => {
+    //         let document_applications: DocumentApplicationsTiers = convertir_bson_deserializable(d)?;
+    //         let reponse_applications: ReponseApplicationsTiers = document_applications.try_into()?;
+    //         middleware.formatter_reponse(reponse_applications, None)
+    //     }
+    //     None => {
+    //         middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)
+    //     }
+    // }?;
+
+    Ok(Some(reponse))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteApplicationsTiers {
+    idmgs: Vec<String>,
+    application: String,
+}
 
 #[cfg(test)]
 mod test_integration {
