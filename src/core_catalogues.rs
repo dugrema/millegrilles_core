@@ -514,6 +514,7 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
     };
 
     if resultat_validation.valide() {
+        debug!("Catalogue accepte - certificat valide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
         // Conserver la transaction et la traiter immediatement
         let mva = MessageValideAction::new(
             catalogue,
@@ -525,7 +526,7 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
         );
         sauvegarder_transaction_recue(middleware, mva, NOM_COLLECTION_TRANSACTIONS).await?;
     } else {
-        debug!("Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
+        error!("Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
     }
 
     Ok(None)
