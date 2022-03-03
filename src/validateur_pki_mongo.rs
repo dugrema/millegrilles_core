@@ -486,6 +486,10 @@ impl GenerateurMessages for MiddlewareDbPki {
     fn get_mode_regeneration(&self) -> bool {
         self.generateur_messages.as_ref().get_mode_regeneration()
     }
+
+    fn get_securite(&self) -> &Securite {
+        self.generateur_messages.get_securite()
+    }
 }
 
 impl IsConfigurationPki for MiddlewareDbPki {
