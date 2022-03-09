@@ -1478,6 +1478,7 @@ async fn produire_fiche_publique<M>(middleware: &M)
         applications,
         chiffrage,
         ca: middleware.ca_pem().into(),
+        idmg: middleware.idmg().into(),
     };
 
     let routage = RoutageMessageAction::builder(
@@ -1496,6 +1497,7 @@ struct FichePublique {
     applications: HashMap<String, Vec<ApplicationPublique>>,
     chiffrage: Vec<Vec<String>>,
     ca: String,
+    idmg: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
