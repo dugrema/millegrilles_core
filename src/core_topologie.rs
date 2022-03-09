@@ -203,6 +203,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     // RK 1.public
     let requetes_publiques = vec![
         REQUETE_FICHE_MILLEGRILLE,
+        REQUETE_APPLICATIONS_TIERS,
     ];
     for req in requetes_publiques {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L1Public });
