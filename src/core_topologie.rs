@@ -200,6 +200,14 @@ pub fn preparer_queues() -> Vec<QueueType> {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive });
     }
 
+    // RK 1.public
+    let requetes_publiques = vec![
+        REQUETE_FICHE_MILLEGRILLE,
+    ];
+    for req in requetes_publiques {
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L1Public });
+    }
+
     let commandes: Vec<&str> = vec![
         //TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
     ];
