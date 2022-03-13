@@ -26,6 +26,7 @@ use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, Mgs3Ciphe
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
+use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::serde_json::{json, Map, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio::spawn;
@@ -80,6 +81,14 @@ const CHAMP_DOMAINE: &str = "domaine";
 const CHAMP_NOEUD_ID: &str = "noeud_id";
 const CHAMP_ADRESSE: &str = "adresse";
 const CHAMP_ADRESSES: &str = "adresses";
+
+const ADRESSE_PREFERENCE_PRIMAIRE: u8 = 1;
+const ADRESSE_PREFERENCE_SECONDAIRE: u8 = 2;
+
+const ADRESSE_NATURE_DNS: &str = "dns";
+const ADRESSE_NATURE_IP4: &str = "ip4";
+const ADRESSE_NATURE_IP6: &str = "ip6";
+const ADRESSE_NATURE_ONION: &str = "onion";
 
 // permissionDechiffrage
 // listerNoeudsAWSS3
@@ -893,6 +902,7 @@ struct InformationMonitor {
     domaine: Option<String>,
     noeud_id: String,
     securite: Option<String>,
+    onion: Option<String>,
     applications: Option<Vec<InformationApplication>>,
     applications_configurees: Option<Vec<ApplicationConfiguree>>,
 }
@@ -1433,6 +1443,9 @@ async fn produire_fiche_publique<M>(middleware: &M)
         if let Some(d) = &info_instance.domaine {
             adresses.push(d.to_owned());
         }
+        if let Some(o) = &info_instance.onion {
+            adresses.push(o.to_owned());
+        }
 
         // Conserver la liste des applications/versions par nom d'application
         let mut app_versions = HashMap::new();
@@ -1454,22 +1467,41 @@ async fn produire_fiche_publique<M>(middleware: &M)
                     None => continue  // On assume securite protege ou secure, skip
                 }
 
-                let mut app_publique: ApplicationPublique = app.try_into()?;
-                let nom_app = app_publique.application.clone();
-                if let Some(v) = app_versions.get(nom_app.as_str()) {
+                let mut app_publique: ApplicationPublique = app.clone().try_into()?;
+                let nom_app = app_publique.application.as_str();
+                if let Some(v) = app_versions.get(nom_app) {
                     app_publique.version = v.version.to_owned();
                 }
 
-                match applications.get_mut(nom_app.as_str()) {
-                    Some(a) => {
-                        a.push(app_publique);
-                    }
+                // Recuperer pointer mut pour vec applications. Creer si l'application n'existe pas deja.
+                let apps_mut = match applications.get_mut(nom_app) {
+                    Some(a) => a,
                     None => {
-                        let mut vec_apps = Vec::new();
-                        vec_apps.push(app_publique);
-                        applications.insert(nom_app.clone(), vec_apps);
+                        applications.insert(nom_app.to_owned(), Vec::new());
+                        applications.get_mut(nom_app).expect("apps_mut")
                     }
+                };
+
+                apps_mut.push(app_publique);
+
+                if let Some(hostname_onion) = info_instance.onion.as_ref() {
+                    let mut app_onion: ApplicationPublique = app.try_into()?;
+                    let nom_app = app_onion.application.as_str();
+                    app_onion.nature = ADRESSE_NATURE_ONION.into();
+                    app_onion.preference = ADRESSE_PREFERENCE_SECONDAIRE;
+
+                    // Remplacer hostname par adresse .onion
+                    let mut url_app = Url::parse(app_onion.url.as_str())?;
+                    url_app.set_host(Some(hostname_onion))?;
+                    app_onion.url = url_app.as_str().into();
+
+                    if let Some(v) = app_versions.get(nom_app) {
+                        app_onion.version = v.version.to_owned();
+                    }
+
+                    apps_mut.push(app_onion);
                 }
+
             }
         }
     }
@@ -1506,6 +1538,8 @@ struct ApplicationPublique {
     application: String,
     version: Option<String>,
     url: String,
+    preference: u8,
+    nature: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1655,6 +1689,8 @@ impl TryInto<ApplicationPublique> for InformationApplication {
             application: self.application,
             version: None,
             url,
+            preference: ADRESSE_PREFERENCE_PRIMAIRE,
+            nature: ADRESSE_NATURE_DNS.into(),
         })
     }
 }
