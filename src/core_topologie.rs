@@ -843,7 +843,7 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
 
     let mut curseur = {
         let filtre = doc! {};
-        let projection = doc! {"noeud_id": true, "domaine": true, "securite": true, "applications": true};
+        let projection = doc! {"noeud_id": true, "domaine": true, "securite": true, "applications": true, "onion": true};
         let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
         let ops = FindOptions::builder().projection(Some(projection)).build();
         match collection.find(filtre, Some(ops)).await {
@@ -872,14 +872,39 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
                         // Verifier si le demandeur a le niveau de securite approprie
                         if sec_cascade.contains(&securite) {
 
-                            // Preparer la valeur a exporter pour les applications
-                            let info_app = json!({
-                                "application": app.application,
-                                "securite": securite_str(&securite),
-                                "url": app.url,
-                            });
+                            if let Some(url) = app.url.as_ref() {
+                                // Preparer la valeur a exporter pour les applications
+                                let onion = match info_monitor.onion.as_ref() {
+                                    Some(onion) => {
+                                        let mut url_onion = Url::parse(url.as_str())?;
+                                        url_onion.set_host(Some(onion.as_str()));
+                                        Some(url_onion.as_str().to_owned())
+                                    },
+                                    None => None
+                                };
 
-                            apps.push(info_app);
+                                let info_app = json!({
+                                    "application": app.application.as_str(),
+                                    "securite": securite_str(&securite),
+                                    "url": url,
+                                    "onion": onion,
+                                });
+
+                                apps.push(info_app);
+
+                                // if let Some(onion) = info_monitor.onion.as_ref() {
+                                //     // Ajouter adresses .onion
+                                //     let mut url_onion = Url::parse(url.as_str())?;
+                                //     url_onion.set_host(Some(onion.as_str()));
+                                //     let info_app_onion = json!({
+                                //         "application": app.application.as_str(),
+                                //         "securite": securite_str(&securite),
+                                //         "url": url_onion.as_str(),
+                                //     });
+                                //
+                                //     apps.push(info_app_onion);
+                                // }
+                            }
                         }
                     }
                 }
