@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::error::Error;
@@ -533,11 +534,20 @@ struct CommandeSauvegarderCertificat {
     ca: Option<String>
 }
 
-/// Commande de relai vers le certissuer pour signer un CSR. La commande doit etre signee par
-/// une delegation globale (e.g. proprietaire) ou etre un renouvellement pour les memes roles.
+/// Commande de relai vers le certissuer pour signer un CSR. La commande doit etre
+/// * signee par une delegation globale (e.g. proprietaire), ou
+/// * signee par un monitor du meme niveau pour un role (e.g. monitor prive pour messagerie ou postmaster), ou
+/// * etre un renouvellement pour les memes roles.
 async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: GenerateurMessages + IsConfigNoeud
 {
+    let commande = match valider_demande_signature_csr(middleware, &m).await? {
+        Some(c) => c,
+        None => {
+            return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Acces refuse"}), None)?))
+        }
+    };
+
     let config = middleware.get_configuration_noeud();
     let certissuer_url = match config.certissuer_url.as_ref() {
         Some(inner) => inner,
@@ -552,7 +562,6 @@ async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Resul
     url_post.set_path("certissuerInterne/signerCsr");
 
     // On retransmet le message recu tel quel
-    let commande = &m.message.parsed;
     let response = match client.post(url_post).json(&commande).send().await {
         Ok(inner) => inner,
         Err(e) => Err(format!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e))?
@@ -569,12 +578,35 @@ async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Resul
             let status = response.status().clone();
             let msg = response.text().await?;
             error!("core_pki.commande_signer_csr Erreur signature {:?}", msg);
-            // Err(format!("core_pki.commande_signer_csr Erreur serveur signature certificat pour CSR, status {:?}, message serveur : {:?}", status, msg))?
             middleware.formatter_reponse(json!({"ok": false, "code": status.as_str(), "err": format!("Erreur signature : {:?}", msg).as_str()}), None)?
         }
     };
 
     Ok(Some(reponse_commande))
+}
+
+async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageValideAction) -> Result<Option<Cow<'a, MessageMilleGrille>>, Box<dyn Error>>
+    where M: GenerateurMessages + IsConfigNoeud
+{
+    let mut message = None;
+    if m.message.verifier_roles(vec![RolesCertificats::Monitor]) {
+        if m.message.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
+            debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 3.protege ou 4.secure, demande approuvee");
+            message = Some(Cow::Borrowed(&m.message.parsed));
+        } else if m.message.verifier_exchanges(vec![Securite::L2Prive]) {
+            debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 2.prive");
+            message = Some(Cow::Borrowed(&m.message.parsed));
+        } else if m.message.verifier_exchanges(vec![Securite::L1Public]) {
+            debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 1.public, demande approuvee");
+            message = Some(Cow::Borrowed(&m.message.parsed));
+        } else {
+            error!("valider_demande_signature_csr Demande de CSR signee par un monitor sans exchanges, REFUSE");
+        }
+    } else {
+        warn!("valider_demande_signature_csr Demande de signature de CSR refusee pour demandeur qui n'est pas un monitor : {:?}", m.message.certificat);
+    }
+
+    Ok(message)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
