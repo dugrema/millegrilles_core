@@ -421,7 +421,8 @@ where
         Some(inner) => inner,
         None => {
             debug!("Certificat inconnu : {}", fingerprint);
-            return Ok(None);
+            let reponse = middleware.formatter_reponse(json!({"ok": false, "code": 2, "err": "Certificat inconnu"}), None)?;
+            return Ok(Some(reponse));
         }
     };
 
@@ -593,7 +594,11 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
         if m.message.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
             debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 3.protege ou 4.secure, demande approuvee");
             message = Some(Cow::Borrowed(&m.message.parsed));
-        } else if m.message.verifier_exchanges(vec![Securite::L2Prive]) {
+        } else {
+            error!("valider_demande_signature_csr Demande de CSR signee par un monitor sans exchanges, REFUSE");
+        }
+    } else if m.message.verifier_roles(vec![RolesCertificats::NoeudPrive, RolesCertificats::NoeudPublic]) {
+        if m.message.verifier_exchanges(vec![Securite::L2Prive]) {
             debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 2.prive");
             message = Some(Cow::Borrowed(&m.message.parsed));
         } else if m.message.verifier_exchanges(vec![Securite::L1Public]) {
@@ -602,6 +607,9 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
         } else {
             error!("valider_demande_signature_csr Demande de CSR signee par un monitor sans exchanges, REFUSE");
         }
+    } else if m.message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        debug!("valider_demande_signature_csr Demande de CSR signee par une delegation globale (proprietaire), demande approuvee");
+        message = Some(Cow::Borrowed(&m.message.parsed));
     } else {
         warn!("valider_demande_signature_csr Demande de signature de CSR refusee pour demandeur qui n'est pas un monitor : {:?}", m.message.certificat);
     }
