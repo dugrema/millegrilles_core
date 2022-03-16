@@ -389,20 +389,24 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
             // COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware, m).await,
 
-            // Commandes 3.protegees
-            _ => {
-                if m.verifier_exchanges(vec!(Securite::L3Protege, Securite::L4Secure)) {
-                    // Commandes pour echanges proteges
-                    match m.action.as_str() {
-                        // Transactions recues sous forme de commande
-                        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
-                        // Commandes inconnues
-                        _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
-                    }
-                } else {
-                    Ok(acces_refuse(middleware, 253)?)
-                }
-            }
+            TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
+            // Commandes inconnues
+            _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
+
+            // // Commandes 3.protegees
+            // _ => {
+            //     if m.verifier_exchanges(vec!(Securite::L3Protege, Securite::L4Secure)) {
+            //         // Commandes pour echanges proteges
+            //         match m.action.as_str() {
+            //             // Transactions recues sous forme de commande
+            //             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
+            //             // Commandes inconnues
+            //             _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
+            //         }
+            //     } else {
+            //         Ok(acces_refuse(middleware, 253)?)
+            //     }
+            // }
         }
     } else if m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         // Commande proprietaire (administrateur)
