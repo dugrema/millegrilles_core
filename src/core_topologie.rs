@@ -819,27 +819,30 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     // Valider le niveau de securite
-    let sec_enum_opt = match message.message.get_extensions() {
-        Some(extensions) => {
-            // Verifier le type de securite
-            match extensions.exchange_top() {
-                Some(sec) => Some(sec),
-                None => None
-            }
-        }
-        None => None,
-    };
-    let sec_cascade = match sec_enum_opt {
-        Some(s) => securite_cascade_public(&s),
-        None => {
-            // Aucun niveau de securite, abort
-            let reponse = match middleware.formatter_reponse(json!({"ok": false}), None) {
-                Ok(m) => m,
-                Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur preparation reponse applications : {:?}", e))?
-            };
-            return Ok(Some(reponse));
-        }
-    };
+    // let sec_enum_opt = match message.message.get_extensions() {
+    //     Some(extensions) => {
+    //         // Verifier le type de securite
+    //         match extensions.exchange_top() {
+    //             Some(sec) => Some(sec),
+    //             None => None
+    //         }
+    //     }
+    //     None => None,
+    // };
+    // let sec_cascade = match sec_enum_opt {
+    //     Some(s) => securite_cascade_public(&s),
+    //     None => {
+    //         // Aucun niveau de securite, abort
+    //         let reponse = match middleware.formatter_reponse(json!({"ok": false}), None) {
+    //             Ok(m) => m,
+    //             Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur preparation reponse applications : {:?}", e))?
+    //         };
+    //         return Ok(Some(reponse));
+    //     }
+    // };
+
+    // Retour de toutes les applications (maitrecomptes est toujours sur exchange 2.prive)
+    let sec_cascade = securite_cascade_public(Securite::L3Protege);
 
     let mut curseur = {
         let filtre = doc! {};
