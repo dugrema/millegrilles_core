@@ -787,8 +787,8 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     // Verifier autorisation
     let est_delegation_proprietaire = message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
     if ! message.verifier(
-        Some(vec!(Securite::L4Secure, Securite::L3Protege, Securite::L2Prive)),
-        Some(vec!(RolesCertificats::NoeudPrive, RolesCertificats::WebProtege)),
+        Some(vec!(Securite::L2Prive)),
+        Some(vec!(RolesCertificats::NoeudPrive, RolesCertificats::MaitreComptes)),
     )
         && !est_delegation_proprietaire
     {
@@ -1056,8 +1056,8 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
 
     // Verifier autorisation
     if ! message.verifier(
-        Some(vec!(Securite::L4Secure, Securite::L3Protege, Securite::L2Prive)),
-        Some(vec!(RolesCertificats::NoeudPrive, RolesCertificats::WebProtege)),
+        Some(vec!(Securite::L2Prive)),
+        Some(vec!(RolesCertificats::MaitreComptes)),
     ) {
         let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("ajouter_cle autorisation acces refuse : {:?}", err);
@@ -1293,8 +1293,8 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
     // Verifier autorisation
     if !message.verifier(
-        Some(vec!(Securite::L4Secure, Securite::L3Protege)),
-        Some(vec!(RolesCertificats::WebProtege)),
+        Some(vec!(Securite::L2Prive)),
+        Some(vec!(RolesCertificats::MaitreComptes)),
     ) {
         let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
