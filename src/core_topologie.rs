@@ -1464,7 +1464,7 @@ async fn produire_fiche_publique<M>(middleware: &M)
     let mut adresses = Vec::new();
     let mut applications: HashMap<String, Vec<ApplicationPublique>> = HashMap::new();
 
-    for inst in curseur.next().await {
+    while let Some(inst) = curseur.next().await {
         let doc_instance = inst?;
         let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
         debug!("Information instance : {:?}", info_instance);
@@ -1650,7 +1650,7 @@ async fn produire_information_locale<M>(middleware: &M)
         let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
         let filtre = doc! {};
         let mut curseur = collection.find(filtre, None).await?;
-        for inst in curseur.next().await {
+        while let Some(inst) = curseur.next().await {
             let doc_instance = inst?;
             let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
             debug!("Information instance : {:?}", info_instance);
