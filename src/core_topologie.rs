@@ -18,7 +18,7 @@ use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::middleware::{Middleware, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{Middleware, sauvegarder_traiter_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::Chiffreur;
@@ -38,6 +38,7 @@ use millegrilles_common_rust::transactions::{charger_transaction, EtatTransactio
 use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptions, VerificateurMessage};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
+use crate::core_maitredescomptes::NOM_COLLECTION_USAGERS;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 
@@ -146,7 +147,7 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
                                    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware + 'static
     {
-        consommer_commande(middleware, message).await  // Fonction plus bas
+        consommer_commande(middleware, message, self).await  // Fonction plus bas
     }
 
     async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -220,6 +221,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     let commandes: Vec<&str> = vec![
         //TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
+        TRANSACTION_MONITOR,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
@@ -469,7 +471,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
     }
 }
 
-async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
+async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
                                -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: Middleware + 'static
 {
@@ -478,12 +480,15 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
     match m.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
+        false => match m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+            true => Ok(()),
+            false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
+        }
     }?;
 
     match m.action.as_str() {
         // Commandes standard
-        //     TRANSACTION_APPLICATION => traiter_commande_application(middleware.as_ref(), m).await,
+        TRANSACTION_MONITOR => traiter_commande_monitor(middleware, m, gestionnaire).await,
         //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
         //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
         //
@@ -731,6 +736,34 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
 
     Ok(None)
 }
+
+
+async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer traiter_commande_monitor : {:?}", &message.message);
+
+    // Verifier autorisation
+    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+        }
+    }
+
+    // Sauvegarder la transaction, marquer complete et repondre
+    // let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
+    let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
+    // let transaction: TransactionImpl = message.try_into()?;
+    // let reponse = transaction_ajouter_cle(middleware, transaction).await?;
+    // marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
+
+    Ok(reponse)
+}
+
+
 
 async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
     where
