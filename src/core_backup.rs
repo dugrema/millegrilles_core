@@ -188,15 +188,15 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_transactions = Vec::new();
     rk_transactions.push(ConfigRoutingExchange {
         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_CATALOGUE_HORAIRE).into(),
-        exchange: Securite::L3Protege
+        exchange: Securite::L4Secure
     });
     rk_transactions.push(ConfigRoutingExchange {
         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_CATALOGUE_QUOTIDIEN).into(),
-        exchange: Securite::L3Protege
+        exchange: Securite::L4Secure
     });
     rk_transactions.push(ConfigRoutingExchange {
         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_CATALOGUE_QUOTIDIEN_INFO).into(),
-        exchange: Securite::L3Protege
+        exchange: Securite::L4Secure
     });
 
     // Queue de transactions
