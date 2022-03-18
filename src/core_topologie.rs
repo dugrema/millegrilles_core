@@ -67,7 +67,7 @@ const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_MONITOR: &str = "monitor";
 
-const EVENEMENT_PRESENCE_MONITOR: &str = "monitor";
+const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 // const EVENEMENT_PRESENCE_DOMAINE: &str = EVENEMENT_PRESENCE_DOMAINE;
 const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 
@@ -225,20 +225,13 @@ pub fn preparer_queues() -> Vec<QueueType> {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
     }
 
-    let evenements: Vec<&str> = vec![
-        EVENEMENT_PRESENCE_MONITOR,
-    ];
-    for evenement in &evenements {
-        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L3Protege });
-    }
-    for evenement in &evenements {
-        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L2Prive });
-    }
-    for evenement in &evenements {
-        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, evenement), exchange: Securite::L1Public });
+    let sec_monitor = vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure];
+    for sec in sec_monitor {
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.monitor.{}", EVENEMENT_PRESENCE_MONITOR), exchange: sec});
     }
 
-    rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_PRESENCE_NOM, EVENEMENT_PRESENCE_DOMAINE), exchange: Securite::L3Protege });
+    // Presence de domaines se fait sur l'evenement du domaine specifique (*)
+    rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.*.{}", EVENEMENT_PRESENCE_DOMAINE), exchange: Securite::L4Secure });
 
     let mut queues = Vec::new();
 
