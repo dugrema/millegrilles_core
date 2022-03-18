@@ -283,7 +283,9 @@ async fn entretien<M>(middleware: Arc<M>)
             debug!("Charger catalogues");
 
             let commande = json!({});
-            let routage = RoutageMessageAction::new("servicemonitor", "transmettreCatalogues");
+            let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "transmettreCatalogues")
+                .exchanges(vec![Securite::L3Protege])
+                .build();
             match middleware.transmettre_commande(routage, &commande, true).await {
                 Ok(r) => {
                     debug!("Reponse demande catalogues : {:?}", r);

@@ -49,7 +49,7 @@ pub const NOM_COLLECTION_MILLEGRILLES: &str = "CoreTopologie/millegrilles";
 pub const NOM_COLLECTION_MILLEGRILLES_ADRESSES: &str = "CoreTopologie/millegrillesAdresses";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
-pub const DOMAINE_PRESENCE_NOM: &str = "presence";
+pub const DOMAINE_PRESENCE_NOM: &str = "CoreTopologie";
 
 const NOM_Q_TRANSACTIONS: &str = "CoreTopologie/transactions";
 const NOM_Q_VOLATILS: &str = "CoreTopologie/volatils";
@@ -68,7 +68,7 @@ const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_MONITOR: &str = "monitor";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "monitor";
-const EVENEMENT_PRESENCE_DOMAINE: &str = "domaine";
+// const EVENEMENT_PRESENCE_DOMAINE: &str = EVENEMENT_PRESENCE_DOMAINE;
 const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 
 const INDEX_DOMAINE: &str = "domaine";
@@ -582,6 +582,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
 async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
+    debug!("Evenement presence domaine : {:?}", m.message.get_msg());
     let event: PresenceDomaine = m.message.get_msg().map_contenu(None)?;
     debug!("Presence domaine : {:?}", event);
 
@@ -591,10 +592,17 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
     // Retirer champ cle
     set_ops.remove("domaine");
 
-    let filtre = doc! {"domaine": &event.domaine};
+    let domaine = match event.domaine.as_ref() {
+        Some(d) => d,
+        None => {
+            // Rien a faire
+            return Ok(None)
+        }
+    };
+    let filtre = doc! {"domaine": domaine};
     let ops = doc! {
         "$set": set_ops,
-        "$setOnInsert": {"domaine": &event.domaine, CHAMP_CREATION: Utc::now(), "dirty": true},
+        "$setOnInsert": {"domaine": domaine, CHAMP_CREATION: Utc::now(), "dirty": true},
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
 
@@ -612,7 +620,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
     };
 
     if creer_transaction {
-        debug!("Creer transaction topologie pour domaine {}", &event.domaine);
+        debug!("Creer transaction topologie pour domaine {}", domaine);
 
         let tval = json!({
             "domaine": event.domaine,
@@ -796,8 +804,8 @@ async fn traiter_transaction_monitor<M, T>(middleware: &M, transaction: T) -> Re
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceDomaine {
-    domaine: String,
-    noeud_id: String,
+    domaine: Option<String>,
+    noeud_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1184,7 +1192,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
 {
     debug!("resoudre_url {}", hostname);
 
-    let routage = RoutageMessageAction::builder("servicemonitor", "relaiWeb")
+    let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "relaiWeb")
         .exchanges(vec![L3Protege])
         .build();
 

@@ -103,7 +103,7 @@ impl ValidateurX509Database {
                 // );
 
                 let routage = RoutageMessageAction::builder(PKI_DOMAINE_NOM,PKI_TRANSACTION_NOUVEAU_CERTIFICAT)
-                    .exchanges(vec![Securite::L3Protege])
+                    .exchanges(vec![Securite::L4Secure])
                     .build();
                 match self.generateur_messages.soumettre_transaction(routage, &contenu,false).await {
                     Ok(_) => (),
