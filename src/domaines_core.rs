@@ -70,6 +70,16 @@ pub async fn build() {
         future_recevoir_messages
     ) = preparer_middleware_pki(queues, listeners);
 
+    debug!("Preparer middleware pki complete");
+
+    // Tester connexion redis
+    match middleware.redis.liste_certificats_fingerprints().await {
+         Ok(fingerprints_redis) => {
+             info!("redis.liste_certificats_fingerprints Resultat : {:?}", fingerprints_redis);
+         },
+         Err(e) => warn!("redis.liste_certificats_fingerprints Erreur test de connexion redis : {:?}", e)
+    }
+
     // Preparer les green threads de tous les domaines/processus
     let mut futures = FuturesUnordered::new();
     {
