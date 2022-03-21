@@ -594,11 +594,7 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
         if m.message.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
             debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 3.protege ou 4.secure, demande approuvee");
             message = Some(Cow::Borrowed(&m.message.parsed));
-        } else {
-            error!("valider_demande_signature_csr Demande de CSR signee par un monitor sans exchanges, REFUSE");
-        }
-    } else if m.message.verifier_roles(vec![RolesCertificats::NoeudPrive, RolesCertificats::NoeudPublic]) {
-        if m.message.verifier_exchanges(vec![Securite::L2Prive]) {
+        } else if m.message.verifier_exchanges(vec![Securite::L2Prive]) {
             debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 2.prive");
             message = Some(Cow::Borrowed(&m.message.parsed));
         } else if m.message.verifier_exchanges(vec![Securite::L1Public]) {
