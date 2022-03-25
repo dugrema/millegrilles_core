@@ -1219,7 +1219,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     debug!("resoudre_url {}", hostname);
 
     let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "relaiWeb")
-        .exchanges(vec![L3Protege])
+        .exchanges(vec![L1Public])
         .build();
 
     let url_fiche = format!("https://{}/fiche.json", hostname);
