@@ -5,7 +5,7 @@ use std::sync::Arc;
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
-use millegrilles_common_rust::bson::{Bson, doc, to_bson};
+use millegrilles_common_rust::bson::{Bson, DateTime, doc, to_bson};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
@@ -1071,6 +1071,14 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
     while let Some(r) = curseur.next().await {
         match r {
             Ok(mut d) => {
+                // Convertir date bson en DateTimeEpochSeconds
+                let date_presence = d.remove(CHAMP_MODIFICATION);
+                if let Some(date) = date_presence {
+                    if let Some(date) = date.as_datetime() {
+                        let date = DateEpochSeconds::from(date.to_chrono());
+                        d.insert("date_presence", date);
+                    }
+                }
                 filtrer_doc_id(&mut d);
                 domaines.push(d);
             }
