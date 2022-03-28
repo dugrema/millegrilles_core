@@ -200,9 +200,9 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     // RK 2.prive
     let requetes_privees = vec![
-        REQUETE_APPLICATIONS_DEPLOYEES,
-        REQUETE_INFO_NOEUD,
-        REQUETE_RESOLVE_IDMG,
+        // REQUETE_APPLICATIONS_DEPLOYEES,
+        // REQUETE_INFO_NOEUD,
+        // REQUETE_RESOLVE_IDMG,
         REQUETE_FICHE_MILLEGRILLE,
         REQUETE_APPLICATIONS_TIERS,
     ];
@@ -651,6 +651,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
 async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
+    let estampille = &m.message.get_entete().estampille;
     let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
     debug!("Presence monitor : {:?}", event);
 
@@ -691,6 +692,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
     // Retirer champ cle
     set_ops.remove("noeud_id");
     set_ops.insert("applications", applications);
+    set_ops.insert("date_presence", estampille);
 
     let filtre = doc! {"noeud_id": &event.noeud_id};
     let ops = doc! {
