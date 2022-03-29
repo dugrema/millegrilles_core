@@ -67,10 +67,12 @@ const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_MONITOR: &str = "monitor";
+const TRANSACTION_SUPPRIMER_INSTANCE: &str = "supprimerInstance";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 // const EVENEMENT_PRESENCE_DOMAINE: &str = EVENEMENT_PRESENCE_DOMAINE;
 const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
+const EVENEMENT_INSTANCE_SUPPRIMEE: &str = "instanceSupprimee";
 
 const INDEX_DOMAINE: &str = "domaine";
 const INDEX_NOEUDS: &str = "noeuds";
@@ -222,6 +224,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let commandes: Vec<&str> = vec![
         //TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
         TRANSACTION_MONITOR,
+        TRANSACTION_SUPPRIMER_INSTANCE,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
@@ -254,6 +257,10 @@ pub fn preparer_queues() -> Vec<QueueType> {
     // });
     rk_transactions.push(ConfigRoutingExchange {
         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_MONITOR).into(),
+        exchange: Securite::L4Secure,
+    });
+    rk_transactions.push(ConfigRoutingExchange {
+        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_SUPPRIMER_INSTANCE).into(),
         exchange: Securite::L4Secure,
     });
 
@@ -489,6 +496,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionna
     match m.action.as_str() {
         // Commandes standard
         TRANSACTION_MONITOR => traiter_commande_monitor(middleware, m, gestionnaire).await,
+        TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire).await,
         //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
         //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
         //
@@ -516,7 +524,7 @@ async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Res
     }?;
 
     match m.action.as_str() {
-        TRANSACTION_DOMAINE | TRANSACTION_MONITOR => {
+        TRANSACTION_DOMAINE | TRANSACTION_MONITOR | TRANSACTION_SUPPRIMER_INSTANCE => {
             sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         }
@@ -573,6 +581,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
     match transaction.get_action() {
         TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
         TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
+        TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -756,16 +765,29 @@ async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValideActio
     }
 
     // Sauvegarder la transaction, marquer complete et repondre
-    // let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
     let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
-    // let transaction: TransactionImpl = message.try_into()?;
-    // let reponse = transaction_ajouter_cle(middleware, transaction).await?;
-    // marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
-
     Ok(reponse)
 }
 
+async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer traiter_commande_supprimer_instance : {:?}", &message.message);
 
+    // Verifier autorisation
+    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+        }
+    }
+
+    // Sauvegarder la transaction, marquer complete et repondre
+    let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
+    Ok(reponse)
+}
 
 async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
     where
@@ -822,6 +844,40 @@ async fn traiter_transaction_monitor<M, T>(middleware: &M, transaction: T) -> Re
         Ok(_) => (),
         Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
     }
+
+    let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
+        Ok(r) => r,
+        Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
+    };
+    Ok(Some(reponse))
+}
+
+async fn traiter_transaction_supprimer_instance<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: GenerateurMessages + MongoDao,
+        T: Transaction
+{
+    let mut doc = transaction.contenu();
+    let mut doc_transaction: PresenceMonitor = match convertir_bson_deserializable(doc) {
+        Ok(d) => d,
+        Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_instance Erreur conversion transaction monitor : {:?}", e))?
+    };
+
+    let noeud_id = doc_transaction.noeud_id;
+
+    let filtre = doc! {CHAMP_NOEUD_ID: &noeud_id};
+    let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+    match collection.delete_one(filtre, None).await {
+        Ok(_) => (),
+        Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
+    }
+
+    // Emettre evenement d'instance supprimee
+    let evenement_supprimee = json!({"noeud_id": &noeud_id});
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_INSTANCE_SUPPRIMEE)
+        .exchanges(vec![L3Protege])
+        .build();
+    middleware.emettre_evenement(routage, &evenement_supprimee).await?;
 
     let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
         Ok(r) => r,
