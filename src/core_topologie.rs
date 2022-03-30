@@ -190,7 +190,6 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     // RK 3.protege seulement
     let requetes_protegees = vec![
-        REQUETE_APPLICATIONS_DEPLOYEES,
         REQUETE_LISTE_DOMAINES,
         REQUETE_LISTE_NOEUDS,
         REQUETE_INFO_DOMAINE,
@@ -202,7 +201,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     // RK 2.prive
     let requetes_privees = vec![
-        // REQUETE_APPLICATIONS_DEPLOYEES,
+        REQUETE_APPLICATIONS_DEPLOYEES,
         // REQUETE_INFO_NOEUD,
         // REQUETE_RESOLVE_IDMG,
         REQUETE_FICHE_MILLEGRILLE,
