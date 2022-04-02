@@ -1326,6 +1326,8 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
         },
         None => Err(format!("commande_ajouter_delegation_signee Confirmation manquante du message"))?
     };
+
+    // Verifier la signature avec la cle de millegrille
     let pk_millegrille = middleware.ca_cert().public_key()?;
     let signature_valide = verifier_signature_serialize(
         &pk_millegrille, commande.confirmation.signature.as_str(), &val_message_filtre)?;
