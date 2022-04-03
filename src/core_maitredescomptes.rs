@@ -13,7 +13,7 @@ use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissi
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::constantes::Securite::L3Protege;
+use millegrilles_common_rust::constantes::Securite::{L2Prive, L3Protege, L4Secure};
 use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMilleGrille, preparer_btree_recursif};
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
@@ -77,6 +77,7 @@ const CHAMP_USAGER_NOM: &str = "nomUsager";
 const CHAMP_COMPTE_PRIVE: &str = "compte_prive";
 const CHAMP_DELEGATION_GLOBALE: &str = "delegation_globale";
 const CHAMP_DELEGATION_DATE: &str = "delegations_date";
+const CHAMP_DELEGATION_VERSION: &str = "delegations_version";
 const CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
 const CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: &str = "activations_par_fingerprint_pk";
 const CHAMP_WEBAUTHN: &str = "webauthn";
@@ -345,9 +346,13 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
     debug!("Consommer requete : {:?}", &message.message);
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
+    let user_id = message.get_user_id();
     match message.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
         true => Ok(()),
-        false => Err(format!("Commande autorisation invalide (pas 2.prive, 3.protege ou 4.secure)")),
+        false => match user_id {
+            Some(u) => Ok(()),
+            None => Err(format!("Commande autorisation invalide (aucun user_id, pas 2.prive, 3.protege ou 4.secure)"))
+        }
     }?;
 
     match message.domaine.as_str() {
@@ -521,11 +526,24 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
     let requete: RequeteUsager = message.message.get_msg().map_contenu(None)?;
 
     let mut filtre = doc!{};
-    if let Some(nom_usager) = requete.nom_usager {
-        filtre.insert(CHAMP_USAGER_NOM, nom_usager);
-    }
-    if let Some(user_id) = requete.user_id {
-        filtre.insert(CHAMP_USER_ID, user_id);
+
+    // Le filtre utilise le user_id du certificat de preference (et ignore les parametres).
+    // Pour un certificat 2.prive, 3.protege ou 4.public, va utiliser les parametres.
+    match message.get_user_id() {
+        Some(u) => {
+            filtre.insert(CHAMP_USER_ID, u);
+        },
+        None => match message.verifier_exchanges(vec![L2Prive, L3Protege, L4Secure]) {
+            true => {
+                if let Some(nom_usager) = requete.nom_usager {
+                    filtre.insert(CHAMP_USAGER_NOM, nom_usager);
+                }
+                if let Some(user_id) = requete.user_id {
+                    filtre.insert(CHAMP_USER_ID, user_id);
+                }
+            },
+            false => Err(format!("core_maitredescomptes.charger_usager Requete non autorisee en fonction du certificat"))?
+        }
     }
 
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
@@ -743,11 +761,12 @@ async fn sauvegarder_inscrire_usager<M, T>(middleware: &M, transaction: T)
             format!("{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, transaction.fingerprint_pk): {
                 "associe": false,
                 "date_activation": Utc::now(),
-            }
+            },
         },
         "$setOnInsert": {
             CHAMP_USAGER_NOM: nom_usager,
             CHAMP_CREATION: Utc::now(),
+            CHAMP_DELEGATION_VERSION: 1,
         },
         "$currentDate": {CHAMP_MODIFICATION: true},
     };
@@ -1030,17 +1049,18 @@ struct CommandeSignatureUsager {
     csr: String,
     delegation_globale: Option<String>,
     compte_prive: Option<bool>,
+    delegations_version: Option<usize>,
 }
 
 impl CommandeSignatureUsager {
     fn new<S,T,U>(nom_usager: S, user_id: T, csr: U, compte: Option<&CompteUsager>) -> Self
         where S: Into<String>, T: Into<String>, U: Into<String>
     {
-        let (compte_prive, delegation_globale) = match compte {
+        let (compte_prive, delegation_globale, delegations_version) = match compte {
             Some(inner) => {
-                (inner.compte_prive.to_owned(), inner.delegation_globale.to_owned())
+                (inner.compte_prive.to_owned(), inner.delegation_globale.to_owned(), inner.delegations_version.to_owned())
             },
-            None => (None, None)
+            None => (None, None, None)
         };
 
         CommandeSignatureUsager {
@@ -1049,6 +1069,7 @@ impl CommandeSignatureUsager {
             csr: csr.into(),
             delegation_globale,
             compte_prive,
+            delegations_version,
         }
     }
 }
@@ -1267,6 +1288,7 @@ struct CompteUsager {
     compte_prive: Option<bool>,
     delegation_globale: Option<String>,
     delegations_date: Option<DateEpochSeconds>,
+    delegations_version: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1371,6 +1393,7 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
     };
     let ops = doc! {
         "$set": {"delegation_globale": "proprietaire", "delegations_date": &DateEpochSeconds::now()},
+        "$inc": {CHAMP_DELEGATION_VERSION: 1},
         "$currentDate": { CHAMP_MODIFICATION: true }
     };
 
@@ -1504,6 +1527,7 @@ pub async fn transaction_maj_usager_delegations<M, T>(middleware: &M, transactio
     };
     let ops = doc! {
         "$set": set_ops,
+        "$inc": {CHAMP_DELEGATION_VERSION: 1},
         "$currentDate": {CHAMP_MODIFICATION: true},
     };
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
