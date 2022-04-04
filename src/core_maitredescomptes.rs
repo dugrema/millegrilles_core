@@ -717,27 +717,73 @@ async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValideActio
     debug!("get_userid_par_nomusager : {:?}", &message.message);
     let requete: RequeteCsrRecoveryParcode = message.message.get_msg().map_contenu(None)?;
 
-    todo!()
-    // let reponse = ReponseCsrRecovery { nom_usager, code_csr, csr, fingerprint_pk };
-    //
-    // match middleware.formatter_reponse(&reponse,None) {
-    //     Ok(m) => Ok(Some(m)),
-    //     Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
-    // }
+    let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+
+    // Verifier si on a un usager avec delegation globale (permet d'utiliser le parametre nom_usager)
+    let nom_usager_option = match message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        true => requete.nom_usager,
+        false => {
+            // Trouver nom d'usager qui correspond au user_id du certificat usager
+            match message.get_user_id() {
+                Some(user_id) => {
+                    debug!("get_csr_recovery_parcode Get compte usager pour user_id {}", user_id);
+                    let filtre = doc!{"userId": &user_id};
+                    let doc_usager = collection_usagers.find_one(filtre, None).await?;
+                    debug!("get_csr_recovery_parcode Get compte usager pour user_id {}", user_id);
+                    match doc_usager {
+                        Some(u) => {
+                            let info_compte: CompteUsager = convertir_bson_deserializable(u)?;
+                            Some(info_compte.nom_usager)
+                        },
+                        None => None
+                    }
+                },
+                None => None
+            }
+        }
+    };
+
+    let code = requete.code;
+
+    debug!("get_csr_recovery_parcode Verification csr pour usager {:?} avec code {}", nom_usager_option, code);
+
+    let nom_usager = match nom_usager_option {
+        Some(u) => u,
+        None => {
+            let reponse = json!({"ok": false, "err": "Acces refuse", "code": 1});
+            return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+        }
+    };
+
+    // Charger csr
+    let collection = middleware.get_collection(NOM_COLLECTION_RECOVERY)?;
+    let filtre = doc! { "nomUsager": nom_usager, "code": code };
+    let doc_recovery = collection.find_one(filtre, None).await?;
+
+    match doc_recovery {
+        Some(d) => {
+            let info_compte: ReponseCsrRecovery = convertir_bson_deserializable(d)?;
+            Ok(Some(middleware.formatter_reponse(&info_compte, None)?))
+        },
+        None => {
+            let reponse = json!({"ok": false, "err": "Code de recovery introuvable pour l'usager", "code": 2});
+            Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RequeteCsrRecoveryParcode {
-    nom_usager: String,
-    code_csr: String,
+    nom_usager: Option<String>,
+    code: String,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ReponseCsrRecovery {
+    #[serde(rename="nomUsager")]
     nom_usager: String,
-    code_csr: String,
+    code: String,
     csr: String,
-    fingerprint_pk: String,
 }
 
 async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
