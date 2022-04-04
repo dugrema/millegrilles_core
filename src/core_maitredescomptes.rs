@@ -428,22 +428,19 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
             COMMANDE_AJOUTER_CSR_RECOVERY => commande_ajouter_csr_recovery(middleware, m).await,
 
             // Commandes inconnues
-            _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
+            _ => Err(format!("Commande {} inconnue (section: exchange) : {}, message dropped", DOMAINE_NOM, m.action))?,
+        }
+    } else if m.get_user_id().is_some() {
+        match m.action.as_str() {
+            // Transactions recues sous forme de commande
+            TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m).await,
+            TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
 
-            // // Commandes 3.protegees
-            // _ => {
-            //     if m.verifier_exchanges(vec!(Securite::L3Protege, Securite::L4Secure)) {
-            //         // Commandes pour echanges proteges
-            //         match m.action.as_str() {
-            //             // Transactions recues sous forme de commande
-            //             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
-            //             // Commandes inconnues
-            //             _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
-            //         }
-            //     } else {
-            //         Ok(acces_refuse(middleware, 253)?)
-            //     }
-            // }
+            // Commandes standard
+            COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
+
+            // Commandes inconnues
+            _ => Err(format!("Commande {} inconnue (section: user_id): {}, message dropped", DOMAINE_NOM, m.action))?,
         }
     } else if m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         // Commande proprietaire (administrateur)
@@ -456,6 +453,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
             _ => Ok(acces_refuse(middleware, 252)?)
         }
     } else {
+        debug!("Commande {} non autorisee : {}, message dropped", DOMAINE_NOM, m.action);
         Err(format!("Commande {} non autorisee : {}, message dropped", DOMAINE_NOM, m.action))?
     }
 }
@@ -915,27 +913,36 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     let (reply_to, correlation_id) = message.get_reply_info()?;
 
     // Verifier autorisation
+    // Pour certificats systemes (Prive), charger param user_id.
+    // Pour cert usager, utiliser user_id du cert.
     let est_delegation_proprietaire = message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
-    if ! message.verifier(
+    let est_maitre_comptes = message.verifier(
         Some(vec!(Securite::L2Prive)),
         Some(vec!(RolesCertificats::NoeudPrive, RolesCertificats::MaitreComptes)),
-    )
-        && !est_delegation_proprietaire
-    {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("signer_compte_usager autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err,None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-        }
-    }
+    );
 
     let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu(None)?;
     debug!("commande_signer_compte_usager CommandeSignerCertificat : {:?}", commande);
-    let user_id = commande.user_id.as_str();
+
+    let user_id = match message.get_user_id() {
+        Some(u) => u,
+        None => {
+            if est_maitre_comptes || !est_delegation_proprietaire {
+                // Extraire propretaire de la commande
+                commande.user_id
+            } else {
+                let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+                debug!("signer_compte_usager autorisation acces refuse : {:?}", err);
+                match middleware.formatter_reponse(&err,None) {
+                    Ok(m) => return Ok(Some(m)),
+                    Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+                }
+            }
+        }
+    };
 
     // Charger le compte usager
-    let filtre = doc! {CHAMP_USER_ID: user_id};
+    let filtre = doc! {CHAMP_USER_ID: &user_id};
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
     let doc_usager = match collection.find_one(filtre, None).await? {
         Some(d) => d,
@@ -968,7 +975,7 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
                 };
                 let challenge = match commande.challenge {
                     Some(c) => c,
-                    None => Err(format!("signer_compte_usager Origin absent"))?
+                    None => Err(format!("signer_compte_usager challenge absent"))?
                 };
                 let resultat = valider_commande(origin, challenge, &d)?;
                 debug!("Resultat validation commande webauthn : {:?}", resultat);
@@ -1042,7 +1049,7 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     let nom_usager = &compte_usager.nom_usager;
     let securite = SECURITE_1_PUBLIC;
     let reponse_commande = signer_certificat_usager(
-        middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
+        middleware, nom_usager, &user_id, csr, Some(&compte_usager)).await?;
 
     // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
     debug!("commande_signer_compte_usager Activation tierce : {:?}", activation_tierce);
@@ -1056,7 +1063,7 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
         // let fingerprint_pk = String::from("FINGERPRINT_DUMMY");
         // Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
         let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-        let filtre = doc! {CHAMP_USER_ID: user_id};
+        let filtre = doc! {CHAMP_USER_ID: &user_id};
         let mut commande_set = doc! {
             format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): false,
             format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_activation"): Utc::now(),
