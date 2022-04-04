@@ -9,9 +9,10 @@ use millegrilles_common_rust::backup::restaurer;
 use millegrilles_common_rust::bson::{Bson, bson, DateTime, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
-use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::certificats::{calculer_fingerprint_pk, ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::configuration::IsConfigNoeud;
+use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L2Prive, L3Protege, L4Secure};
 use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMilleGrille, preparer_btree_recursif};
@@ -43,10 +44,12 @@ use crate::validateur_pki_mongo::MiddlewareDbPki;
 use crate::webauthn::{ClientAssertionResponse, CompteCredential, multibase_to_safe, valider_commande};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
+use crate::core_pki::COLLECTION_CERTIFICAT_NOM;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
 pub const NOM_COLLECTION_USAGERS: &str = "CoreMaitreDesComptes/usagers";
+pub const NOM_COLLECTION_RECOVERY: &str = "CoreMaitreDesComptes/recovery";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
 const NOM_Q_TRANSACTIONS: &str = "CoreMaitreDesComptes/transactions";
@@ -56,10 +59,12 @@ const NOM_Q_TRIGGERS: &str = "CoreMaitreDesComptes/triggers";
 const REQUETE_CHARGER_USAGER: &str = "chargerUsager";
 const REQUETE_LISTE_USAGERS: &str = "getListeUsagers";
 const REQUETE_USERID_PAR_NOMUSAGER: &str = "getUserIdParNomUsager";
+const REQUETE_GET_CSR_RECOVERY_PARCODE: &str = "getCsrRecoveryParcode";
 
 // const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
 const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
 // const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
+const COMMANDE_AJOUTER_CSR_RECOVERY: &str = "ajouterCsrRecovery";
 
 const TRANSACTION_INSCRIRE_USAGER: &str = "inscrireUsager";
 const TRANSACTION_AJOUTER_CLE: &str = "ajouterCle";
@@ -71,6 +76,7 @@ const TRANSACTION_SUPPRIMER_CLES: &str = "supprimerCles";
 
 const INDEX_ID_USAGER: &str = "idusager_unique";
 const INDEX_NOM_USAGER: &str = "nomusager_unique";
+const INDEX_RECOVERY_UNIQUE: &str = "recovery_code_unique";
 
 const CHAMP_USER_ID: &str = "userId";
 const CHAMP_USAGER_NOM: &str = "nomUsager";
@@ -81,6 +87,7 @@ const CHAMP_DELEGATION_VERSION: &str = "delegations_version";
 const CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
 const CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: &str = "activations_par_fingerprint_pk";
 const CHAMP_WEBAUTHN: &str = "webauthn";
+const CHAMP_CODE: &str = "code";
 
 /// Instance statique du gestionnaire de maitredescomptes
 pub const GESTIONNAIRE_MAITREDESCOMPTES: GestionnaireDomaineMaitreDesComptes = GestionnaireDomaineMaitreDesComptes {};
@@ -174,13 +181,14 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     // RK 2.prive, 3.protege
-    let requetes_protegees: Vec<&str> = vec![
+    let requetes_privees: Vec<&str> = vec![
         REQUETE_LISTE_USAGERS,
         REQUETE_CHARGER_USAGER,
+        REQUETE_GET_CSR_RECOVERY_PARCODE,
     ];
-    for req in requetes_protegees {
+    for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
+        // rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
     }
 
     // RK 4.secure pour requetes internes
@@ -197,10 +205,11 @@ pub fn preparer_queues() -> Vec<QueueType> {
         // Commandes
         COMMANDE_SIGNER_COMPTEUSAGER,
         // COMMANDE_ACTIVATION_TIERCE,
+        COMMANDE_AJOUTER_CSR_RECOVERY,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L2Prive});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege});
+        // rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege});
     }
 
     let mut queues = Vec::new();
@@ -216,10 +225,16 @@ pub fn preparer_queues() -> Vec<QueueType> {
     ));
 
     let mut rk_transactions = Vec::new();
-    // rk_transactions.push(ConfigRoutingExchange {
-    //     routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_APPLICATION).into(),
-    //     exchange: Securite::L3Protege
-    // });
+    let transactions: Vec<&str> = vec![
+        TRANSACTION_INSCRIRE_USAGER,
+        TRANSACTION_AJOUTER_CLE,
+        TRANSACTION_AJOUTER_DELEGATION_SIGNEE,
+        TRANSACTION_MAJ_USAGER_DELEGATIONS,
+        TRANSACTION_SUPPRIMER_CLES,
+    ];
+    for transaction in transactions {
+        rk_transactions.push(ConfigRoutingExchange {routing_key: format!("transaction.{}.{}", DOMAINE_NOM, transaction), exchange: Securite::L4Secure});
+    }
 
     // Queue de transactions
     queues.push(QueueType::ExchangeQueue (
@@ -316,6 +331,21 @@ where M: MongoDao
         Some(options_unique_noeuds)
     ).await?;
 
+    // Account recovery
+    let options_unique_recovery = IndexOptions {
+        nom_index: Some(String::from(INDEX_RECOVERY_UNIQUE)),
+        unique: true
+    };
+    let champs_index_recovery = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_USAGER_NOM), direction: 1},
+        ChampIndex {nom_champ: String::from(CHAMP_CODE), direction: 1},
+    );
+    middleware.create_index(
+        NOM_COLLECTION_RECOVERY,
+        champs_index_recovery,
+        Some(options_unique_recovery)
+    ).await?;
+
     Ok(())
 }
 
@@ -362,6 +392,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 REQUETE_CHARGER_USAGER => charger_usager(middleware, message).await,
                 REQUETE_LISTE_USAGERS => liste_usagers(middleware, message).await,
                 REQUETE_USERID_PAR_NOMUSAGER => get_userid_par_nomusager(middleware, message).await,
+                REQUETE_GET_CSR_RECOVERY_PARCODE => get_csr_recovery_parcode(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -389,12 +420,13 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
             // Transactions recues sous forme de commande
             TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m).await,
+            TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
 
             // Commandes standard
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
             // COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware, m).await,
+            COMMANDE_AJOUTER_CSR_RECOVERY => commande_ajouter_csr_recovery(middleware, m).await,
 
-            TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
 
@@ -677,6 +709,35 @@ struct RequeteUserIdParNomUsager {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ReponseUserIdParNomUsager {
     usagers: HashMap<String, Option<String>>,
+}
+
+async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("get_userid_par_nomusager : {:?}", &message.message);
+    let requete: RequeteCsrRecoveryParcode = message.message.get_msg().map_contenu(None)?;
+
+    todo!()
+    // let reponse = ReponseCsrRecovery { nom_usager, code_csr, csr, fingerprint_pk };
+    //
+    // match middleware.formatter_reponse(&reponse,None) {
+    //     Ok(m) => Ok(Some(m)),
+    //     Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
+    // }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteCsrRecoveryParcode {
+    nom_usager: String,
+    code_csr: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseCsrRecovery {
+    nom_usager: String,
+    code_csr: String,
+    csr: String,
+    fingerprint_pk: String,
 }
 
 async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -978,6 +1039,75 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     debug!("commande_signer_compte_usager Reponse commande : {:?}", reponse_commande);
 
     Ok(Some(reponse_commande))    // Le message de reponse va etre emis par le module de signature de certificat
+}
+
+/// Ajouter un CSR pour recuperer un compte usager
+async fn commande_ajouter_csr_recovery<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
+{
+    debug!("commande_ajouter_csr_recovery : {:?}", message);
+
+    let commande: CommandeAjouterCsrRecovery = message.message.get_msg().map_contenu(None)?;
+    debug!("commande_ajouter_csr_recovery CommandeAjouterCsrRecovery : {:?}", commande);
+
+    let csr = commande.csr;
+    let nom_usager = commande.nom_usager;
+
+    // Charger CSR et calculer fingerprint, code.
+    let csr_parsed = charger_csr(csr.as_str())?;
+    let csr_subject = get_csr_subject(&csr_parsed.as_ref())?;
+    let common_name = match csr_subject.get("commonName") {
+        Some(n) => n,
+        None => {
+            let reponse = json!({"ok": false, "err": "Common Name absent du CSR"});
+            return Ok(Some(middleware.formatter_reponse(&reponse,None)?));
+        }
+    };
+
+    let cle_publique = csr_parsed.public_key()?;
+    let fingerprint = calculer_fingerprint_pk(&cle_publique)?;
+    let code = {
+        let len_fingerprint = fingerprint.len();
+        let fingerprint_lc = fingerprint.to_lowercase();
+        let code_part1 = &fingerprint_lc[len_fingerprint - 8..len_fingerprint - 4];
+        let code_part2 = &fingerprint_lc[len_fingerprint - 4..len_fingerprint];
+        let code = format!("{}-{}", code_part1, code_part2);
+        debug!("Code : {}", code);
+        code
+    };
+
+    let date_courante = Utc::now();
+    let filtre = doc! {
+        "code": &code,
+        "nomUsager": &nom_usager,
+    };
+    let ops = doc! {
+        "$set": {
+            "csr": &csr,
+        },
+        "$setOnInsert": {
+            "code": &code,
+            "nomUsager": &nom_usager,
+            CHAMP_CREATION: &date_courante,
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    let options = UpdateOptions::builder().upsert(true).build();
+    let collection = middleware.get_collection(NOM_COLLECTION_RECOVERY)?;
+    let resultat = collection.update_one(filtre, ops, Some(options)).await?;
+
+    let reponse = json!({"ok": true, "code": &code});
+    match middleware.formatter_reponse(&reponse,None) {
+        Ok(m) => return Ok(Some(m)),
+        Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_csr_recovery : {:?}", e))?
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandeAjouterCsrRecovery {
+    csr: String,
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
 }
 
 /// Signe un certificat usager sans autre forme de validation. Utilise certissuerInterne/.
