@@ -434,7 +434,6 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
         match m.action.as_str() {
             // Transactions recues sous forme de commande
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m).await,
-            TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
 
             // Commandes standard
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
@@ -927,9 +926,9 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     let user_id = match message.get_user_id() {
         Some(u) => u,
         None => {
-            if est_maitre_comptes || !est_delegation_proprietaire {
+            if (est_maitre_comptes || !est_delegation_proprietaire) && commande.user_id.is_some() {
                 // Extraire propretaire de la commande
-                commande.user_id
+                commande.user_id.expect("user_id")
             } else {
                 let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
                 debug!("signer_compte_usager autorisation acces refuse : {:?}", err);
@@ -997,31 +996,31 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
                     None => Err(format!("commande_signer_compte_usager (8) CSR manquant"))?
                 };
 
-                // Ce n'est pas une demande de certificat. Verifier si on a une permission
-                match commande.permission {
-                    Some(permission) => {
-
-                        let mut perm_serialisee = MessageSerialise::from_parsed(permission)?;
-                        match valider_message(middleware, &mut perm_serialisee).await {
-                            Ok(()) => (),
-                            Err(e) => {
-                                let err = json!({"ok": false, "code": 7, "err": format!("Permission invalide (7) : {}, {:?}", user_id, e)});
-                                debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
-                                match middleware.formatter_reponse(&err, None) {
-                                    Ok(m) => return Ok(Some(m)),
-                                    Err(e) => Err(format!("Erreur preparation reponse (7) sauvegarder_inscrire_usager : {:?}", e))?
-                                }
-                            }
-                        }
-
-                        let c_signer: CommandeSignerCertificat = perm_serialisee.get_msg().map_contenu(None)?;
-                        if c_signer.user_id.as_str() != user_id {
-                            Err(format!("commande_signer_compte_usager User id mismatch (8) avec permission"))?
-                        }
-
-                        (csr, Some(true))
-                    },
-                    None => {
+                // // Ce n'est pas une demande de certificat. Verifier si on a une permission
+                // match commande.permission {
+                //     Some(permission) => {
+                //
+                //         let mut perm_serialisee = MessageSerialise::from_parsed(permission)?;
+                //         match valider_message(middleware, &mut perm_serialisee).await {
+                //             Ok(()) => (),
+                //             Err(e) => {
+                //                 let err = json!({"ok": false, "code": 7, "err": format!("Permission invalide (7) : {}, {:?}", user_id, e)});
+                //                 debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
+                //                 match middleware.formatter_reponse(&err, None) {
+                //                     Ok(m) => return Ok(Some(m)),
+                //                     Err(e) => Err(format!("Erreur preparation reponse (7) sauvegarder_inscrire_usager : {:?}", e))?
+                //                 }
+                //             }
+                //         }
+                //
+                //         let c_signer: CommandeSignerCertificat = perm_serialisee.get_msg().map_contenu(None)?;
+                //         if c_signer.user_id.as_str() != user_id {
+                //             Err(format!("commande_signer_compte_usager User id mismatch (8) avec permission"))?
+                //         }
+                //
+                //         (csr, Some(true))
+                //     },
+                //     None => {
                         if est_delegation_proprietaire {
                             debug!("Autorisation de signature du compte {} via delegation proprietaire", user_id);
                             (csr, Some(true))
@@ -1034,8 +1033,8 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
                                 Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
                             }
                         }
-                    }
-                }
+                //     }
+                // }
             }
         }
     } else {
@@ -1432,7 +1431,7 @@ async fn charger_compte_user_id<M, S>(middleware: &M, user_id: S)
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CommandeSignerCertificat {
     #[serde(rename="userId")]
-    user_id: String,
+    user_id: Option<String>,
     #[serde(rename="nomUsager")]
     nom_usager: Option<String>,
 
@@ -1448,7 +1447,6 @@ struct CommandeSignerCertificat {
     demande_certificat: Option<DemandeCertificat>,
     #[serde(rename="clientAssertionResponse")]
     client_assertion_response: Option<ClientAssertionResponse>,
-    permission: Option<MessageMilleGrille>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DemandeCertificat {
