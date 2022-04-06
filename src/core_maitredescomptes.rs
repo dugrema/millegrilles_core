@@ -717,9 +717,14 @@ async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValideActio
     let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
 
     // Verifier si on a un usager avec delegation globale (permet d'utiliser le parametre nom_usager)
-    let nom_usager_option = match message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    let nom_usager_param = match message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         true => requete.nom_usager,
-        false => {
+        false => None,
+    };
+
+    let nom_usager_option = match nom_usager_param {
+        Some(u) => Some(u),
+        None => {
             // Trouver nom d'usager qui correspond au user_id du certificat usager
             match message.get_user_id() {
                 Some(user_id) => {
