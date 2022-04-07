@@ -934,19 +934,29 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu(None)?;
     debug!("commande_signer_compte_usager CommandeSignerCertificat : {:?}", commande);
 
-    let user_id = match message.get_user_id() {
-        Some(u) => u,
-        None => {
-            if (est_maitre_comptes || !est_delegation_proprietaire) && commande.user_id.is_some() {
-                // Extraire propretaire de la commande
-                commande.user_id.expect("user_id")
+    // Determiner la source du user_id. Pour delegation globale, on supporte un champ userId dans la commande.
+    let (user_id_option, init_only) = match commande.user_id {
+        Some(inner_u) => {
+            if est_delegation_proprietaire {
+                (Some(inner_u), false)
+            } else if est_maitre_comptes {
+                (Some(inner_u), true)  // Autorisation de signer, mais uniquement pour un nouveau compte (sans webauthn)
             } else {
-                let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-                debug!("signer_compte_usager autorisation acces refuse : {:?}", err);
-                match middleware.formatter_reponse(&err,None) {
-                    Ok(m) => return Ok(Some(m)),
-                    Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-                }
+                // Ignorer le user_id fourni, l'usager n'a pas la permission de le fournir.
+                (message.get_user_id(), false)
+            }
+        },
+        None => (message.get_user_id(), false)
+    };
+
+    let user_id = match user_id_option {
+        Some(um) => um,
+        None => {
+            let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+            debug!("signer_compte_usager autorisation acces refuse : {:?}", err);
+            match middleware.formatter_reponse(&err,None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
             }
         }
     };
@@ -976,6 +986,15 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     };
 
     let (csr, activation_tierce) = if webauthn_present {
+        if init_only {
+            // Acces refuse, le compte peut uniquement signe si aucun token webauthn n'est present
+            let err = json!({"ok": false, "code": 7, "err": format!("Signature refusee sur compte : {}", user_id)});
+            debug!("signer_compte_usager Acces refuse, le compte peut uniquement signe si aucun token webauthn n'est present : {:?}", err);
+            match middleware.formatter_reponse(&err,None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+            }
+        }
         match commande.demande_certificat {
             Some(d) => {
                 // Valider signature webauthn
@@ -1007,45 +1026,18 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
                     None => Err(format!("commande_signer_compte_usager (8) CSR manquant"))?
                 };
 
-                // // Ce n'est pas une demande de certificat. Verifier si on a une permission
-                // match commande.permission {
-                //     Some(permission) => {
-                //
-                //         let mut perm_serialisee = MessageSerialise::from_parsed(permission)?;
-                //         match valider_message(middleware, &mut perm_serialisee).await {
-                //             Ok(()) => (),
-                //             Err(e) => {
-                //                 let err = json!({"ok": false, "code": 7, "err": format!("Permission invalide (7) : {}, {:?}", user_id, e)});
-                //                 debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
-                //                 match middleware.formatter_reponse(&err, None) {
-                //                     Ok(m) => return Ok(Some(m)),
-                //                     Err(e) => Err(format!("Erreur preparation reponse (7) sauvegarder_inscrire_usager : {:?}", e))?
-                //                 }
-                //             }
-                //         }
-                //
-                //         let c_signer: CommandeSignerCertificat = perm_serialisee.get_msg().map_contenu(None)?;
-                //         if c_signer.user_id.as_str() != user_id {
-                //             Err(format!("commande_signer_compte_usager User id mismatch (8) avec permission"))?
-                //         }
-                //
-                //         (csr, Some(true))
-                //     },
-                //     None => {
-                        if est_delegation_proprietaire {
-                            debug!("Autorisation de signature du compte {} via delegation proprietaire", user_id);
-                            (csr, Some(true))
-                        } else {
-                            // Pas autorise
-                            let err = json!({"ok": false, "code": 4, "err": format!("Compte existant, demandeCertificat/permission sont vides (erreur) : {}", user_id)});
-                            debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
-                            match middleware.formatter_reponse(&err, None) {
-                                Ok(m) => return Ok(Some(m)),
-                                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-                            }
-                        }
-                //     }
-                // }
+                if est_delegation_proprietaire {
+                    debug!("Autorisation de signature du compte {} via delegation proprietaire", user_id);
+                    (csr, Some(true))
+                } else {
+                    // Pas autorise
+                    let err = json!({"ok": false, "code": 4, "err": format!("Compte existant, demandeCertificat/permission sont vides (erreur) : {}", user_id)});
+                    debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
+                    match middleware.formatter_reponse(&err, None) {
+                        Ok(m) => return Ok(Some(m)),
+                        Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+                    }
+                }
             }
         }
     } else {
