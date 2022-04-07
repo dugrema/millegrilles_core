@@ -181,14 +181,20 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     // RK 2.prive, 3.protege
-    let requetes_privees: Vec<&str> = vec![
-        REQUETE_LISTE_USAGERS,
+    let requetes_privees_protegees: Vec<&str> = vec![
         REQUETE_CHARGER_USAGER,
         REQUETE_GET_CSR_RECOVERY_PARCODE,
     ];
-    for req in requetes_privees {
+    for req in requetes_privees_protegees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
-        // rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
+    }
+
+    let requetes_protegees: Vec<&str> = vec![
+        REQUETE_LISTE_USAGERS,
+    ];
+    for req in requetes_protegees {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
     }
 
     // RK 4.secure pour requetes internes
