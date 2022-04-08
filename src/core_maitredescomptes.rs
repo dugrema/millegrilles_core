@@ -1818,7 +1818,7 @@ async fn nettoyer_comptes_usagers<M>(middleware: &M) -> Result<(), Box<dyn Error
     // Nettoyage activations
     // let date_expiration = Utc::now() - Duration::new(48*60*60, 0);
     let date_expiration_activation = Utc::now() - millegrilles_common_rust::chrono::Duration::days(14);
-    let date_expiration_association = Utc::now() - millegrilles_common_rust::chrono::Duration::days(7);
+    // let date_expiration_association = Utc::now() - millegrilles_common_rust::chrono::Duration::days(14);
     let filtre = doc!{
         CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: {"$exists": true}
     };
@@ -1847,34 +1847,27 @@ async fn nettoyer_comptes_usagers<M>(middleware: &M) -> Result<(), Box<dyn Error
         for (fingerprint, activation) in activations.into_iter() {
             debug!("Activation : {} = {:?}", fingerprint, activation);
 
-            match lire_date_valbson(activation.contenu.get("date_association"))? {
+            // On laisse une cle activee mais non associee en fonction pendant une certaine periode.
+            match lire_date_valbson(activation.contenu.get("date_activation"))? {
                 Some(date_activation) => {
-                    debug!("Date association : {:?}", date_activation);
+                    debug!("Date date_activation : {:?}", date_activation);
                     if date_activation < date_expiration_activation {
-                        debug!("Expirer association pour {}/{}", user_id, fingerprint);
+                        debug!("Expirer activation pour {}/{}", user_id, fingerprint);
                         unset_ops.insert(format!("activations_par_fingerprint_pk.{}", fingerprint), true);
                     }
                 },
-                None => match lire_date_valbson(activation.contenu.get("date_activation"))? {
-                    Some(date_association) => {
-                        debug!("Date date_activation : {:?}", date_association);
-                        if date_association < date_expiration_association {
-                            debug!("Expirer activation inutilisee pour {}/{}", user_id, fingerprint);
-                            unset_ops.insert(format!("activations_par_fingerprint_pk.{}", fingerprint), true);
-                        }
-                    },
-                    None => ()
-                }
+                None => ()
             }
 
-            // match activation.associe {
-            //     Some(a) => {
-            //         if(a) {
-            //             unset_ops.insert(format!("activations_par_fingerprint_pk.{}", fingerprint), true);
-            //         }
-            //     },
-            //     None => ()
-            // }
+            // Les cles associees ne sont plus requises - l'usager a associe un token webauthn
+            match activation.associe {
+                Some(a) => {
+                    if(a) {
+                        unset_ops.insert(format!("activations_par_fingerprint_pk.{}", fingerprint), true);
+                    }
+                },
+                None => ()
+            }
         }
 
         if unset_ops.len() > 0 {
