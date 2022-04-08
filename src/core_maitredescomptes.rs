@@ -581,6 +581,8 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
         }
     }
 
+    debug!("charger_usager filtre: {:?}", filtre);
+
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
     let val = match collection.find_one(filtre, None).await? {
         Some(mut doc_usager) => {
@@ -598,6 +600,8 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
             json!({"ok": true, "reponse": false})
         }
     };
+
+    debug!("charger_usager reponse {:?}", val);
 
     match middleware.formatter_reponse(&val,None) {
         Ok(m) => Ok(Some(m)),
@@ -985,16 +989,21 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
         None => false
     };
 
-    let (csr, activation_tierce) = if webauthn_present {
-        if init_only {
-            // Acces refuse, le compte peut uniquement signe si aucun token webauthn n'est present
-            let err = json!({"ok": false, "code": 7, "err": format!("Signature refusee sur compte : {}", user_id)});
-            debug!("signer_compte_usager Acces refuse, le compte peut uniquement signe si aucun token webauthn n'est present : {:?}", err);
-            match middleware.formatter_reponse(&err,None) {
-                Ok(m) => return Ok(Some(m)),
-                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-            }
+    // Verifier si un certificat autre que celui de l'usager (ou delegation globale) est
+    // utilise. On refuse de signer si le compte est protege par webauthn et qu'une attestation
+    // webauthn est absente.
+    let challenge_webauthn_present = commande.client_assertion_response.is_some();
+    if webauthn_present && init_only && !challenge_webauthn_present {
+        // Acces refuse, le compte peut uniquement signe si aucun token webauthn n'est present
+        let err = json!({"ok": false, "code": 7, "err": format!("Signature refusee sur compte : {}", user_id)});
+        debug!("signer_compte_usager Acces refuse, le compte peut uniquement signe si aucun token webauthn n'est present : {:?}", err);
+        match middleware.formatter_reponse(&err,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
         }
+    }
+
+    let (csr, activation_tierce) = if webauthn_present {
         match commande.demande_certificat {
             Some(d) => {
                 // Valider signature webauthn
