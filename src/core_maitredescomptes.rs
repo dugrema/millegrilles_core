@@ -6,11 +6,11 @@ use std::sync::Arc;
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::restaurer;
-use millegrilles_common_rust::bson::{Bson, bson, DateTime, doc};
+use millegrilles_common_rust::bson::{Bson, bson, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{calculer_fingerprint_pk, ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::chrono::{DateTime, NaiveDateTime, Utc};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
 use millegrilles_common_rust::constantes::*;
@@ -26,7 +26,7 @@ use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
 use millegrilles_common_rust::multibase;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage, valider_message};
-use millegrilles_common_rust::serde_json::{json, Value};
+use millegrilles_common_rust::serde_json::{json, Map, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
@@ -367,11 +367,18 @@ async fn entretien<M>(_middleware: Arc<M>)
     }
 }
 
-async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
-where M: ValidateurX509 {
+async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
+where M: MongoDao {
     // let message = trigger.message;
 
     debug!("Traiter cedule {}", DOMAINE_NOM);
+
+    if trigger.flag_jour {
+        match nettoyer_comptes_usagers(middleware).await {
+            Ok(()) => (),
+            Err(e) => error!("core_maitredescomptes.traiter_cedule Erreur nettoyer comptes usagers : {:?}", e)
+        }
+    }
 
     Ok(())
 }
@@ -1480,11 +1487,23 @@ struct CompteUsager {
     #[serde(rename="userId")]
     user_id: String,
     webauthn: Option<Vec<CompteCredential>>,
+    activations_par_fingerprint_pk: Option<HashMap<String, InfoAssociation>>,
 
     compte_prive: Option<bool>,
     delegation_globale: Option<String>,
     delegations_date: Option<DateEpochSeconds>,
     delegations_version: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct InfoAssociation {
+    associe: Option<bool>,
+    // date_activation: Option<usize>,
+
+    /// Contenu du message autre que les elements structurels.
+    #[serde(flatten)]
+    pub contenu: Map<String, Value>,
+
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1788,6 +1807,117 @@ pub async fn transaction_supprimer_cles<M, T>(middleware: &M, transaction: T)
 struct TransactionSupprimerCles {
     #[serde(rename="userId")]
     user_id: String,
+}
+
+/// Nettoie le contenu des comptes usagers (activations, expirations, etc.)
+async fn nettoyer_comptes_usagers<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+    where M: MongoDao
+{
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+
+    // Nettoyage activations
+    // let date_expiration = Utc::now() - Duration::new(48*60*60, 0);
+    let date_expiration_activation = Utc::now() - millegrilles_common_rust::chrono::Duration::days(14);
+    let date_expiration_association = Utc::now() - millegrilles_common_rust::chrono::Duration::days(7);
+    let filtre = doc!{
+        CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: {"$exists": true}
+    };
+    let mut curseur = collection.find(filtre, None).await?;
+    while let Some(result_compte) = curseur.next().await {
+        let compte: CompteUsager = match convertir_bson_deserializable(result_compte?) {
+            Ok(compte) => compte,
+            Err(e) => {
+                warn!("Erreur mapping compte {:?}", e);
+                continue;
+            }
+        };
+
+        let user_id = compte.user_id;
+
+        let activations = compte.activations_par_fingerprint_pk.expect("activations");
+        let len_activations = activations.len();
+
+        let mut unset_ops = doc!{};
+
+        if len_activations == 0 {
+            // Retirer activations_par_fingerprint_pk
+            unset_ops.insert("activations_par_fingerprint_pk", true);
+        }
+
+        for (fingerprint, activation) in activations.into_iter() {
+            debug!("Activation : {} = {:?}", fingerprint, activation);
+
+            match lire_date_valbson(activation.contenu.get("date_association"))? {
+                Some(date_activation) => {
+                    debug!("Date association : {:?}", date_activation);
+                    if date_activation < date_expiration_activation {
+                        debug!("Expirer association pour {}/{}", user_id, fingerprint);
+                        unset_ops.insert(format!("activations_par_fingerprint_pk.{}", fingerprint), true);
+                    }
+                },
+                None => match lire_date_valbson(activation.contenu.get("date_activation"))? {
+                    Some(date_association) => {
+                        debug!("Date date_activation : {:?}", date_association);
+                        if date_association < date_expiration_association {
+                            debug!("Expirer activation inutilisee pour {}/{}", user_id, fingerprint);
+                            unset_ops.insert(format!("activations_par_fingerprint_pk.{}", fingerprint), true);
+                        }
+                    },
+                    None => ()
+                }
+            }
+
+            // match activation.associe {
+            //     Some(a) => {
+            //         if(a) {
+            //             unset_ops.insert(format!("activations_par_fingerprint_pk.{}", fingerprint), true);
+            //         }
+            //     },
+            //     None => ()
+            // }
+        }
+
+        if unset_ops.len() > 0 {
+            debug!("Retirer {} actions du comtpe {}", unset_ops.len(), user_id);
+            let filtre = doc!{CHAMP_USER_ID: &user_id};
+            let ops = doc!{
+                "$unset": unset_ops,
+                "$currentDate": {CHAMP_MODIFICATION: true},
+            };
+            collection.update_one(filtre, ops, None).await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn lire_date_valbson(date: Option<&Value>) -> Result<Option<DateTime<Utc>>, Box<dyn Error>> {
+    let mut date_extraite = None;
+    if let Some(a) = date {
+        if let Some(b) = a.as_object() {
+            if let Some(c) = b.get("$date") {
+                if let Some(d) = c.as_object() {
+                    if let Some(e) = d.get("$numberLong") {
+                        if let Some(f) = e.as_str() {
+                            let date_usize: i64 = f.parse::<i64>()?;
+                            debug!("Date activation : {}", date_usize);
+                            date_extraite = Some(date_usize);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    match date_extraite {
+        Some(d) => {
+            let date_secondes = d / 1000;
+            let naive_datetime = NaiveDateTime::from_timestamp(date_secondes, 0);
+            let datetime_again: DateTime<Utc> = DateTime::from_utc(naive_datetime, Utc);
+            Ok(Some(datetime_again))
+        },
+        None => Ok(None)
+    }
 }
 
 #[cfg(test)]
