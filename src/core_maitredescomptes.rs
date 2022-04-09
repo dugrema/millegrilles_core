@@ -19,7 +19,7 @@ use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMil
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
-use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine, Middleware};
+use millegrilles_common_rust::middleware::{sauvegarder_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine, Middleware, sauvegarder_traiter_transaction};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
@@ -73,6 +73,9 @@ const TRANSACTION_SUPPRIMER_USAGER: &str = "supprimerUsager";
 const TRANSACTION_MAJ_USAGER_DELEGATIONS: &str = "majUsagerDelegations";
 const TRANSACTION_AJOUTER_DELEGATION_SIGNEE: &str = "ajouterDelegationSignee";
 const TRANSACTION_SUPPRIMER_CLES: &str = "supprimerCles";
+const TRANSACTION_RESET_WEBAUTHN_USAGER: &str = "resetWebauthnUsager";
+
+const EVENEMENT_EVICT_USAGER: &str = "evictUsager";
 
 const INDEX_ID_USAGER: &str = "idusager_unique";
 const INDEX_NOM_USAGER: &str = "nomusager_unique";
@@ -141,7 +144,7 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware + 'static
     {
-        consommer_commande(middleware, message).await  // Fonction plus bas
+        consommer_commande(middleware, &self,message).await  // Fonction plus bas
     }
 
     async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -218,6 +221,13 @@ pub fn preparer_queues() -> Vec<QueueType> {
         // rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege});
     }
 
+    let commandes_protegees: Vec<&str> = vec![
+        TRANSACTION_RESET_WEBAUTHN_USAGER,
+    ];
+    for commande in commandes_protegees {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege});
+    }
+
     let mut queues = Vec::new();
 
     // Queue de messages volatils (requete, commande, evenements)
@@ -237,6 +247,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE,
         TRANSACTION_MAJ_USAGER_DELEGATIONS,
         TRANSACTION_SUPPRIMER_CLES,
+        TRANSACTION_RESET_WEBAUTHN_USAGER,
     ];
     for transaction in transactions {
         rk_transactions.push(ConfigRoutingExchange {routing_key: format!("transaction.{}.{}", DOMAINE_NOM, transaction), exchange: Securite::L4Secure});
@@ -421,48 +432,46 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
 
 /// Consomme une commande
 /// Verifie le niveau de securite approprie avant d'executer la commande
-async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
-    if m.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
+    if m.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege)) {
         // Actions autorisees pour echanges prives
         match m.action.as_str() {
-            // Transactions recues sous forme de commande
             TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
-
-            // Commandes standard
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
-            // COMMANDE_ACTIVATION_TIERCE => activation_tierce(middleware, m).await,
             COMMANDE_AJOUTER_CSR_RECOVERY => commande_ajouter_csr_recovery(middleware, m).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: exchange) : {}, message dropped", DOMAINE_NOM, m.action))?,
         }
+    } else if m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        // Commande proprietaire (administrateur)
+        match m.action.as_str() {
+            // Commandes delegation globale uniquement
+            TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware, m).await,
+            TRANSACTION_SUPPRIMER_CLES => commande_supprimer_cles(middleware, m).await,
+            TRANSACTION_RESET_WEBAUTHN_USAGER => commande_reset_webauthn_usager(middleware, gestionnaire, m).await,
+
+            // Commandes usager standard
+            TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m).await,
+            COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
+
+            // Commandes inconnues
+            _ => Ok(acces_refuse(middleware, 252)?)
+        }
     } else if m.get_user_id().is_some() {
         match m.action.as_str() {
-            // Transactions recues sous forme de commande
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m).await,
-
-            // Commandes standard
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: user_id): {}, message dropped", DOMAINE_NOM, m.action))?,
-        }
-    } else if m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
-        // Commande proprietaire (administrateur)
-        match m.action.as_str() {
-            // Transactions recues sous forme de commande
-            TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware, m).await,
-            TRANSACTION_SUPPRIMER_CLES => commande_supprimer_cles(middleware, m).await,
-            COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
-            // Commandes inconnues
-            _ => Ok(acces_refuse(middleware, 252)?)
         }
     } else {
         debug!("Commande {} non autorisee : {}, message dropped", DOMAINE_NOM, m.action);
@@ -557,6 +566,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE => transaction_ajouter_delegation_signee(middleware, transaction).await,
         TRANSACTION_MAJ_USAGER_DELEGATIONS => transaction_maj_usager_delegations(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_CLES => transaction_supprimer_cles(middleware, transaction).await,
+        TRANSACTION_RESET_WEBAUTHN_USAGER => transaction_reset_webauthn_usager(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -1589,6 +1599,32 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     Ok(Some(middleware.formatter_reponse(&reponse, None)?))
 }
 
+async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
+    // Verifier autorisation
+    if !message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err, None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse (1) ajouter_delegation_signee : {:?}", e))?
+        }
+    }
+
+    // Valider contenu en faisant le mapping
+    let _commande_resultat: CommandeResetWebauthnUsager = match message.message.get_msg().map_contenu(None) {
+        Ok(c) => c,
+        Err(e) => {
+            let reponse = json!({"ok": false, "code": 2, "err": format!("Format de la commande invalide : {:?}", e)});
+            return Ok(Some(middleware.formatter_reponse(reponse, None)?))
+        }
+    };
+
+    Ok(sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?)
+}
+
 async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction: T)
     -> Result<Option<MessageMilleGrille>, String>
     where T: Transaction,
@@ -1623,6 +1659,66 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
     } else {
         Err(format!("transaction_ajouter_delegation_signee Aucun match pour usager {:?}", commande))
     }
+}
+
+async fn transaction_reset_webauthn_usager<M, T>(middleware: &M, transaction: T)
+    -> Result<Option<MessageMilleGrille>, String>
+    where T: Transaction,
+          M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    let commande: CommandeResetWebauthnUsager = match transaction.clone().convertir() {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion en CommandeResetWebauthnUsager : {:?}", e))?
+    };
+
+    debug!("transaction_reset_webauthn_usager {:?}", commande);
+
+    if let Some(evict) = commande.evict_all_sessions {
+        if evict {
+            // Emettre message pour fermer toutes les sessions en cours de l'usager
+            let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_EVICT_USAGER)
+                .exchanges(vec![L2Prive])
+                .build();
+            let message = json!({CHAMP_USER_ID: &commande.user_id});
+            middleware.emettre_evenement(routage, &message).await?;
+        }
+    }
+
+    // Le filtre agit a la fois sur le nom usager (valide par la cle) et le user_id (valide par serveur)
+    let filtre = doc! {
+        CHAMP_USER_ID: commande.user_id.as_str(),
+    };
+    let mut unset_opts = doc! {};
+    if let Some(r) = commande.reset_webauthn { if(r) { unset_opts.insert(CHAMP_WEBAUTHN, true); } }
+    if let Some(r) = commande.reset_activations { if(r) { unset_opts.insert(CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, true); } }
+    let ops = doc! {
+        "$unset": unset_opts,
+        "$currentDate": { CHAMP_MODIFICATION: true }
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    let resultat = match collection.update_one(filtre, ops, None).await {
+        Ok(r) => r,
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", commande, e))?
+    };
+    debug!("transaction_reset_webauthn_usager resultat {:?}", resultat);
+    if resultat.matched_count == 1 {
+        Ok(None)
+    } else {
+        Err(format!("transaction_reset_webauthn_usager Aucun match pour usager {:?}", commande))
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandeResetWebauthnUsager {
+    #[serde(rename="userId")]
+    user_id: String,
+    #[serde(rename="resetWebauthn")]
+    reset_webauthn: Option<bool>,
+    #[serde(rename="resetActivations")]
+    reset_activations: Option<bool>,
+    #[serde(rename="evictAllSessions")]
+    evict_all_sessions: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
