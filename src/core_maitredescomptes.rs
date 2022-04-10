@@ -1069,7 +1069,7 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     } else {
         debug!("Le compte {} est nouveau (aucun token webauthn), on permet l'enregistrement direct", user_id);
         match commande.csr {
-            Some(c) => (c, Some(false)),
+            Some(c) => (c, Some(true)),
             None => Err(format!("CSR absent de la commande de signature"))?
         }
     };
