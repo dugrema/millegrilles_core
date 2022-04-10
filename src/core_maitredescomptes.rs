@@ -9,7 +9,7 @@ use millegrilles_common_rust::backup::restaurer;
 use millegrilles_common_rust::bson::{Bson, bson, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
-use millegrilles_common_rust::certificats::{calculer_fingerprint_pk, ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::certificats::{calculer_fingerprint_pk, csr_calculer_fingerprintpk, ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, NaiveDateTime, Utc};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
@@ -890,11 +890,22 @@ async fn sauvegarder_inscrire_usager<M, T>(middleware: &M, transaction: T)
     let nom_usager = transaction.nom_usager.as_str();
     let user_id = transaction.user_id.as_str();
 
+    let fingerprint_pk = match transaction.csr.as_ref() {
+        Some(csr) => match csr_calculer_fingerprintpk(csr.as_str()) {
+            Ok(fp) => fp,
+            Err(e) => {
+                error!("Erreur calcul fingerprint_pk du csr, on utilise fingerprint fourni : {:?}", e);
+                transaction.fingerprint_pk.clone()
+            }
+        },
+        None => transaction.fingerprint_pk.clone()
+    };
+
     let filtre = doc! {CHAMP_USAGER_NOM: nom_usager};
     let ops = doc! {
         "$set": {
             CHAMP_USER_ID: user_id,
-            format!("{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, transaction.fingerprint_pk): {
+            format!("{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk): {
                 "associe": false,
                 "date_activation": Utc::now(),
             },
