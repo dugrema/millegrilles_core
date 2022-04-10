@@ -208,7 +208,6 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_INSCRIRE_USAGER,
         TRANSACTION_AJOUTER_CLE,
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE,
-        TRANSACTION_MAJ_USAGER_DELEGATIONS,
         TRANSACTION_SUPPRIMER_CLES,
 
         // Commandes
@@ -222,6 +221,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     }
 
     let commandes_protegees: Vec<&str> = vec![
+        TRANSACTION_MAJ_USAGER_DELEGATIONS,
         TRANSACTION_RESET_WEBAUTHN_USAGER,
     ];
     for commande in commandes_protegees {
