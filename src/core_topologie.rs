@@ -73,6 +73,8 @@ const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 // const EVENEMENT_PRESENCE_DOMAINE: &str = EVENEMENT_PRESENCE_DOMAINE;
 const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 const EVENEMENT_INSTANCE_SUPPRIMEE: &str = "instanceSupprimee";
+const EVENEMENT_APPLICATION_DEMARREE: &str = "applicationDemarree";
+const EVENEMENT_APPLICATION_ARRETEE: &str = "applicationArretee";
 
 const INDEX_DOMAINE: &str = "domaine";
 const INDEX_NOEUDS: &str = "noeuds";
@@ -229,9 +231,18 @@ pub fn preparer_queues() -> Vec<QueueType> {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
     }
 
-    let sec_monitor = vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure];
-    for sec in sec_monitor {
+    for sec in vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure] {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.monitor.{}", EVENEMENT_PRESENCE_MONITOR), exchange: sec});
+    }
+
+    let evenements: Vec<&str> = vec![
+        EVENEMENT_APPLICATION_DEMARREE,
+        EVENEMENT_APPLICATION_ARRETEE,
+    ];
+    for evnmt in evenements {
+        for sec in vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure] {
+            rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.monitor.*.{}", evnmt), exchange: sec });
+        }
     }
 
     // Presence de domaines se fait sur l'evenement du domaine specifique (*)
@@ -531,7 +542,9 @@ async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Res
     }
 }
 
-async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
+async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + Chiffreur<CipherMgs3, Mgs3CipherKeys>
+{
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
@@ -545,6 +558,8 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     match m.action.as_str() {
         EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m).await,
         EVENEMENT_PRESENCE_MONITOR => traiter_presence_monitor(middleware, m).await,
+        EVENEMENT_APPLICATION_DEMARREE => traiter_evenement_application(middleware, m).await,
+        EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
@@ -743,6 +758,19 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
         let ops = doc! {"$set": {"dirty": false}};
         let _ = collection.update_one(filtre, ops, None).await?;
     }
+
+    Ok(None)
+}
+
+async fn traiter_evenement_application<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + Chiffreur<CipherMgs3, Mgs3CipherKeys>
+{
+    let estampille = &m.message.get_entete().estampille;
+    // let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
+    debug!("Evenement application monitor : {:?}", m);
+
+    // Regenerer fiche publique
+    produire_fiche_publique(middleware).await?;
 
     Ok(None)
 }
