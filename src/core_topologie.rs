@@ -59,8 +59,8 @@ const NOM_Q_TRIGGERS: &str = "CoreTopologie/triggers";
 const REQUETE_APPLICATIONS_DEPLOYEES: &str = "listeApplicationsDeployees";
 const REQUETE_LISTE_DOMAINES: &str = "listeDomaines";
 const REQUETE_LISTE_NOEUDS: &str = "listeNoeuds";
-const REQUETE_INFO_DOMAINE: &str = "infoDomaine";
-const REQUETE_INFO_NOEUD: &str = "infoNoeud";
+// const REQUETE_INFO_DOMAINE: &str = "infoDomaine";
+// const REQUETE_INFO_NOEUD: &str = "infoNoeud";
 const REQUETE_RESOLVE_IDMG: &str = "resolveIdmg";
 const REQUETE_FICHE_MILLEGRILLE: &str = "ficheMillegrille";
 const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
@@ -194,8 +194,8 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let requetes_protegees = vec![
         REQUETE_LISTE_DOMAINES,
         REQUETE_LISTE_NOEUDS,
-        REQUETE_INFO_DOMAINE,
-        REQUETE_INFO_NOEUD,
+        // REQUETE_INFO_DOMAINE,
+        // REQUETE_INFO_NOEUD,
     ];
     for req in requetes_protegees {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege });
@@ -205,7 +205,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let requetes_privees = vec![
         REQUETE_APPLICATIONS_DEPLOYEES,
         // REQUETE_INFO_NOEUD,
-        // REQUETE_RESOLVE_IDMG,
+        REQUETE_RESOLVE_IDMG,
         REQUETE_FICHE_MILLEGRILLE,
         REQUETE_APPLICATIONS_TIERS,
     ];
@@ -465,27 +465,96 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
     debug!("Consommer requete : {:?}", &message.message);
 
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
-
-    match message.domaine.as_str() {
-        DOMAINE_NOM => {
-            match message.action.as_str() {
-                REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
-                REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
-                REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
-                REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
-                REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
-                REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
-                _ => {
-                    error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
-                    Ok(None)
+    let message_action = message.action.clone();
+    match message.exchange.as_ref() {
+        Some(e) => match e.as_str() {
+            SECURITE_1_PUBLIC => {
+                match message.domaine.as_str() {
+                    DOMAINE_NOM => {
+                        match message.action.as_str() {
+                            REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
+                            REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
+                            _ => {
+                                error!("Message requete/action non autorisee sur 1.public : '{}'. Message dropped.", message_action);
+                                Ok(None)
+                            }
+                        }
+                    },
+                    _ => {
+                        error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
+                        Ok(None)
+                    }
                 }
+            },
+            SECURITE_2_PRIVE => {
+                match message.domaine.as_str() {
+                    DOMAINE_NOM => {
+                        match message_action.as_str() {
+                            REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
+                            REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
+                            REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
+                            REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
+                            _ => {
+                                error!("Message requete/action inconnue : '{}'. Message dropped.", message_action);
+                                Ok(None)
+                            }
+                        }
+                    },
+                    _ => {
+                        error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
+                        Ok(None)
+                    }
+                }
+            },
+            SECURITE_3_PROTEGE | SECURITE_4_SECURE => {
+                match message.domaine.as_str() {
+                    DOMAINE_NOM => {
+                        match message_action.as_str() {
+                            REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
+                            REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
+                            _ => {
+                                error!("Message requete/action inconnue : '{}'. Message dropped.", message_action);
+                                Ok(None)
+                            }
+                        }
+                    },
+                    _ => {
+                        error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
+                        Ok(None)
+                    }
+                }
+            },
+            _ => {
+                error!("Message requete/action sans exchange autorise : '{}'. Message dropped.", message_action);
+                Ok(None)
             }
-        }
-        _ => {
-            error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
+        },
+        None => {
+            error!("Message requete/action sans exchange : '{}'. Message dropped.", message_action);
             Ok(None)
         }
     }
+
+    // match message.domaine.as_str() {
+    //     DOMAINE_NOM => {
+    //         match message.action.as_str() {
+    //             REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
+    //             REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
+    //             REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
+    //             REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
+    //             REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
+    //             REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
+    //             _ => {
+    //                 error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
+    //                 Ok(None)
+    //             }
+    //         }
+    //     }
+    //     _ => {
+    //         error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
+    //         Ok(None)
+    //     }
+    // }
 }
 
 async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
