@@ -45,7 +45,8 @@ use crate::validateur_pki_mongo::MiddlewareDbPki;
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreTopologie";
 pub const NOM_COLLECTION_DOMAINES: &str = "CoreTopologie/domaines";
-pub const NOM_COLLECTION_NOEUDS: &str = "CoreTopologie/noeuds";
+pub const NOM_COLLECTION_INSTANCES: &str = "CoreTopologie/instances";
+pub const NOM_COLLECTION_NOEUDS: &str = NOM_COLLECTION_INSTANCES;
 pub const NOM_COLLECTION_MILLEGRILLES: &str = "CoreTopologie/millegrilles";
 pub const NOM_COLLECTION_MILLEGRILLES_ADRESSES: &str = "CoreTopologie/millegrillesAdresses";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
@@ -66,7 +67,8 @@ const REQUETE_FICHE_MILLEGRILLE: &str = "ficheMillegrille";
 const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
-const TRANSACTION_MONITOR: &str = "monitor";
+const TRANSACTION_INSTANCE: &str = "instance";
+const TRANSACTION_MONITOR: &str = TRANSACTION_INSTANCE;
 const TRANSACTION_SUPPRIMER_INSTANCE: &str = "supprimerInstance";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
@@ -83,7 +85,8 @@ const INDEX_ADRESSES: &str = "adresses";
 const INDEX_ADRESSE: &str = "adresse";
 
 const CHAMP_DOMAINE: &str = "domaine";
-const CHAMP_NOEUD_ID: &str = "noeud_id";
+const CHAMP_INSTANCE_ID: &str = "instance_id";
+const CHAMP_NOEUD_ID: &str = CHAMP_INSTANCE_ID;
 const CHAMP_ADRESSE: &str = "adresse";
 const CHAMP_ADRESSES: &str = "adresses";
 
@@ -232,7 +235,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     }
 
     for sec in vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure] {
-        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.monitor.{}", EVENEMENT_PRESENCE_MONITOR), exchange: sec});
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.{}", EVENEMENT_PRESENCE_MONITOR), exchange: sec});
     }
 
     let evenements: Vec<&str> = vec![
@@ -241,7 +244,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     ];
     for evnmt in evenements {
         for sec in vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure] {
-            rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.monitor.*.{}", evnmt), exchange: sec });
+            rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.*.{}", evnmt), exchange: sec });
         }
     }
 
@@ -714,7 +717,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
 
         let tval = json!({
             "domaine": event.domaine,
-            "noeud_id": event.noeud_id,
+            "instance_id": event.instance_id,
         });
 
         let transaction = middleware.formatter_message(
@@ -782,14 +785,14 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
     filtrer_doc_id(&mut set_ops);
 
     // Retirer champ cle
-    set_ops.remove("noeud_id");
+    set_ops.remove("instance_id");
     set_ops.insert("applications", applications);
     set_ops.insert("date_presence", estampille);
 
-    let filtre = doc! {"noeud_id": &event.noeud_id};
+    let filtre = doc! {"instance_id": &event.instance_id};
     let ops = doc! {
         "$set": set_ops,
-        "$setOnInsert": {"noeud_id": &event.noeud_id, CHAMP_CREATION: Utc::now(), "dirty": true},
+        "$setOnInsert": {"instance_id": &event.instance_id, CHAMP_CREATION: Utc::now(), "dirty": true},
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
 
@@ -810,7 +813,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
 
         let tval = json!({
             "domaine": event.domaine,
-            "noeud_id": event.noeud_id,
+            "instance_id": event.instance_id,
         });
 
         let transaction = middleware.formatter_message(
@@ -823,7 +826,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
         sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
 
         // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
-        let filtre = doc! {"noeud_id": &event.noeud_id};
+        let filtre = doc! {"instance_id": &event.instance_id};
         let ops = doc! {"$set": {"dirty": false}};
         let _ = collection.update_one(filtre, ops, None).await?;
     }
@@ -926,14 +929,14 @@ async fn traiter_transaction_monitor<M, T>(middleware: &M, transaction: T) -> Re
         Ok(d) => d,
         Err(e) => Err(format!("core_topologie.traiter_transaction_monitor Erreur conversion transaction monitor : {:?}", e))?
     };
-    let noeud_id = doc_transaction.noeud_id;
+    let instance_id = doc_transaction.instance_id;
 
     let ops = doc! {
         "$set": {"dirty": false, CHAMP_DOMAINE: doc_transaction.domaine},
-        "$setOnInsert": {CHAMP_NOEUD_ID: &noeud_id, CHAMP_CREATION: Utc::now()},
+        "$setOnInsert": {CHAMP_INSTANCE_ID: &instance_id, CHAMP_CREATION: Utc::now()},
         "$currentDate": {CHAMP_MODIFICATION: true},
     };
-    let filtre = doc! {CHAMP_NOEUD_ID: &noeud_id};
+    let filtre = doc! {CHAMP_INSTANCE_ID: &instance_id};
     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
     let options = UpdateOptions::builder().upsert(true).build();
     match collection.update_one(filtre, ops, options).await {
@@ -959,9 +962,9 @@ async fn traiter_transaction_supprimer_instance<M, T>(middleware: &M, transactio
         Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_instance Erreur conversion transaction monitor : {:?}", e))?
     };
 
-    let noeud_id = doc_transaction.noeud_id;
+    let instance_id = doc_transaction.instance_id;
 
-    let filtre = doc! {CHAMP_NOEUD_ID: &noeud_id};
+    let filtre = doc! {CHAMP_NOEUD_ID: &instance_id};
     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
     match collection.delete_one(filtre, None).await {
         Ok(_) => (),
@@ -969,7 +972,7 @@ async fn traiter_transaction_supprimer_instance<M, T>(middleware: &M, transactio
     }
 
     // Emettre evenement d'instance supprimee
-    let evenement_supprimee = json!({"noeud_id": &noeud_id});
+    let evenement_supprimee = json!({"instance_id": &instance_id});
     let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_INSTANCE_SUPPRIMEE)
         .exchanges(vec![L3Protege])
         .build();
@@ -985,13 +988,13 @@ async fn traiter_transaction_supprimer_instance<M, T>(middleware: &M, transactio
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceDomaine {
     domaine: Option<String>,
-    noeud_id: Option<String>,
+    instance_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceMonitor {
     domaine: Option<String>,
-    noeud_id: String,
+    instance_id: String,
     services: Option<HashMap<String, InfoService>>,
 }
 
@@ -1034,7 +1037,7 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
 
     let mut curseur = {
         let filtre = doc! {};
-        let projection = doc! {"noeud_id": true, "domaine": true, "securite": true, "applications": true, "onion": true};
+        let projection = doc! {"instance_id": true, "domaine": true, "securite": true, "applications": true, "onion": true};
         let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
         let ops = FindOptions::builder().projection(Some(projection)).build();
         match collection.find(filtre, Some(ops)).await {
@@ -1116,7 +1119,7 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct InformationMonitor {
     domaine: Option<String>,
-    noeud_id: String,
+    instance_id: String,
     securite: Option<String>,
     onion: Option<String>,
     applications: Option<Vec<InformationApplication>>,
@@ -1160,13 +1163,13 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
     let mut curseur = {
         let mut filtre = doc! {};
         let msg = message.message.get_msg();
-        if let Some(noeud_id) = msg.contenu.get("noeud_id") {
-            if let Some(noeud_id) = noeud_id.as_str() {
-                filtre.insert("noeud_id", millegrilles_common_rust::bson::Bson::String(noeud_id.into()));
+        if let Some(instance_id) = msg.contenu.get("instance_id") {
+            if let Some(instance_id) = instance_id.as_str() {
+                filtre.insert("instance_id", millegrilles_common_rust::bson::Bson::String(instance_id.into()));
             }
         }
 
-        // let projection = doc! {"noeud_id": true, "domaine": true, "securite": true};
+        // let projection = doc! {"instance_id": true, "domaine": true, "securite": true};
         let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
         // let ops = FindOptions::builder().projection(Some(projection)).build();
         match collection.find(filtre, None).await {
@@ -1210,7 +1213,7 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
     }
 
     let mut curseur = {
-        let projection = doc! {"noeud_id": true, "domaine": true, CHAMP_MODIFICATION: true};
+        let projection = doc! {"instance_id": true, "domaine": true, CHAMP_MODIFICATION: true};
         let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
         let ops = FindOptions::builder().projection(Some(projection)).build();
         match collection.find(doc! {}, Some(ops)).await {
@@ -1380,7 +1383,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
 {
     debug!("resoudre_url {}", hostname);
 
-    let routage = RoutageMessageAction::builder(DOMAINE_SERVICE_MONITOR, "relaiWeb")
+    let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, "relaiWeb")
         .exchanges(vec![L1Public])
         .build();
 
