@@ -560,7 +560,7 @@ async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Resul
         .build()?;
 
     let mut url_post = certissuer_url.clone();
-    url_post.set_path("certissuerInterne/signerCsr");
+    url_post.set_path("signerModule");
 
     // On retransmet le message recu tel quel
     let response = match client.post(url_post).json(&commande).send().await {
