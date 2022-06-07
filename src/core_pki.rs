@@ -590,24 +590,24 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
     where M: GenerateurMessages + IsConfigNoeud
 {
     let mut message = None;
-    if m.message.verifier_roles(vec![RolesCertificats::Monitor]) {
+    if m.message.verifier_roles(vec![RolesCertificats::Instance]) {
         if m.message.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
-            debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 3.protege ou 4.secure, demande approuvee");
+            debug!("valider_demande_signature_csr Demande de CSR signee par une instance 3.protege ou 4.secure, demande approuvee");
             message = Some(Cow::Borrowed(&m.message.parsed));
         } else if m.message.verifier_exchanges(vec![Securite::L2Prive]) {
-            debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 2.prive");
+            debug!("valider_demande_signature_csr Demande de CSR signee par une instance 2.prive");
             message = Some(Cow::Borrowed(&m.message.parsed));
         } else if m.message.verifier_exchanges(vec![Securite::L1Public]) {
-            debug!("valider_demande_signature_csr Demande de CSR signee par un monitor 1.public, demande approuvee");
+            debug!("valider_demande_signature_csr Demande de CSR signee par une instance 1.public, demande approuvee");
             message = Some(Cow::Borrowed(&m.message.parsed));
         } else {
-            error!("valider_demande_signature_csr Demande de CSR signee par un monitor sans exchanges, REFUSE");
+            error!("valider_demande_signature_csr Demande de CSR signee par une instance sans exchanges, REFUSE");
         }
     } else if m.message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         debug!("valider_demande_signature_csr Demande de CSR signee par une delegation globale (proprietaire), demande approuvee");
         message = Some(Cow::Borrowed(&m.message.parsed));
     } else {
-        warn!("valider_demande_signature_csr Demande de signature de CSR refusee pour demandeur qui n'est pas un monitor : {:?}", m.message.certificat);
+        warn!("valider_demande_signature_csr Demande de signature de CSR refusee pour demandeur qui n'est pas une instance : {:?}", m.message.certificat);
     }
 
     Ok(message)
