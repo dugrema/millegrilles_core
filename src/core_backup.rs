@@ -6,7 +6,7 @@ use std::convert::TryInto;
 
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::backup::{restaurer, CatalogueHoraire, CommandeDeclencherBackupQuotidien};
+use millegrilles_common_rust::backup::{CatalogueBackup, CommandeDeclencherBackupQuotidien};
 use millegrilles_common_rust::bson::{Bson, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
@@ -357,7 +357,7 @@ where
         TRANSACTION_CATALOGUE_HORAIRE |
         TRANSACTION_CATALOGUE_QUOTIDIEN |
         TRANSACTION_CATALOGUE_QUOTIDIEN_INFO => {
-            sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
+            // sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
         _ => Err(format!("core_backup.consommer_transaction: Mauvais type d'action pour une transaction : {}", m.action))?,
@@ -370,55 +370,55 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         T: Transaction
 {
     match transaction.get_action() {
-        TRANSACTION_CATALOGUE_HORAIRE => transaction_catalogue_horaire(middleware, transaction).await,
-        TRANSACTION_CATALOGUE_QUOTIDIEN => transaction_catalogue_quotidien(middleware, transaction).await,
-        TRANSACTION_CATALOGUE_QUOTIDIEN_INFO => transaction_catalogue_quotidien_info(middleware, transaction).await,
+        // TRANSACTION_CATALOGUE_HORAIRE => transaction_catalogue_horaire(middleware, transaction).await,
+        // TRANSACTION_CATALOGUE_QUOTIDIEN => transaction_catalogue_quotidien(middleware, transaction).await,
+        // TRANSACTION_CATALOGUE_QUOTIDIEN_INFO => transaction_catalogue_quotidien_info(middleware, transaction).await,
         _ => Err(format!("core_backup.aiguillage_transaction: Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
 
-async fn requete_dernier_horaire<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-where
-    M: GenerateurMessages + MongoDao,
-{
-    debug!("Consommer requete : {:?}", &m.message);
-    let requete: RequeteDernierCatalogueHoraire = m.message.get_msg().map_contenu(None)?;
-
-    let mut filtre = doc! {
-        "domaine": requete.domaine,
-    };
-    if let Some(partition) = requete.partition {
-        filtre.insert("partition", partition);
-    }
-    debug!("requete_dernier_horaire Charger dernier backup pour : {:?}", filtre);
-
-    let opts = FindOneOptions::builder()
-        .hint(Some(Hint::Name(INDEX_CATALOGUES_HORAIRE.into())))
-        .sort(Some(doc!{CHAMP_DOMAINE: 1, CHAMP_PARTITION: 1, CHAMP_HEURE: -1}))
-        .build();
-
-    let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES_HORAIRES)?;
-    let val_reponse = match collection.find_one(filtre, Some(opts)).await? {
-        Some(d) => {
-            let doc_horaire: DocCatalogueHoraire = convertir_bson_deserializable(d)?;
-            json!({
-                "ok": true,
-                "dernier_backup": {
-                    "en-tete": doc_horaire.entete,
-                    "heure": doc_horaire.heure,
-                }
-            })
-        },
-        None => {
-            json!({"ok": true, "dernier_backup": None::<&str>})
-        }
-    };
-
-    match middleware.formatter_reponse(&val_reponse,None) {
-        Ok(m) => Ok(Some(m)),
-        Err(e) => Err(format!("core_backup.requete_dernier_horaire: Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-    }
-}
+// async fn requete_dernier_horaire<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+// where
+//     M: GenerateurMessages + MongoDao,
+// {
+//     debug!("Consommer requete : {:?}", &m.message);
+//     let requete: RequeteDernierCatalogueHoraire = m.message.get_msg().map_contenu(None)?;
+//
+//     let mut filtre = doc! {
+//         "domaine": requete.domaine,
+//     };
+//     if let Some(partition) = requete.partition {
+//         filtre.insert("partition", partition);
+//     }
+//     debug!("requete_dernier_horaire Charger dernier backup pour : {:?}", filtre);
+//
+//     let opts = FindOneOptions::builder()
+//         .hint(Some(Hint::Name(INDEX_CATALOGUES_HORAIRE.into())))
+//         .sort(Some(doc!{CHAMP_DOMAINE: 1, CHAMP_PARTITION: 1, CHAMP_HEURE: -1}))
+//         .build();
+//
+//     let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES_HORAIRES)?;
+//     let val_reponse = match collection.find_one(filtre, Some(opts)).await? {
+//         Some(d) => {
+//             let doc_horaire: DocCatalogueHoraire = convertir_bson_deserializable(d)?;
+//             json!({
+//                 "ok": true,
+//                 "dernier_backup": {
+//                     "en-tete": doc_horaire.entete,
+//                     "heure": doc_horaire.heure,
+//                 }
+//             })
+//         },
+//         None => {
+//             json!({"ok": true, "dernier_backup": None::<&str>})
+//         }
+//     };
+//
+//     match middleware.formatter_reponse(&val_reponse,None) {
+//         Ok(m) => Ok(Some(m)),
+//         Err(e) => Err(format!("core_backup.requete_dernier_horaire: Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+//     }
+// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RequeteDernierCatalogueHoraire {

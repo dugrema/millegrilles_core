@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::backup::{reset_backup_flag, restaurer};
+use millegrilles_common_rust::backup::reset_backup_flag;
 use millegrilles_common_rust::backup::backup;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;

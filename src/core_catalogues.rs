@@ -4,7 +4,6 @@ use std::sync::Arc;
 
 use log::{debug, error, info, warn};
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::backup::restaurer;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{RegleValidationIdmg, ValidateurX509, VerificateurPermissions, VerificateurRegles};

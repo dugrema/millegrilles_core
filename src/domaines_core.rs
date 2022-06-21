@@ -21,7 +21,7 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::resoumettre_transactions;
 
 use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
-use crate::core_backup::GESTIONNAIRE_BACKUP;
+// use crate::core_backup::GESTIONNAIRE_BACKUP;
 // use crate::core_catalogues::{NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues};
 use crate::core_catalogues::{GESTIONNAIRE_CATALOGUES, init_regles_validation as init_validation_catalogues};
 use crate::core_maitredescomptes::GESTIONNAIRE_MAITREDESCOMPTES;
@@ -41,7 +41,7 @@ pub async fn build() {
     queues.extend(GESTIONNAIRE_CATALOGUES.preparer_queues());
     queues.extend(GESTIONNAIRE_TOPOLOGIE.preparer_queues());
     queues.extend(GESTIONNAIRE_MAITREDESCOMPTES.preparer_queues());
-    queues.extend(GESTIONNAIRE_BACKUP.preparer_queues());
+    // queues.extend(GESTIONNAIRE_BACKUP.preparer_queues());
 
     // Listeners de connexion MQ
     let (tx_entretien, rx_entretien) = mpsc::channel(1);
@@ -119,13 +119,13 @@ pub async fn build() {
         futures.extend(futures_maitredescomptes);        // Deplacer vers futures globaux
         map_senders.extend(routing_maitredescomptes);    // Deplacer vers mapping global
 
-        // Preparer domaine CoreBackup
-        let (
-            routing_backup,
-            futures_backup
-        ) = GESTIONNAIRE_BACKUP.preparer_threads(middleware.clone()).await.expect("core backup");
-        futures.extend(futures_backup);        // Deplacer vers futures globaux
-        map_senders.extend(routing_backup);    // Deplacer vers mapping global
+        // // Preparer domaine CoreBackup
+        // let (
+        //     routing_backup,
+        //     futures_backup
+        // ) = GESTIONNAIRE_BACKUP.preparer_threads(middleware.clone()).await.expect("core backup");
+        // futures.extend(futures_backup);        // Deplacer vers futures globaux
+        // map_senders.extend(routing_backup);    // Deplacer vers mapping global
 
         // Preparer ceduleur (emet triggers a toutes les minutes)
         let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
@@ -168,7 +168,7 @@ async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
     // Liste de collections de transactions pour tous les domaines geres par Core
     let collections_transaction = {
         let mut coll_docs_strings = Vec::new();
-        coll_docs_strings.push(String::from(GESTIONNAIRE_BACKUP.get_collection_transactions()));
+        // coll_docs_strings.push(String::from(GESTIONNAIRE_BACKUP.get_collection_transactions()));
         coll_docs_strings.push(String::from(GESTIONNAIRE_MAITREDESCOMPTES.get_collection_transactions()));
         coll_docs_strings.push(String::from(GESTIONNAIRE_CATALOGUES.get_collection_transactions()));
         coll_docs_strings.push(String::from(GESTIONNAIRE_TOPOLOGIE.get_collection_transactions()));
