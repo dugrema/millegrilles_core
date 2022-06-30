@@ -119,14 +119,6 @@ pub async fn build() {
         futures.extend(futures_maitredescomptes);        // Deplacer vers futures globaux
         map_senders.extend(routing_maitredescomptes);    // Deplacer vers mapping global
 
-        // // Preparer domaine CoreBackup
-        // let (
-        //     routing_backup,
-        //     futures_backup
-        // ) = GESTIONNAIRE_BACKUP.preparer_threads(middleware.clone()).await.expect("core backup");
-        // futures.extend(futures_backup);        // Deplacer vers futures globaux
-        // map_senders.extend(routing_backup);    // Deplacer vers mapping global
-
         // Preparer ceduleur (emet triggers a toutes les minutes)
         let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
         futures.extend(ceduleur);           // Deplacer vers futures globaux
