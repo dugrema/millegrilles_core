@@ -400,12 +400,13 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
         true => Ok(()),
-        false => Err(format!("core_catalogues.consommer_evenement Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
+        false => Err(format!("core_catalogues.consommer_evenement Autorisation invalide (pas 3.protege/4.secure) : {}", m.routing_key)),
     }?;
 
     match m.action.as_str() {
+        TRANSACTION_APPLICATION => traiter_commande_application(middleware, m).await,
         _ => Err(format!("core_catalogues.consommer_evenement Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
