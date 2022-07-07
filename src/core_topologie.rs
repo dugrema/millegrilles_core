@@ -1342,6 +1342,7 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
     // Lancer requetes pour DNS inconnus
     for (hostname, idmg) in resolved_dns.clone().iter() {
         if idmg.is_none() {
+            info!("Charger fiche a {}", hostname);
             match resoudre_url(middleware, hostname.as_str(), None).await {
                 Ok(idmg_option) => {
                     if let Some(idmg) = idmg_option {
@@ -1382,7 +1383,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
 {
     debug!("resoudre_url {}", hostname);
 
-    let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, "relaiWeb")
+    let routage = RoutageMessageAction::builder(DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET)
         .exchanges(vec![L1Public])
         .build();
 
@@ -1451,21 +1452,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     }?;
 
     let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu(None)?;
-    // match fiche_publique.ca.clone() {
-    //     Some(c) => {
-    //         let enveloppe = middleware.charger_enveloppe(&vec![c], None).await?;
-    //         fiche_publique_message.set_millegrille(enveloppe);
-    //         Ok(())
-    //     }
-    //     None => Err(format!("core_topologie.resoudre_url Certificat CA manquant de la fiche publique"))
-    // }?;
     debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
-    //
-    // // Valider la fiche (certificats et signature message)
-    // let idmg_tiers = match fiche_publique_message.valider_message_tiers(middleware).await {
-    //     Ok(idmg_tiers) => Ok(idmg_tiers),
-    //     Err(e) => Err(format!("core_topologie.resoudre_url Erreur validation fiche publique : {:?}", e))
-    // }?;
 
     // Sauvegarder/mettre a jour fiche publique
     {
