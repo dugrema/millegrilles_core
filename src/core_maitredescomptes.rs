@@ -128,7 +128,7 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_index_mongodb_custom<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
+    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
