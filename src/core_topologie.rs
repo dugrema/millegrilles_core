@@ -17,11 +17,11 @@ use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::middleware::{Middleware, sauvegarder_traiter_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::Chiffreur;
-use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, Mgs3CipherKeys};
+// use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, Mgs3CipherKeys};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -437,7 +437,7 @@ async fn entretien<M>(middleware: Arc<M>)
 }
 
 async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + Chiffreur<CipherMgs3, Mgs3CipherKeys> {
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait {
     let date_epoch = trigger.get_date();
     debug!("Traiter cedule {}\n{:?}", DOMAINE_NOM, date_epoch);
 
@@ -614,7 +614,7 @@ async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Res
 }
 
 async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + Chiffreur<CipherMgs3, Mgs3CipherKeys>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
     debug!("Consommer evenement : {:?}", &m.message);
 
@@ -834,7 +834,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
 }
 
 async fn traiter_evenement_application<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + Chiffreur<CipherMgs3, Mgs3CipherKeys>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
     let estampille = &m.message.get_entete().estampille;
     // let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
@@ -1625,7 +1625,7 @@ struct FichePubliqueReception {
 
 async fn produire_fiche_publique<M>(middleware: &M)
                                     -> Result<(), Box<dyn Error>>
-    where M: ValidateurX509 + Chiffreur<CipherMgs3, Mgs3CipherKeys> + GenerateurMessages + MongoDao
+    where M: ValidateurX509 + ChiffrageFactoryTrait + GenerateurMessages + MongoDao
 {
     debug!("produire_fiche_publique");
     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
