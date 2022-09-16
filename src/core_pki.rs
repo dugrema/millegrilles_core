@@ -592,6 +592,10 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
     where M: GenerateurMessages + IsConfigNoeud
 {
     let mut message = None;
+
+    // Valider format de la demande avec mapping
+    let message_parsed: DemandeSignature = m.message.parsed.map_contenu(None)?;
+
     if m.message.verifier_roles(vec![RolesCertificats::Instance]) {
         if m.message.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
             debug!("valider_demande_signature_csr Demande de CSR signee par une instance 3.protege ou 4.secure, demande approuvee");
@@ -604,6 +608,32 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
             message = Some(Cow::Borrowed(&m.message.parsed));
         } else {
             error!("valider_demande_signature_csr Demande de CSR signee par une instance sans exchanges, REFUSE");
+        }
+    } else if m.message.verifier_roles(vec![RolesCertificats::MaitreDesClesConnexion]) {
+        if m.message.verifier_exchanges(vec![Securite::L4Secure]) {
+            // Un certificat de maitre des cles connexion (4.secure) supporte une cle volatile
+
+            // Validation des valeurs
+            if message_parsed.domaines.is_some() || message_parsed.exchanges.is_some() || message_parsed.dns.is_some() {
+                warn!("valider_demande_signature_csr Signature certificat maitre des cles volatil refuse (exchanges/domaines/dns presents)");
+                return Ok(None);
+            }
+
+            // Verifier que le role demande est MaitreDesClesConnexionVolatil
+            match message_parsed.roles {
+                Some(r) => {
+                    let role_maitre_des_cles_string = ROLE_MAITRE_DES_CLES_VOLATIL.to_string();
+                    if r.len() == 1 && r.contains(&role_maitre_des_cles_string) {
+                        message = Some(Cow::Borrowed(&m.message.parsed))
+                    } else {
+                        warn!("valider_demande_signature_csr Signature certificat maitre des cles volatil refuse (mauvais role)");
+                        return Ok(None);
+                    }
+                },
+                None => { return Ok(None); }
+            }
+        } else {
+            error!("valider_demande_signature_csr Demande de CSR signee par une un certificat MaitreDesClesConnexion de niveau != 4.secure, REFUSE");
         }
     } else if m.message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         debug!("valider_demande_signature_csr Demande de CSR signee par une delegation globale (proprietaire), demande approuvee");
@@ -697,6 +727,14 @@ where M: ValidateurX509 {
     debug!("traiter_cedule corepki");
 
     Ok(())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DemandeSignature {
+    roles: Option<Vec<String>>,     // Ex: ["media", "fichiers"],
+    domaines: Option<Vec<String>>,  // Ex: ["GrosFichiers"]
+    exchanges: Option<Vec<String>>, // Ex: ["4.secure", "3.protege", "2.prive", "1.public"]
+    dns: Option<Value>,  // Ex: {"localhost": true, "hostnames": ["media"], "domain": true}
 }
 
 #[cfg(test)]
