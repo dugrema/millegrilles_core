@@ -622,8 +622,9 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
             // Verifier que le role demande est MaitreDesClesConnexionVolatil
             match message_parsed.roles {
                 Some(r) => {
-                    let role_maitre_des_cles_string = ROLE_MAITRE_DES_CLES_VOLATIL.to_string();
-                    if r.len() == 1 && r.contains(&role_maitre_des_cles_string) {
+                    let role_maitre_des_cles_string = ROLE_MAITRE_DES_CLES.to_string();
+                    let role_maitre_des_cles_volatil_string = ROLE_MAITRE_DES_CLES_VOLATIL.to_string();
+                    if r.len() == 2 && r.contains(&role_maitre_des_cles_string) && r.contains(&role_maitre_des_cles_volatil_string) {
                         message = Some(Cow::Borrowed(&m.message.parsed))
                     } else {
                         warn!("valider_demande_signature_csr Signature certificat maitre des cles volatil refuse (mauvais role)");
