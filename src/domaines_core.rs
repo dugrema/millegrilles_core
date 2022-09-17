@@ -90,7 +90,8 @@ pub async fn build() {
         // Preparer domaine CorePki
         let (
             routing_pki,
-            futures_pki
+            futures_pki,
+            _, _
         ) = GESTIONNAIRE_PKI.preparer_threads(middleware.clone()).await.expect("core pki");
         futures.extend(futures_pki);        // Deplacer vers futures globaux
         map_senders.extend(routing_pki);    // Deplacer vers mapping global
@@ -98,7 +99,8 @@ pub async fn build() {
         // Preparer domaine CoreCatalogues
         let (
             routing_catalogues,
-            futures_catalogues
+            futures_catalogues,
+            _, _
         ) = GESTIONNAIRE_CATALOGUES.preparer_threads(middleware.clone()).await.expect("core catalogues");
         futures.extend(futures_catalogues);        // Deplacer vers futures globaux
         map_senders.extend(routing_catalogues);    // Deplacer vers mapping global
@@ -106,7 +108,8 @@ pub async fn build() {
         // Preparer domaine CoreTopologie
         let (
             routing_topologie,
-            futures_topologie
+            futures_topologie,
+            _, _
         ) = GESTIONNAIRE_TOPOLOGIE.preparer_threads(middleware.clone()).await.expect("core topologie");
         futures.extend(futures_topologie);        // Deplacer vers futures globaux
         map_senders.extend(routing_topologie);    // Deplacer vers mapping global
@@ -114,7 +117,8 @@ pub async fn build() {
         // Preparer domaine CoreMaitreDesComptes
         let (
             routing_maitredescomptes,
-            futures_maitredescomptes
+            futures_maitredescomptes,
+            _, _
         ) = GESTIONNAIRE_MAITREDESCOMPTES.preparer_threads(middleware.clone()).await.expect("core maitredescomptes");
         futures.extend(futures_maitredescomptes);        // Deplacer vers futures globaux
         map_senders.extend(routing_maitredescomptes);    // Deplacer vers mapping global
@@ -161,10 +165,18 @@ async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
     let collections_transaction = {
         let mut coll_docs_strings = Vec::new();
         // coll_docs_strings.push(String::from(GESTIONNAIRE_BACKUP.get_collection_transactions()));
-        coll_docs_strings.push(String::from(GESTIONNAIRE_MAITREDESCOMPTES.get_collection_transactions()));
-        coll_docs_strings.push(String::from(GESTIONNAIRE_CATALOGUES.get_collection_transactions()));
-        coll_docs_strings.push(String::from(GESTIONNAIRE_TOPOLOGIE.get_collection_transactions()));
-        coll_docs_strings.push(String::from(GESTIONNAIRE_PKI.get_collection_transactions()));
+        if let Some(nom_collection) = GESTIONNAIRE_MAITREDESCOMPTES.get_collection_transactions() {
+            coll_docs_strings.push(String::from(nom_collection));
+        }
+        if let Some(nom_collection) = GESTIONNAIRE_CATALOGUES.get_collection_transactions() {
+            coll_docs_strings.push(String::from(nom_collection));
+        }
+        if let Some(nom_collection) = GESTIONNAIRE_TOPOLOGIE.get_collection_transactions() {
+            coll_docs_strings.push(String::from(nom_collection));
+        }
+        if let Some(nom_collection) = GESTIONNAIRE_PKI.get_collection_transactions() {
+            coll_docs_strings.push(String::from(nom_collection));
+        }
         coll_docs_strings
     };
 

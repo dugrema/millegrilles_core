@@ -12,6 +12,7 @@ use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::constantes::*;
+use millegrilles_common_rust::common_messages::DemandeSignature;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
@@ -83,7 +84,7 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
     #[inline]
     fn get_nom_domaine(&self) -> String {DOMAINE_NOM.into()}
     #[inline]
-    fn get_collection_transactions(&self) -> String {NOM_COLLECTION_TRANSACTIONS.into()}
+    fn get_collection_transactions(&self) -> Option<String> {Some(NOM_COLLECTION_TRANSACTIONS.into())}
 
     fn get_collections_documents(&self) -> Vec<String> {
         vec![
@@ -92,11 +93,11 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
     }
 
     #[inline]
-    fn get_q_transactions(&self) -> String {NOM_Q_TRANSACTIONS.into()}
+    fn get_q_transactions(&self) -> Option<String> {Some(NOM_Q_TRANSACTIONS.into())}
     #[inline]
-    fn get_q_volatils(&self) -> String {NOM_Q_VOLATILS.into()}
+    fn get_q_volatils(&self) -> Option<String> {Some(NOM_Q_VOLATILS.into())}
     #[inline]
-    fn get_q_triggers(&self) -> String {NOM_Q_TRIGGERS.into()}
+    fn get_q_triggers(&self) -> Option<String> {Some(NOM_Q_TRIGGERS.into())}
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
@@ -728,14 +729,6 @@ where M: ValidateurX509 {
     debug!("traiter_cedule corepki");
 
     Ok(())
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct DemandeSignature {
-    roles: Option<Vec<String>>,     // Ex: ["media", "fichiers"],
-    domaines: Option<Vec<String>>,  // Ex: ["GrosFichiers"]
-    exchanges: Option<Vec<String>>, // Ex: ["4.secure", "3.protege", "2.prive", "1.public"]
-    dns: Option<Value>,  // Ex: {"localhost": true, "hostnames": ["media"], "domain": true}
 }
 
 #[cfg(test)]

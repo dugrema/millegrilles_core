@@ -82,7 +82,7 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
     #[inline]
     fn get_nom_domaine(&self) -> String {DOMAINE_NOM.into()}
     #[inline]
-    fn get_collection_transactions(&self) -> String {NOM_COLLECTION_TRANSACTIONS.into()}
+    fn get_collection_transactions(&self) -> Option<String> {Some(NOM_COLLECTION_TRANSACTIONS.into())}
 
     fn get_collections_documents(&self) -> Vec<String> {
         vec![
@@ -91,11 +91,11 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
     }
 
     #[inline]
-    fn get_q_transactions(&self) -> String {NOM_Q_TRANSACTIONS.into()}
+    fn get_q_transactions(&self) -> Option<String> {Some(NOM_Q_TRANSACTIONS.into())}
     #[inline]
-    fn get_q_volatils(&self) -> String {NOM_Q_VOLATILS.into()}
+    fn get_q_volatils(&self) -> Option<String> {Some(NOM_Q_VOLATILS.into())}
     #[inline]
-    fn get_q_triggers(&self) -> String {NOM_Q_TRIGGERS.into()}
+    fn get_q_triggers(&self) -> Option<String> {Some(NOM_Q_TRIGGERS.into())}
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
