@@ -617,7 +617,7 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
             // Un certificat de maitre des cles connexion (4.secure) supporte une cle volatile
 
             // Validation des valeurs
-            if message_parsed.domaines.is_some() || message_parsed.exchanges.is_some() || message_parsed.dns.is_some() {
+            if message_parsed.domaines.is_some() || message_parsed.dns.is_some() {
                 warn!("valider_demande_signature_csr Signature certificat maitre des cles volatil refuse (exchanges/domaines/dns presents)");
                 return Ok(None);
             }
