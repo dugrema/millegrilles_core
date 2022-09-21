@@ -13,7 +13,7 @@ use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
-use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine, Middleware};
+use millegrilles_common_rust::middleware::{sauvegarder_transaction_recue, thread_emettre_presence_domaine, Middleware, sauvegarder_traiter_transaction};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -114,7 +114,7 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware + 'static
     {
-        consommer_commande(middleware, message).await  // Fonction plus bas
+        consommer_commande(middleware, message, self).await  // Fonction plus bas
     }
 
     async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -127,7 +127,7 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware + 'static
     {
-        consommer_evenement(middleware, message).await  // Fonction plus bas
+        consommer_evenement(middleware, message, self).await  // Fonction plus bas
     }
 
     async fn entretien<M>(self: &'static Self, middleware: Arc<M>)
@@ -326,7 +326,7 @@ where
     }
 }
 
-async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
+async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: Middleware + 'static
 {
@@ -345,7 +345,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction)
 
     match m.action.as_str() {
         // Commandes standard
-        TRANSACTION_APPLICATION => traiter_commande_application(middleware, m).await,
+        TRANSACTION_APPLICATION => traiter_commande_application(middleware, m, gestionnaire).await,
     //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
     //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
     //
@@ -398,7 +398,7 @@ where
     Ok(None)
 }
 
-async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
+async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
@@ -408,7 +408,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     }?;
 
     match m.action.as_str() {
-        TRANSACTION_APPLICATION => traiter_commande_application(middleware, m).await,
+        TRANSACTION_APPLICATION => traiter_commande_application(middleware, m, gestionnaire).await,
         _ => Err(format!("core_catalogues.consommer_evenement Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
@@ -472,7 +472,7 @@ where M: ValidateurX509 {
     Ok(())
 }
 
-async fn traiter_commande_application<M>(middleware: &M, commande: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn traiter_commande_application<M>(middleware: &M, commande: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where M: ValidateurX509 + MongoDao + GenerateurMessages
 {
     // let message = commande.message.get_msg();
@@ -528,7 +528,8 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
             TRANSACTION_APPLICATION.into(),
             TypeMessageOut::Transaction
         );
-        sauvegarder_transaction_recue(middleware, mva, NOM_COLLECTION_TRANSACTIONS).await?;
+        sauvegarder_traiter_transaction(middleware, mva, gestionnaire).await?;
+
     } else {
         error!("Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
     }
