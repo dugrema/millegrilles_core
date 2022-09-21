@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use log::{trace, debug, error, info, warn};
+use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::chiffrage::Chiffreur;
 use millegrilles_common_rust::chrono as chrono;
@@ -17,6 +17,8 @@ use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
 use millegrilles_common_rust::tokio::spawn;
+use millegrilles_common_rust::tokio::task::JoinHandle;
+use millegrilles_common_rust::tokio::time::sleep;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::resoumettre_transactions;
 
@@ -31,46 +33,12 @@ use crate::validateur_pki_mongo::preparer_middleware_pki;
 
 const DUREE_ATTENTE: u64 = 20000;
 
-pub async fn build() {
+pub async fn build() -> FuturesUnordered<JoinHandle<()>> {
 
     init_validation_catalogues();
 
-    // Recuperer configuration des Q de tous les domaines
-    let mut queues: Vec<QueueType> = Vec::new();
-    queues.extend(GESTIONNAIRE_PKI.preparer_queues());
-    queues.extend(GESTIONNAIRE_CATALOGUES.preparer_queues());
-    queues.extend(GESTIONNAIRE_TOPOLOGIE.preparer_queues());
-    queues.extend(GESTIONNAIRE_MAITREDESCOMPTES.preparer_queues());
-    // queues.extend(GESTIONNAIRE_BACKUP.preparer_queues());
-
-    // Listeners de connexion MQ
-    let (tx_entretien, rx_entretien) = mpsc::channel(1);
-    let listeners = {
-        let mut callbacks: Callback<EventMq> = Callback::new();
-        callbacks.register(Box::new(move |event| {
-            debug!("Callback sur connexion a MQ, event : {:?}", event);
-            let tx_ref = tx_entretien.clone();
-            let _ = spawn(async move{
-                match tx_ref.send(event).await {
-                    Ok(_) => (),
-                    Err(e) => error!("Erreur queuing via callback : {:?}", e)
-                }
-            });
-        }));
-
-        Some(Mutex::new(callbacks))
-    };
-
-    // Preparer middleware avec acces direct aux tables Pki (le domaine est local)
-    let (
-        middleware,
-        rx_messages_verifies,
-        rs_messages_verif_reply,
-        rx_triggers,
-        future_recevoir_messages
-    ) = preparer_middleware_pki(queues, listeners);
-
-    debug!("Preparer middleware pki complete");
+    let middleware_hooks = preparer_middleware_pki();
+    let middleware = middleware_hooks.middleware;
 
     // Tester connexion redis
     match middleware.redis.liste_certificats_fingerprints().await {
@@ -82,81 +50,143 @@ pub async fn build() {
 
     // Preparer les green threads de tous les domaines/processus
     let mut futures = FuturesUnordered::new();
-    {
-        let mut map_senders: HashMap<String, Sender<TypeMessage>> = HashMap::new();
 
-        // ** Domaines **
+    // ** Domaines **
+    futures.extend( GESTIONNAIRE_PKI.preparer_threads(middleware.clone()).await.expect("core pki") );
+    futures.extend( GESTIONNAIRE_CATALOGUES.preparer_threads(middleware.clone()).await.expect("core pki") );
+    futures.extend( GESTIONNAIRE_TOPOLOGIE.preparer_threads(middleware.clone()).await.expect("core pki") );
+    futures.extend( GESTIONNAIRE_MAITREDESCOMPTES.preparer_threads(middleware.clone()).await.expect("core pki") );
 
-        // Preparer domaine CorePki
-        let (
-            routing_pki,
-            futures_pki,
-            _, _
-        ) = GESTIONNAIRE_PKI.preparer_threads(middleware.clone()).await.expect("core pki");
-        futures.extend(futures_pki);        // Deplacer vers futures globaux
-        map_senders.extend(routing_pki);    // Deplacer vers mapping global
+    // Preparer ceduleur (emet triggers a toutes les minutes)
+    futures.extend(preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur"));
 
-        // Preparer domaine CoreCatalogues
-        let (
-            routing_catalogues,
-            futures_catalogues,
-            _, _
-        ) = GESTIONNAIRE_CATALOGUES.preparer_threads(middleware.clone()).await.expect("core catalogues");
-        futures.extend(futures_catalogues);        // Deplacer vers futures globaux
-        map_senders.extend(routing_catalogues);    // Deplacer vers mapping global
+    // ** Thread d'entretien **
+    futures.push(spawn(entretien(middleware.clone())));
 
-        // Preparer domaine CoreTopologie
-        let (
-            routing_topologie,
-            futures_topologie,
-            _, _
-        ) = GESTIONNAIRE_TOPOLOGIE.preparer_threads(middleware.clone()).await.expect("core topologie");
-        futures.extend(futures_topologie);        // Deplacer vers futures globaux
-        map_senders.extend(routing_topologie);    // Deplacer vers mapping global
-
-        // Preparer domaine CoreMaitreDesComptes
-        let (
-            routing_maitredescomptes,
-            futures_maitredescomptes,
-            _, _
-        ) = GESTIONNAIRE_MAITREDESCOMPTES.preparer_threads(middleware.clone()).await.expect("core maitredescomptes");
-        futures.extend(futures_maitredescomptes);        // Deplacer vers futures globaux
-        map_senders.extend(routing_maitredescomptes);    // Deplacer vers mapping global
-
-        // Preparer ceduleur (emet triggers a toutes les minutes)
-        let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
-        futures.extend(ceduleur);           // Deplacer vers futures globaux
-
-        // ** Wiring global **
-
-        // Creer consommateurs MQ globaux pour rediriger messages recus vers Q internes appropriees
-        futures.push(spawn(
-            consommer( middleware.clone(), rx_messages_verifies, map_senders.clone())
-        ));
-        futures.push(spawn(
-            consommer( middleware.clone(), rs_messages_verif_reply, map_senders.clone())
-        ));
-        futures.push(spawn(
-            consommer( middleware.clone(), rx_triggers, map_senders)
-        ));
-
-        // ** Thread d'entretien **
-        futures.push(spawn(entretien(middleware.clone(), rx_entretien)));
-
-        // Thread ecoute et validation des messages
-        for f in future_recevoir_messages {
-            futures.push(f);
-        }
-
+    // Thread ecoute et validation des messages
+    info!("domaines_maitredescles.build Ajout {} futures dans middleware_hooks", futures.len());
+    for f in middleware_hooks.futures {
+        futures.push(f);
     }
 
-    info!("domaines_middleware: Demarrage traitement domaines middleware, top level threads {}", futures.len());
-    let arret = futures.next().await;
-    info!("domaines_middleware: Fermeture du contexte, task daemon terminee : {:?}", arret);
+    futures
+
+    // Recuperer configuration des Q de tous les domaines
+    // let mut queues: Vec<QueueType> = Vec::new();
+    // queues.extend(GESTIONNAIRE_PKI.preparer_queues());
+    // queues.extend(GESTIONNAIRE_CATALOGUES.preparer_queues());
+    // queues.extend(GESTIONNAIRE_TOPOLOGIE.preparer_queues());
+    // queues.extend(GESTIONNAIRE_MAITREDESCOMPTES.preparer_queues());
+    // // queues.extend(GESTIONNAIRE_BACKUP.preparer_queues());
+
+    // // Listeners de connexion MQ
+    // let (tx_entretien, rx_entretien) = mpsc::channel(1);
+    // let listeners = {
+    //     let mut callbacks: Callback<EventMq> = Callback::new();
+    //     callbacks.register(Box::new(move |event| {
+    //         debug!("Callback sur connexion a MQ, event : {:?}", event);
+    //         let tx_ref = tx_entretien.clone();
+    //         let _ = spawn(async move{
+    //             match tx_ref.send(event).await {
+    //                 Ok(_) => (),
+    //                 Err(e) => error!("Erreur queuing via callback : {:?}", e)
+    //             }
+    //         });
+    //     }));
+    //
+    //     Some(Mutex::new(callbacks))
+    // };
+
+    // // Preparer middleware avec acces direct aux tables Pki (le domaine est local)
+    // let ressources = preparer_middleware_pki();
+    //
+    // debug!("Preparer middleware pki complete");
+    //
+    // // Tester connexion redis
+    // match middleware.redis.liste_certificats_fingerprints().await {
+    //      Ok(fingerprints_redis) => {
+    //          info!("redis.liste_certificats_fingerprints Resultat : {:?}", fingerprints_redis);
+    //      },
+    //      Err(e) => warn!("redis.liste_certificats_fingerprints Erreur test de connexion redis : {:?}", e)
+    // }
+    //
+    // // Preparer les green threads de tous les domaines/processus
+    // let mut futures = FuturesUnordered::new();
+    // {
+    //     let mut map_senders: HashMap<String, Sender<TypeMessage>> = HashMap::new();
+    //
+    //     // ** Domaines **
+    //
+    //     // Preparer domaine CorePki
+    //     let (
+    //         routing_pki,
+    //         futures_pki,
+    //         _, _
+    //     ) = GESTIONNAIRE_PKI.preparer_threads(middleware.clone()).await.expect("core pki");
+    //     futures.extend(futures_pki);        // Deplacer vers futures globaux
+    //     map_senders.extend(routing_pki);    // Deplacer vers mapping global
+    //
+    //     // Preparer domaine CoreCatalogues
+    //     let (
+    //         routing_catalogues,
+    //         futures_catalogues,
+    //         _, _
+    //     ) = GESTIONNAIRE_CATALOGUES.preparer_threads(middleware.clone()).await.expect("core catalogues");
+    //     futures.extend(futures_catalogues);        // Deplacer vers futures globaux
+    //     map_senders.extend(routing_catalogues);    // Deplacer vers mapping global
+    //
+    //     // Preparer domaine CoreTopologie
+    //     let (
+    //         routing_topologie,
+    //         futures_topologie,
+    //         _, _
+    //     ) = GESTIONNAIRE_TOPOLOGIE.preparer_threads(middleware.clone()).await.expect("core topologie");
+    //     futures.extend(futures_topologie);        // Deplacer vers futures globaux
+    //     map_senders.extend(routing_topologie);    // Deplacer vers mapping global
+    //
+    //     // Preparer domaine CoreMaitreDesComptes
+    //     let (
+    //         routing_maitredescomptes,
+    //         futures_maitredescomptes,
+    //         _, _
+    //     ) = GESTIONNAIRE_MAITREDESCOMPTES.preparer_threads(middleware.clone()).await.expect("core maitredescomptes");
+    //     futures.extend(futures_maitredescomptes);        // Deplacer vers futures globaux
+    //     map_senders.extend(routing_maitredescomptes);    // Deplacer vers mapping global
+    //
+    //     // Preparer ceduleur (emet triggers a toutes les minutes)
+    //     let ceduleur = preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur");
+    //     futures.extend(ceduleur);           // Deplacer vers futures globaux
+    //
+    //     // ** Wiring global **
+    //
+    //     // Creer consommateurs MQ globaux pour rediriger messages recus vers Q internes appropriees
+    //     futures.push(spawn(
+    //         consommer( middleware.clone(), rx_messages_verifies, map_senders.clone())
+    //     ));
+    //     futures.push(spawn(
+    //         consommer( middleware.clone(), rs_messages_verif_reply, map_senders.clone())
+    //     ));
+    //     futures.push(spawn(
+    //         consommer( middleware.clone(), rx_triggers, map_senders)
+    //     ));
+    //
+    //     // ** Thread d'entretien **
+    //     futures.push(spawn(entretien(middleware.clone(), rx_entretien)));
+    //
+    //     // Thread ecoute et validation des messages
+    //     for f in future_recevoir_messages {
+    //         futures.push(f);
+    //     }
+    //
+    // }
+    //
+    // info!("domaines_middleware: Demarrage traitement domaines middleware, top level threads {}", futures.len());
+    // let arret = futures.next().await;
+    // info!("domaines_middleware: Fermeture du contexte, task daemon terminee : {:?}", arret);
 }
 
 /// Thread d'entretien de Core
-async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
+async fn entretien<M>(middleware: Arc<M>)
     where M: Middleware
 {
     let mut certificat_emis = false;
@@ -223,36 +253,7 @@ async fn entretien<M>(middleware: Arc<M>, mut rx: Receiver<EventMq>)
         // Sleep jusqu'au prochain entretien
         debug!("Task entretien core fin cycle, sleep {} secondes", DUREE_ATTENTE / 1000);
         let duration = DurationTokio::from_millis(DUREE_ATTENTE);
-        let result = timeout(duration, rx.recv()).await;
-
-        match result {
-            Ok(inner) => {
-                debug!("Recu event MQ : {:?}", inner);
-                match inner {
-                    Some(e) => {
-                        match e {
-                            EventMq::Connecte => {
-                            },
-                            EventMq::Deconnecte => {
-                                // Reset flag certificat
-                                certificat_emis = false;
-                            }
-                        }
-                    },
-                    None => {
-                        warn!("MQ n'est pas disponible, on ferme");
-                        break
-                        // let duration = DurationTokio::from_millis(DUREE_ATTENTE);
-                        // let result = sleep(duration).await;
-                        // info!("MQ n'est pas disponible, tentative de reconnexion");
-                    },
-                }
-
-            },
-            Err(_) => {
-                debug!("Timeout, entretien est du");
-            }
-        }
+        sleep(duration).await;
 
         if certificat_emis == false {
             debug!("Emettre certificat");

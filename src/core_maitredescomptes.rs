@@ -159,7 +159,7 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
         consommer_evenement(middleware, message).await  // Fonction plus bas
     }
 
-    async fn entretien<M>(&self, middleware: Arc<M>)
+    async fn entretien<M>(self: &'static Self, middleware: Arc<M>)
         where M: Middleware + 'static
     {
         entretien(middleware).await  // Fonction plus bas
@@ -236,6 +236,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
             routing_keys: rk_volatils,
             ttl: 300000.into(),
             durable: false,
+            autodelete: false,
         }
     ));
 
@@ -259,6 +260,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
             routing_keys: rk_transactions,
             ttl: None,
             durable: true,
+            autodelete: false,
         }
     ));
 

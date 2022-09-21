@@ -13,6 +13,7 @@ mod core_topologie;
 use crate::domaines_core::build;
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;
+use millegrilles_common_rust::tokio_stream::StreamExt;
 
 fn main() {
     env_logger::init();
@@ -23,7 +24,8 @@ fn main() {
 // #[tokio::main(flavor = "current_thread")]
 #[tokio::main(flavor = "multi_thread", worker_threads = 5)]
 async fn executer() {
-    build().await
+    let mut futures = build().await;
+    futures.next().await.expect("future").expect("resultat");
 }
 
 #[cfg(test)]

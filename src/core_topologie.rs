@@ -169,7 +169,7 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
         consommer_evenement(middleware, message).await  // Fonction plus bas
     }
 
-    async fn entretien<M>(&self, middleware: Arc<M>)
+    async fn entretien<M>(self: &'static Self, middleware: Arc<M>)
         where M: Middleware + 'static
     {
         entretien(middleware).await  // Fonction plus bas
@@ -259,6 +259,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
             routing_keys: rk_volatils,
             ttl: 300000.into(),
             durable: false,
+            autodelete: false,
         }
     ));
 
@@ -283,6 +284,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
             routing_keys: rk_transactions,
             ttl: None,
             durable: true,
+            autodelete: false,
         }
     ));
 
@@ -1263,7 +1265,7 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
         return Ok(Some(reponse));
     }
 
-    let idmg_local = middleware.get_enveloppe_privee().idmg()?;
+    let idmg_local = middleware.get_enveloppe_signature().idmg()?;
 
     let requete: RequeteResolveIdmg = message.message.parsed.map_contenu(None)?;
     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
@@ -1826,7 +1828,7 @@ async fn produire_information_locale<M>(middleware: &M)
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("produire_information_locale");
-    let enveloppe_privee = middleware.get_enveloppe_privee();
+    let enveloppe_privee = middleware.get_enveloppe_signature();
     let idmg_local = enveloppe_privee.idmg()?;
 
     let adresses = {
