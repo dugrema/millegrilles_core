@@ -17,7 +17,7 @@ use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_transaction_recue, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sauvegarder_traiter_transaction, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::Chiffreur;
@@ -159,14 +159,14 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
     async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware + 'static
     {
-        consommer_transaction(middleware, message).await  // Fonction plus bas
+        consommer_transaction(self, middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
                                     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
         where M: Middleware + 'static
     {
-        consommer_evenement(middleware, message).await  // Fonction plus bas
+        consommer_evenement(middleware, message, self).await  // Fonction plus bas
     }
 
     async fn entretien<M>(self: &'static Self, middleware: Arc<M>)
@@ -591,7 +591,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionna
     }
 }
 
-async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -608,14 +608,15 @@ async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Res
 
     match m.action.as_str() {
         TRANSACTION_DOMAINE | TRANSACTION_MONITOR | TRANSACTION_SUPPRIMER_INSTANCE => {
-            sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
-            Ok(None)
+            // sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
+            // Ok(None)
+            Ok(sauvegarder_traiter_transaction(middleware, m, gestionnaire).await?)
         }
         _ => Err(format!("core_topologie.consommer_transaction Mauvais type d'action pour une transaction : {}", m.action))?,
     }
 }
 
-async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
     debug!("Consommer evenement : {:?}", &m.message);
@@ -629,8 +630,8 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Resul
     }?;
 
     match m.action.as_str() {
-        EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m).await,
-        EVENEMENT_PRESENCE_MONITOR => traiter_presence_monitor(middleware, m).await,
+        EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m, gestionnaire).await,
+        EVENEMENT_PRESENCE_MONITOR => traiter_presence_monitor(middleware, m, gestionnaire).await,
         EVENEMENT_APPLICATION_DEMARREE => traiter_evenement_application(middleware, m).await,
         EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
@@ -673,7 +674,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
     }
 }
 
-async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Evenement presence domaine : {:?}", m.message.get_msg());
@@ -733,7 +734,8 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
         // Sauvegarder la transation
         let msg = MessageSerialise::from_parsed(transaction)?;
         let msg_action = MessageValideAction::new(msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
-        sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
+        // sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
+        sauvegarder_traiter_transaction(middleware, msg_action, gestionnaire).await?;
 
         // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
         let filtre = doc! {"domaine": &event.domaine};
@@ -744,7 +746,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction) -> 
     Ok(None)
 }
 
-async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let estampille = &m.message.get_entete().estampille;
@@ -824,7 +826,8 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction) -> 
         let msg = MessageSerialise::from_parsed(transaction)?;
         let msg_action = MessageValideAction::new(
             msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
-        sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
+        // sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
+        sauvegarder_traiter_transaction(middleware, msg_action, gestionnaire).await?;
 
         // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
         let filtre = doc! {"instance_id": &event.instance_id};
