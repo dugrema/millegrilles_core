@@ -1239,27 +1239,74 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
     let commande_signee = middleware.formatter_message(
         &commande_signature, None::<&str>, None::<&str>, None::<&str>, None, false)?;
 
-    let response = match client.post(url_post).json(&commande_signee).send().await {
-        Ok(inner) => inner,
-        Err(e) => Err(format!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e))?
-    };
-
-    debug!("core_maitredescomptes.signer_certificat_usager status: {}, {:?}", response.status(), response);
-    let reponse_commande = match response.status().is_success() {
-        true => {
-            let reponse_json: ReponseCertificatUsager = response.json().await?;
-            debug!("Reponse certificat : {:?}", reponse_json);
-            middleware.formatter_reponse(reponse_json, None)?
+    // On retransmet le message recu tel quel
+    match client.post(url_post).json(&commande_signee).send().await {
+        Ok(response) => {
+            match response.status().is_success() {
+                true => {
+                    let reponse_json: ReponseCertificatSigne = response.json().await?;
+                    debug!("signer_certificat_usager Reponse certificat : {:?}", reponse_json);
+                    return Ok(middleware.formatter_reponse(reponse_json, None)?)
+                },
+                false => {
+                    debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : status {}", response.status());
+                }
+            }
         },
-        false => {
-            let status = response.status().clone();
-            let msg = response.text().await?;
-            error!("core_maitredescomptes.signer_certificat_usager Erreur signature {:?}", msg);
-            Err(format!("core_maitredescomptes.signer_certificat_usager Erreur serveur signature certificat usager, status {:?}, message serveur : {:?}", status, msg))?
+        Err(e) => {
+            debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e);
         }
     };
 
-    Ok(reponse_commande)
+    // Une erreur est survenue dans le post, fallback vers noeuds 4.secure (si presents)
+    debug!("Echec connexion a certissuer local, relai vers instances 4.secure");
+    let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, COMMANDE_SIGNER_COMPTEUSAGER)
+        .exchanges(vec![Securite::L4Secure])
+        .build();
+
+    match middleware.transmettre_commande(routage, &commande_signee.contenu, true).await? {
+        Some(reponse) => {
+            if let TypeMessage::Valide(reponse) = reponse {
+                let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu(None)?;
+                Ok(middleware.formatter_reponse(reponse_json, None)?)
+            } else {
+                error!("core_pki.commande_signer_csr Erreur signature, echec local et relai 4.secure");
+                Ok(middleware.formatter_reponse(
+                    json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
+                    None
+                )?)
+            }
+        },
+        None => {
+            error!("core_pki.commande_signer_csr Erreur signature, aucune reponse");
+            Ok(middleware.formatter_reponse(
+                json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
+                None
+            )?)
+        }
+    }
+
+    // let response = match client.post(url_post).json(&commande_signee).send().await {
+    //     Ok(inner) => inner,
+    //     Err(e) => Err(format!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e))?
+    // };
+    //
+    // debug!("core_maitredescomptes.signer_certificat_usager status: {}, {:?}", response.status(), response);
+    // let reponse_commande = match response.status().is_success() {
+    //     true => {
+    //         let reponse_json: ReponseCertificatUsager = response.json().await?;
+    //         debug!("Reponse certificat : {:?}", reponse_json);
+    //         middleware.formatter_reponse(reponse_json, None)?
+    //     },
+    //     false => {
+    //         let status = response.status().clone();
+    //         let msg = response.text().await?;
+    //         error!("core_maitredescomptes.signer_certificat_usager Erreur signature {:?}", msg);
+    //         Err(format!("core_maitredescomptes.signer_certificat_usager Erreur serveur signature certificat usager, status {:?}, message serveur : {:?}", status, msg))?
+    //     }
+    // };
+    //
+    // Ok(reponse_commande)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2019,6 +2066,12 @@ fn lire_date_valbson(date: Option<&Value>) -> Result<Option<DateTime<Utc>>, Box<
         },
         None => Ok(None)
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ReponseCertificatSigne {
+    ok: bool,
+    certificat: Vec<String>,
 }
 
 #[cfg(test)]
