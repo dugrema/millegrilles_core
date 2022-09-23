@@ -40,7 +40,7 @@ use crate::core_pki::{COLLECTION_CERTIFICAT_NOM, CorePkiCertificat, DOMAINE_NOM 
 pub struct MiddlewareDbPki {
     ressources: MiddlewareRessources,
     pub mongo: Arc<MongoDaoImpl>,
-    pub redis: RedisDao,
+    pub redis: Option<RedisDao>,
     tx_backup: Sender<CommandeBackup>,
     chiffrage_factory: Arc<ChiffrageFactoryImpl>,
 }
@@ -52,7 +52,7 @@ impl MiddlewareMessages for MiddlewareDbPki {}
 impl Middleware for MiddlewareDbPki {}
 
 impl RedisTrait for MiddlewareDbPki {
-    fn get_redis(&self) -> &RedisDao { &self.redis }
+    fn get_redis(&self) -> Option<&RedisDao> { self.redis.as_ref() }
 }
 
 impl RabbitMqTrait for MiddlewareDbPki {
@@ -341,7 +341,10 @@ pub fn preparer_middleware_pki() -> MiddlewareHooks {
         Arc::new(ChiffrageFactoryImpl::new(map, env_privee))
     };
 
-    let redis_dao = RedisDao::new(configuration.get_configuration_noeud().clone()).expect("connexion redis");
+    let redis_dao = match configuration.get_configuration_noeud().redis_password {
+        Some(_) => Some(RedisDao::new(configuration.get_configuration_noeud().clone()).expect("connexion redis")),
+        None => None
+    };
     let mongo = Arc::new(initialiser_mongodb(configuration.as_ref().as_ref()).expect("initialiser_mongodb"));
 
     let (tx_backup, rx_backup) = mpsc::channel::<CommandeBackup>(5);
@@ -479,9 +482,11 @@ impl ValidateurX509 for MiddlewareDbPki {
         let enveloppe = self.ressources.validateur.charger_enveloppe(chaine_pem, fingerprint, ca_pem).await?;
 
         // Conserver dans redis (reset TTL)
-        match self.redis.save_certificat(&enveloppe).await {
-            Ok(()) => (),
-            Err(e) => warn!("MiddlewareDbPki.charger_enveloppe Erreur sauvegarde certificat dans redis : {:?}", e)
+        if let Some(redis) = self.redis.as_ref() {
+            match redis.save_certificat(&enveloppe).await {
+                Ok(()) => (),
+                Err(e) => warn!("MiddlewareDbPki.charger_enveloppe Erreur sauvegarde certificat dans redis : {:?}", e)
+            }
         }
 
         Ok(enveloppe)
@@ -491,9 +496,11 @@ impl ValidateurX509 for MiddlewareDbPki {
         let (enveloppe, compteur) = self.ressources.validateur.cacher(certificat).await;
 
         if compteur < 2 {
-            match self.redis.save_certificat(enveloppe.as_ref()).await {
-                Ok(()) => debug!("Certificat {} sauvegarde dans redis", enveloppe.fingerprint),
-                Err(e) => warn!("Erreur cache certificat {} dans redis : {:?}", enveloppe.fingerprint, e)
+            if let Some(redis) = self.redis.as_ref() {
+                match redis.save_certificat(enveloppe.as_ref()).await {
+                    Ok(()) => debug!("Certificat {} sauvegarde dans redis", enveloppe.fingerprint),
+                    Err(e) => warn!("Erreur cache certificat {} dans redis : {:?}", enveloppe.fingerprint, e)
+                }
             }
         }
 
@@ -505,15 +512,18 @@ impl ValidateurX509 for MiddlewareDbPki {
             Some(c) => Some(c),
             None => {
                 // Cas special, certificat inconnu a PKI. Tenter de le charger de redis
-                let redis_certificat = match self.redis.get_certificat(fingerprint).await {
-                    Ok(c) => match c {
-                        Some(cert_pem) => cert_pem,
-                        None => return None
+                let redis_certificat = match self.redis.as_ref() {
+                    Some(redis) => match redis.get_certificat(fingerprint).await {
+                        Ok(c) => match c {
+                            Some(cert_pem) => cert_pem,
+                            None => return None
+                        },
+                        Err(e) => {
+                            warn!("MiddlewareDbPki.get_certificat (2) Erreur acces certificat via redis : {:?}", e);
+                            return None
+                        }
                     },
-                    Err(e) => {
-                        warn!("MiddlewareDbPki.get_certificat (2) Erreur acces certificat via redis : {:?}", e);
-                        return None
-                    }
+                    None => return None
                 };
 
                 // Le certificat est dans redis, on le sauvegarde localement en chargeant l'enveloppe
@@ -786,9 +796,11 @@ impl EmetteurCertificat for MiddlewareDbPki {
             .build();
 
         // Sauvegarder dans redis
-        match self.redis.save_certificat(enveloppe_certificat).await {
-            Ok(()) => (),
-            Err(e) => warn!("MiddlewareDbPki.emettre_certificat Erreur sauvegarde certificat local sous redis : {:?}", e)
+        if let Some(redis) = self.redis.as_ref() {
+            match redis.save_certificat(enveloppe_certificat).await {
+                Ok(()) => (),
+                Err(e) => warn!("MiddlewareDbPki.emettre_certificat Erreur sauvegarde certificat local sous redis : {:?}", e)
+            }
         }
 
         match generateur_message.emettre_evenement(routage, &message).await {
