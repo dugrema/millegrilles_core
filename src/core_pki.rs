@@ -568,27 +568,51 @@ async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Resul
     url_post.set_path("signerModule");
 
     // On retransmet le message recu tel quel
-    let response = match client.post(url_post).json(&commande).send().await {
-        Ok(inner) => inner,
-        Err(e) => Err(format!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e))?
-    };
-
-    debug!("commande_signer_csr status: {}, {:?}", response.status(), response);
-    let reponse_commande = match response.status().is_success() {
-        true => {
-            let reponse_json: ReponseCertificatSigne = response.json().await?;
-            debug!("commande_signer_csr Reponse certificat : {:?}", reponse_json);
-            middleware.formatter_reponse(reponse_json, None)?
+    match client.post(url_post).json(&commande).send().await {
+        Ok(response) => {
+            match response.status().is_success() {
+                true => {
+                    let reponse_json: ReponseCertificatSigne = response.json().await?;
+                    debug!("commande_signer_csr Reponse certificat : {:?}", reponse_json);
+                    return Ok(Some(middleware.formatter_reponse(reponse_json, None)?))
+                },
+                false => {
+                    debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : status {}", response.status());
+                }
+            }
         },
-        false => {
-            let status = response.status().clone();
-            let msg = response.text().await?;
-            error!("core_pki.commande_signer_csr Erreur signature {:?}", msg);
-            middleware.formatter_reponse(json!({"ok": false, "code": status.as_str(), "err": format!("Erreur signature : {:?}", msg).as_str()}), None)?
+        Err(e) => {
+            debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e);
         }
     };
 
-    Ok(Some(reponse_commande))
+    // Une erreur est survenue dans le post, fallback vers noeuds 4.secure (si presents)
+    debug!("Echec connexion a certissuer local, relai vers instances 4.secure");
+    let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, PKI_COMMANDE_SIGNER_CSR)
+        .exchanges(vec![Securite::L4Secure])
+        .build();
+
+    match middleware.transmettre_commande(routage, &commande.contenu, true).await? {
+        Some(reponse) => {
+            if let TypeMessage::Valide(reponse) = reponse {
+                let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu(None)?;
+                Ok(Some(middleware.formatter_reponse(reponse_json, None)?))
+            } else {
+                error!("core_pki.commande_signer_csr Erreur signature, echec local et relai 4.secure");
+                Ok(Some(middleware.formatter_reponse(
+                    json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
+                    None
+                )?))
+            }
+        },
+        None => {
+            error!("core_pki.commande_signer_csr Erreur signature, aucune reponse");
+            Ok(Some(middleware.formatter_reponse(
+                json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
+                None
+            )?))
+        }
+    }
 }
 
 async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageValideAction) -> Result<Option<Cow<'a, MessageMilleGrille>>, Box<dyn Error>>
