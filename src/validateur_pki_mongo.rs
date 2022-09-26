@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::collections::hash_map::RandomState;
 use std::error::Error;
 use std::sync::{Arc, Mutex};
 
@@ -20,11 +21,12 @@ use millegrilles_common_rust::middleware::{configurer as configurer_messages, Em
 use millegrilles_common_rust::middleware_db::MiddlewareDb;
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao, MongoDaoImpl, initialiser as initialiser_mongodb};
 use millegrilles_common_rust::mongodb::Database;
+use millegrilles_common_rust::mongodb::options::FindOptions;
 use millegrilles_common_rust::openssl::x509::store::X509Store;
 use millegrilles_common_rust::openssl::x509::X509;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, NamedQueue, QueueType, run_rabbitmq, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{recevoir_messages, TypeMessage};
-use millegrilles_common_rust::serde::Serialize;
+use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio as tokio;
@@ -33,6 +35,7 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptions, VerificateurMessage, verifier_message};
 use millegrilles_common_rust::redis_dao::RedisDao;
 use millegrilles_common_rust::tokio::sync::mpsc::Sender;
+use millegrilles_common_rust::tokio_stream::StreamExt;
 
 use crate::core_pki::{COLLECTION_CERTIFICAT_NOM, CorePkiCertificat, DOMAINE_NOM as PKI_DOMAINE_NOM};
 
@@ -220,7 +223,41 @@ impl ValidateurX509 for ValidateurX509Database {
         match self.validateur.get_certificat(fingerprint).await {
             Some(enveloppe) => Some(enveloppe),
             None => {
-                // Tenter de charger a partir de la base de donnes
+                // Tenter de charger a partir de redis
+                let cert_option = if let Some(redis) = self.redis_dao.as_ref() {
+                    match redis.get_certificat(fingerprint).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            debug!("Erreur chargement certificat redis : {:?}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                if let Some(certificat) = cert_option {
+                    let ca_pem = match certificat.ca.as_ref() {
+                        Some(c) => Some(c.as_str()),
+                        None => None
+                    };
+                    match self.validateur.charger_enveloppe(
+                                &certificat.pems,
+                                None,
+                                ca_pem
+                    ).await {
+                        Ok(enveloppe) => {
+                            debug!("get_certificat Certificat {} charge de la DB", fingerprint);
+                            if let Err(e) = self.upsert_enveloppe(&enveloppe).await {
+                                warn!("Erreur sauvegarde certificat : {:?}", e);
+                            }
+                            return Some(enveloppe)
+                        },
+                        Err(_) => ()
+                    }
+                }
+
+                // Tenter de charger a partir de la base de donnees
                 match self.mongo_dao.get_database() {
                     Ok(db) => {
 
@@ -250,46 +287,25 @@ impl ValidateurX509 for ValidateurX509Database {
                                         ca_pem
                                     ).await {
                                         Ok(enveloppe) => {
-                                            debug!("Certificat {} charge de la DB", fingerprint);
+                                            debug!("get_certificat Certificat {} charge de la DB", fingerprint);
                                             Some(enveloppe)
                                         },
                                         Err(_) => None,
                                     }
-
-                                    // match document.get(PKI_DOCUMENT_CHAMP_CERTIFICAT) {
-                                    //     Some(chaine_pem) => {
-                                    //         let mut vec_pems = Vec::new();
-                                    //         for pem in chaine_pem.as_array().expect("pems") {
-                                    //             vec_pems.push(String::from(pem.as_str().expect("un pem")));
-                                    //         }
-                                    //         match self.validateur.charger_enveloppe(&vec_pems, None).await {
-                                    //             Ok(enveloppe) => {
-                                    //                 debug!("Certificat {} charge de la DB", fingerprint);
-                                    //                 Some(enveloppe)
-                                    //             },
-                                    //             Err(_) => None,
-                                    //         }
-                                    //     },
-                                    //     None => None,
-                                    // }
-
-
-
-
                                 },
                                 None => {
-                                    debug!("Certificat inconnu (pas dans la DB) {:?}", fingerprint);
+                                    debug!("get_certificat Certificat inconnu (pas dans la DB) {:?}", fingerprint);
                                     None
                                 },
                             },
                             Err(e) => {
-                                debug!("Erreur!!! {:?}", e);
+                                debug!("get_certificat Erreur!!! {:?}", e);
                                 None
                             },
                         }
                     },
                     Err(e) => {
-                        debug!("Erreur!!! {:?}", e);
+                        debug!("get_certificatErreur {:?}", e);
                         None
                     }
                 }
@@ -321,7 +337,6 @@ impl ValidateurX509 for ValidateurX509Database {
         self.validateur.store_notime()
     }
 
-    /// Pas invoque
     async fn entretien_validateur(&self) {
 
         debug!("ValidateurX509Database.entretien_validateur Debut entretien certificats");
@@ -344,11 +359,72 @@ impl ValidateurX509 for ValidateurX509Database {
                     warn!("entretien_validateur Erreur sauvegarde certificat {:?}", e)
                 }
             }
+
+            // Synchroniser certificats de redis vers mongodb
+            if let Err(e) = synchroniser_certificats(&self, redis, self.mongo_dao.as_ref()).await {
+                warn!("entretien_validateur Erreur synchronisation certificats entre redis et mongo : {:?}", e)
+            }
         }
 
         self.validateur.entretien_validateur().await;
     }
 
+}
+
+async fn synchroniser_certificats<M>(validateur: &ValidateurX509Database, redis: &RedisDao, mongo_dao: &M)
+    -> Result<(), Box<dyn Error>>
+    where M: MongoDao
+{
+    let liste = match redis.liste_certificats_fingerprints().await {
+        Ok(liste) => liste,
+        Err(e) => {
+            warn!("Erreur extraction liste certificats redis : {:?}", e);
+            return Ok(())
+        }
+    };
+
+    for fingerprints in liste.chunks(100) {
+        // Verifier si le certificat est connu dans mongodb
+        debug!("entretien_validateur Redis/Mongo sync fingerprints {:?}", fingerprints);
+
+        let mut fingerprint_set = HashSet::new();
+        for fp in fingerprints {
+            fingerprint_set.insert(fp.as_str());
+        }
+        // let mut fingerprint_set = HashSet::from_iter(fingerprints.iter().map(|fp| fp.as_str()));
+
+        let filtre = doc! {"fingerprint": {"$in": fingerprints}};
+        let projection = doc! {"fingerprint": true};
+        debug!("entretien_validateur filtre {:?}, projection {:?}", filtre, projection);
+        let options = FindOptions::builder()
+            .projection(projection)
+            .build();
+        let collection = mongo_dao.get_collection(COLLECTION_CERTIFICAT_NOM)?;
+        for row in collection.find(filtre, options).await?.next().await {
+            let row = row?;
+            debug!("entretien_validateur Certificat connu {:?}", row);
+            let row_fingerprint: RowFingerprint = convertir_bson_deserializable(row)?;
+            fingerprint_set.remove(row_fingerprint.fingerprint.as_str());
+        }
+
+        debug!("Certificats manquants : {:?}", fingerprint_set);
+        for fingerprint in fingerprint_set.into_iter() {
+            match validateur.get_certificat(fingerprint).await {
+                Some(certificat) => {
+                    debug!("Certificat charge : {:?}", certificat);
+                },
+                None => panic!("Certificat manquant est present dans redis mais non charge")
+            }
+
+        }
+    };
+
+    Ok(())
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RowFingerprint {
+    fingerprint: String,
 }
 
 // pub fn configurer() -> MiddlewareDbPki
