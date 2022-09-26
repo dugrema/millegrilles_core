@@ -218,11 +218,17 @@ async fn entretien<M>(middleware: Arc<M>)
     let mut prochain_chargement_certificats_maitredescles = chrono::Utc::now();
     let intervalle_chargement_certificats_maitredescles = chrono::Duration::minutes(5);
 
+    let mut prochain_entretien_validateur = chrono::Utc::now();
+    let intervalle_entretien_validateur = chrono::Duration::minutes(2);
+
     loop {
         let maintenant = chrono::Utc::now();
         debug!("Execution task d'entretien Core {:?}", maintenant);
 
-        middleware.entretien_validateur().await;
+        if prochain_entretien_validateur < maintenant {
+            prochain_entretien_validateur = maintenant + intervalle_entretien_validateur;
+            middleware.entretien_validateur().await;
+        }
 
         if prochain_chargement_certificats_maitredescles < maintenant {
             match middleware.charger_certificats_chiffrage(middleware.as_ref()).await {
