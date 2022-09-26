@@ -686,41 +686,12 @@ impl CleChiffrageHandler for MiddlewareDbPki {
         vals
     }
 
-    async fn charger_certificats_chiffrage<M>(&self, middleware: &M, cert_local: &EnveloppeCertificat, env_privee: Arc<EnveloppePrivee>)
+    async fn charger_certificats_chiffrage<M>(&self, middleware: &M)
         -> Result<(), Box<dyn Error>>
         where M: GenerateurMessages
     {
         debug!("Charger les certificats de maitre des cles pour chiffrage");
-
-        // Reset certificats maitredescles. Reinserer cert millegrille immediatement.
-        {
-            let fp_certs = cert_local.fingerprint_cert_publickeys().expect("public keys");
-            let mut guard = self.chiffrage_factory.cles_chiffrage.lock().expect("lock");
-            guard.clear();
-
-            // Reinserer certificat de millegrille
-            let fingerprint_cert = env_privee.enveloppe_ca.fingerprint_cert_publickeys().expect("public keys CA");
-            let fingerprint = fingerprint_cert[0].fingerprint.clone();
-            guard.insert(fingerprint, fingerprint_cert[0].clone());
-        }
-
-        emettre_commande_certificat_maitredescles(middleware).await?;
-
-        // Donner une chance aux certificats de rentrer
-        tokio::time::sleep(tokio::time::Duration::new(5, 0)).await;
-
-        let certs = self.chiffrage_factory.cles_chiffrage.lock().expect("lock").clone();
-        debug!("charger_certificats_chiffrage Certificats de chiffrage recus : {:?}", certs);
-
-        // Verifier si on a au moins un certificat
-        let nb_certs = self.chiffrage_factory.cles_chiffrage.lock().expect("lock").len();
-        if nb_certs <= 1 {  // 1 => le cert millegrille est deja charge
-            Err(format!("Echec, aucuns certificats de maitre des cles recus"))?
-        } else {
-            debug!("On a {} certificats de maitre des cles valides", nb_certs);
-        }
-
-        Ok(())
+        Ok(self.chiffrage_factory.charger_certificats_chiffrage(middleware).await?)
     }
 
     async fn recevoir_certificat_chiffrage<M>(&self, middleware: &M, message: &MessageSerialise) -> Result<(), String>

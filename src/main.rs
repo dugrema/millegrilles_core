@@ -21,8 +21,8 @@ fn main() {
     executer()
 }
 
-// #[tokio::main(flavor = "current_thread")]
-#[tokio::main(flavor = "multi_thread", worker_threads = 5)]
+#[tokio::main(flavor = "current_thread")]
+// #[tokio::main(flavor = "multi_thread", worker_threads = 5)]
 async fn executer() {
     let mut futures = build().await;
     futures.next().await.expect("future").expect("resultat");
