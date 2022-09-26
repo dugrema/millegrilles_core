@@ -41,6 +41,7 @@ pub struct MiddlewareDbPki {
     ressources: MiddlewareRessources,
     pub mongo: Arc<MongoDaoImpl>,
     pub redis: Option<RedisDao>,
+    validateur: Arc<ValidateurX509Database>,
     tx_backup: Sender<CommandeBackup>,
     chiffrage_factory: Arc<ChiffrageFactoryImpl>,
 }
@@ -89,17 +90,19 @@ impl ChiffrageFactory for MiddlewareDbPki {
 
 /// Validateur X509 backe par une base de donnees (Mongo)
 /// Permet de charger les certificats et generer les transactions pour les certificats inconnus.
-pub struct ValidateurX509Database {
+struct ValidateurX509Database {
     mongo_dao: Arc<MongoDaoImpl>,
+    redis_dao: Option<RedisDao>,
     validateur: Arc<ValidateurX509Impl>,
     generateur_messages: Arc<GenerateurMessagesImpl>
 }
 
 impl ValidateurX509Database {
 
-    pub fn new(mongo_dao: Arc<MongoDaoImpl>, validateur: Arc<ValidateurX509Impl>, generateur_messages: Arc<GenerateurMessagesImpl>) -> ValidateurX509Database {
+    pub fn new(mongo_dao: Arc<MongoDaoImpl>, redis_dao: Option<RedisDao>, validateur: Arc<ValidateurX509Impl>, generateur_messages: Arc<GenerateurMessagesImpl>) -> ValidateurX509Database {
         ValidateurX509Database {
             mongo_dao,
+            redis_dao,
             validateur,
             generateur_messages
         }
@@ -171,24 +174,45 @@ impl ValidateurX509 for ValidateurX509Database {
         Ok(enveloppe)
     }
 
-    // async fn cacher(&self, certificat: EnveloppeCertificat) -> Arc<EnveloppeCertificat> {
-    //     debug!("ValidateurX509Database: cacher!");
-    //     self.validateur.cacher(certificat).await
-    // }
+    async fn cacher(&self, certificat: EnveloppeCertificat) -> (Arc<EnveloppeCertificat>, bool) {
+        let (enveloppe, persiste) = self.validateur.cacher(certificat).await;
 
-    async fn cacher(&self, certificat: EnveloppeCertificat) -> (Arc<EnveloppeCertificat>, usize) {
-        let (enveloppe, compteur) = self.validateur.cacher(certificat).await;
+        let persiste = if ! persiste {
+            // Conserver dans MongoDB
+            let persiste = match self.upsert_enveloppe(enveloppe.as_ref()).await {
+                Ok(()) => {
+                    self.validateur.set_flag_persiste(enveloppe.fingerprint.as_str());
+                    true
+                },
+                Err(e) => {
+                    error!("Erreur sauvegarde certificat dans MongoDB : {:?}", e);
+                    false
+                }
+            };
 
-        // Donner une chance de sauvegarder le certificat dans mongo 2 fois (e.g. si cache durant reception _certificat)
-        if compteur < 2 {
-            match self.upsert_enveloppe(enveloppe.as_ref()).await {
-            //match self.redis.save_certificat(enveloppe.as_ref()).await {
-                Ok(()) => debug!("Certificat {} sauvegarde dans mongo", enveloppe.fingerprint),
-                Err(e) => warn!("Erreur cache certificat {} dans mongo : {:?}", enveloppe.fingerprint, e)
+            // Cacher dans redis (utilise par tous les autres services)
+            match self.redis_dao.as_ref() {
+                Some(redis) => {
+                    match redis.save_certificat(enveloppe.as_ref()).await {
+                        Ok(()) => debug!("Certificat {} sauvegarde dans redis", enveloppe.fingerprint),
+                        Err(e) => warn!("Erreur cache certificat {} dans redis : {:?}", enveloppe.fingerprint, e)
+                    }
+                },
+                None => ()
             }
-        }
 
-        (enveloppe, compteur)
+            // Retourner flag sauvegarde dans MongoDB
+            persiste
+        } else {
+            persiste
+        };
+
+        /// Retourne le certificat et indicateur qu'il a ete persiste
+        (enveloppe, persiste)
+    }
+
+    fn set_flag_persiste(&self, fingerprint: &str) {
+        self.validateur.set_flag_persiste(fingerprint)
     }
 
     async fn get_certificat(&self, fingerprint: &str) -> Option<Arc<EnveloppeCertificat>> {
@@ -273,6 +297,10 @@ impl ValidateurX509 for ValidateurX509Database {
         }
     }
 
+    fn certificats_persister(&self) -> Vec<Arc<EnveloppeCertificat>> {
+        self.validateur.certificats_persister()
+    }
+
     fn idmg(&self) -> &str {
         self.validateur.idmg()
     }
@@ -295,6 +323,29 @@ impl ValidateurX509 for ValidateurX509Database {
 
     /// Pas invoque
     async fn entretien_validateur(&self) {
+
+        debug!("ValidateurX509Database.entretien_validateur Debut entretien certificats");
+
+        // Conserver tous les certificats qui ne sont pas encore persiste
+        if let Some(redis) = self.redis_dao.as_ref() {
+            // Conserver les certificats qui n'ont pas encore ete persistes
+            for certificat in self.validateur.certificats_persister().iter() {
+                debug!("entretien_validateur Persister certificat {}", certificat.fingerprint);
+
+                // Sauvegarder dans MongoDB
+                match self.upsert_enveloppe(certificat.as_ref()).await {
+                    Ok(()) => self.validateur.set_flag_persiste(certificat.fingerprint.as_str()),
+                    Err(e) => {
+                        error!("Erreur sauvegarde certificat dans MongoDB : {:?}", e);
+                    }
+                };
+                // Sauvegarder dans redis
+                if let Err(e) = redis.save_certificat(certificat.as_ref()).await {
+                    warn!("entretien_validateur Erreur sauvegarde certificat {:?}", e)
+                }
+            }
+        }
+
         self.validateur.entretien_validateur().await;
     }
 
@@ -341,18 +392,30 @@ pub fn preparer_middleware_pki() -> MiddlewareHooks {
         Arc::new(ChiffrageFactoryImpl::new(map, env_privee))
     };
 
-    let redis_dao = match configuration.get_configuration_noeud().redis_password {
-        Some(_) => Some(RedisDao::new(configuration.get_configuration_noeud().clone()).expect("connexion redis")),
-        None => None
-    };
     let mongo = Arc::new(initialiser_mongodb(configuration.as_ref().as_ref()).expect("initialiser_mongodb"));
 
     let (tx_backup, rx_backup) = mpsc::channel::<CommandeBackup>(5);
 
+    let redis_dao_validateur = match configuration.get_configuration_noeud().redis_password {
+        Some(_) => Some(RedisDao::new(configuration.get_configuration_noeud().clone()).expect("connexion redis")),
+        None => None
+    };
+    let validateur_db = Arc::new(ValidateurX509Database::new(
+        mongo.clone(),
+        redis_dao_validateur,
+        ressources_messages.validateur.clone(),
+        ressources_messages.generateur_messages.clone(),
+    ));
+
+    let redis_dao = match configuration.get_configuration_noeud().redis_password {
+        Some(_) => Some(RedisDao::new(configuration.get_configuration_noeud().clone()).expect("connexion redis")),
+        None => None
+    };
     let middleware = Arc::new(MiddlewareDbPki {
         ressources: ressources_messages,
         mongo,
         redis: redis_dao,
+        validateur: validateur_db,
         tx_backup,
         chiffrage_factory,
     });
@@ -479,7 +542,7 @@ pub fn preparer_middleware_pki() -> MiddlewareHooks {
 #[async_trait]
 impl ValidateurX509 for MiddlewareDbPki {
     async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>, ca_pem: Option<&str>) -> Result<Arc<EnveloppeCertificat>, String> {
-        let enveloppe = self.ressources.validateur.charger_enveloppe(chaine_pem, fingerprint, ca_pem).await?;
+        let enveloppe = self.validateur.charger_enveloppe(chaine_pem, fingerprint, ca_pem).await?;
 
         // Conserver dans redis (reset TTL)
         if let Some(redis) = self.redis.as_ref() {
@@ -492,23 +555,40 @@ impl ValidateurX509 for MiddlewareDbPki {
         Ok(enveloppe)
     }
 
-    async fn cacher(&self, certificat: EnveloppeCertificat) -> (Arc<EnveloppeCertificat>, usize) {
-        let (enveloppe, compteur) = self.ressources.validateur.cacher(certificat).await;
+    async fn cacher(&self, certificat: EnveloppeCertificat) -> (Arc<EnveloppeCertificat>, bool) {
+        let (enveloppe, persiste) = self.validateur.cacher(certificat).await;
 
-        if compteur < 2 {
-            if let Some(redis) = self.redis.as_ref() {
-                match redis.save_certificat(enveloppe.as_ref()).await {
-                    Ok(()) => debug!("Certificat {} sauvegarde dans redis", enveloppe.fingerprint),
-                    Err(e) => warn!("Erreur cache certificat {} dans redis : {:?}", enveloppe.fingerprint, e)
-                }
+        let persiste = if ! persiste {
+            match self.redis.as_ref() {
+                Some(redis) => {
+                    match redis.save_certificat(enveloppe.as_ref()).await {
+                        Ok(()) => {
+                            debug!("Certificat {} sauvegarde dans redis", enveloppe.fingerprint);
+                            self.validateur.set_flag_persiste(enveloppe.fingerprint.as_str());
+                            true
+                        },
+                        Err(e) => {
+                            warn!("Erreur cache certificat {} dans redis : {:?}", enveloppe.fingerprint, e);
+                            false
+                        }
+                    }
+                },
+                None => false
             }
-        }
+        } else {
+            persiste
+        };
 
-        (enveloppe, compteur)
+        /// Retourne le certificat et indicateur qu'il a ete persiste
+        (enveloppe, persiste)
+    }
+
+    fn set_flag_persiste(&self, fingerprint: &str) {
+        self.validateur.set_flag_persiste(fingerprint)
     }
 
     async fn get_certificat(&self, fingerprint: &str) -> Option<Arc<EnveloppeCertificat>> {
-        match self.ressources.validateur.get_certificat(fingerprint).await {
+        match self.validateur.get_certificat(fingerprint).await {
             Some(c) => Some(c),
             None => {
                 // Cas special, certificat inconnu a PKI. Tenter de le charger de redis
@@ -531,7 +611,7 @@ impl ValidateurX509 for MiddlewareDbPki {
                     Some(c) => Some(c.as_str()),
                     None => None
                 };
-                match self.ressources.validateur.charger_enveloppe(&redis_certificat.pems, None, ca_pem).await {
+                match self.validateur.charger_enveloppe(&redis_certificat.pems, None, ca_pem).await {
                     Ok(c) => Some(c),
                     Err(e) => {
                         warn!("MiddlewareDbPki.get_certificat (1) Erreur acces certificat via redis : {:?}", e);
@@ -542,28 +622,33 @@ impl ValidateurX509 for MiddlewareDbPki {
         }
     }
 
+    fn certificats_persister(&self) -> Vec<Arc<EnveloppeCertificat>> {
+        self.validateur.certificats_persister()
+    }
+
     fn idmg(&self) -> &str {
-        self.ressources.validateur.idmg()
+        self.validateur.idmg()
     }
 
     fn ca_pem(&self) -> &str {
-        self.ressources.validateur.ca_pem()
+        self.validateur.ca_pem()
     }
 
     fn ca_cert(&self) -> &X509 {
-        self.ressources.validateur.ca_cert()
+        self.validateur.ca_cert()
     }
 
     fn store(&self) -> &X509Store {
-        self.ressources.validateur.store()
+        self.validateur.store()
     }
 
     fn store_notime(&self) -> &X509Store {
-        self.ressources.validateur.store_notime()
+        self.validateur.store_notime()
     }
 
     async fn entretien_validateur(&self) {
-        self.ressources.validateur.entretien_validateur().await
+        debug!("MiddlewareDbPki.entretien_validateur Debut entretien certificats");
+        self.validateur.entretien_validateur().await
     }
 }
 
