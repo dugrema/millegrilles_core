@@ -400,7 +400,8 @@ async fn synchroniser_certificats<M>(validateur: &ValidateurX509Database, redis:
             .projection(projection)
             .build();
         let collection = mongo_dao.get_collection(COLLECTION_CERTIFICAT_NOM)?;
-        for row in collection.find(filtre, options).await?.next().await {
+        let mut curseur = collection.find(filtre, options).await?;
+        while let Some(row) = curseur.next().await {
             let row = row?;
             debug!("entretien_validateur Certificat connu {:?}", row);
             let row_fingerprint: RowFingerprint = convertir_bson_deserializable(row)?;
