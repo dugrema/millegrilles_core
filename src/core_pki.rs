@@ -349,7 +349,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
         false => {
             match m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
                 true => Ok(()),
-                false => Err(format!("core_pki.consommer_commande Autorisation invalide (pas 4.secure/delegation globale) : {}", m.routing_key))
+                false => Err(format!("core_pki.consommer_commande Autorisation invalide (aucun exchange, pas delegation globale) : {}", m.routing_key))
             }
         },
     }?;
