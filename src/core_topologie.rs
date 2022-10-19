@@ -445,8 +445,7 @@ async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<()
 
     let minutes = date_epoch.get_datetime().minute();
 
-    // Generer une fiche a toutes les 15 minutes
-    if minutes % 15 == 1 {
+    if minutes % 5 == 1 {
         debug!("Produire fiche publique");
         if let Err(e) = produire_fiche_publique(middleware).await {
             error!("core_topoologie.entretien Erreur production fiche publique initiale : {:?}", e);
@@ -1645,7 +1644,10 @@ async fn produire_fiche_publique<M>(middleware: &M)
             let fingerprint = &key.fingerprint;
             if let Some(certificat) = middleware.get_certificat(fingerprint).await {
                 let pem_vec: Vec<String> = certificat.get_pem_vec().into_iter().map(|c| c.pem).collect::<Vec<String>>();
-                chiffrage.push(pem_vec);
+                // Skip certificat millegrille
+                if pem_vec.len() > 1 {
+                    chiffrage.push(pem_vec);
+                }
             }
         }
         chiffrage
