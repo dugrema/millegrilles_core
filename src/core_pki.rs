@@ -1,13 +1,10 @@
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::error::Error;
 use std::sync::Arc;
 
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, warn};
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::backup::reset_backup_flag;
-use millegrilles_common_rust::backup::backup;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, VerificateurPermissions};
@@ -15,15 +12,14 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::common_messages::DemandeSignature;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
-use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_message_certificat, Middleware, sauvegarder_traiter_transaction, thread_emettre_presence_domaine, upsert_certificat};
+use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, emettre_presence_domaine, formatter_message_certificat, Middleware, sauvegarder_traiter_transaction, thread_emettre_presence_domaine, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::{reqwest, reqwest::Url};
-use millegrilles_common_rust::configuration::IsConfigNoeud;
+use millegrilles_common_rust::configuration::{ConfigMessages, IsConfigNoeud};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio;
@@ -56,6 +52,7 @@ const NOM_Q_TRANSACTIONS_PKI: &str = "CorePki/transactions";
 const NOM_Q_TRANSACTIONS_VOLATILS: &str = "CorePki/volatils";
 const NOM_Q_TRIGGERS_PKI: &str = "CorePki/triggers";
 const NOM_DOMAINE_CERTIFICATS: &str = "certificat";
+const EVENEMENT_CERTIFICAT_MAITREDESCLES: &str = "certMaitreDesCles";
 
 /// Instance statique du gestionnaire de maitredescomptes
 pub const GESTIONNAIRE_PKI: GestionnaireDomainePki = GestionnaireDomainePki {};
@@ -179,6 +176,8 @@ pub fn preparer_queues() -> Vec<QueueType> {
     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.CorePki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
 
     // rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_FICHIERS, EVENEMENT_BACKUP_DECLENCHER), exchange: Securite::L2Prive});
+
+    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_NOM_MAITREDESCLES, EVENEMENT_CERTIFICAT_MAITREDESCLES), exchange: Securite::L4Secure});
 
     let mut queues = Vec::new();
 
@@ -390,16 +389,19 @@ where
     }
 }
 
-async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
+async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ConfigMessages + ChiffrageFactoryTrait
+{
     debug!("Consommer evenement : {:?}", &m.message);
 
-    // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
-        true => Ok(()),
-        false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
-    }?;
+    // // Autorisation : doit etre de niveau 4.secure
+    // match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    //     true => Ok(()),
+    //     false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
+    // }?;
 
     match m.action.as_str() {
+        "certMaitreDesCles" => evenement_certificat_maitredescles(middleware, m).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
@@ -755,6 +757,14 @@ where M: ValidateurX509 {
     debug!("traiter_cedule corepki");
 
     Ok(())
+}
+
+async fn evenement_certificat_maitredescles<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ConfigMessages + ChiffrageFactoryTrait
+{
+    debug!("Recevoir certificat maitre des cles {:?}", m);
+    middleware.recevoir_certificat_chiffrage(middleware, &m.message).await?;
+    Ok(None)
 }
 
 #[cfg(test)]

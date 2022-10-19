@@ -25,7 +25,7 @@ use millegrilles_common_rust::mongodb::options::FindOptions;
 use millegrilles_common_rust::openssl::x509::store::X509Store;
 use millegrilles_common_rust::openssl::x509::X509;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, NamedQueue, QueueType, run_rabbitmq, TypeMessageOut};
-use millegrilles_common_rust::recepteur_messages::{recevoir_messages, TypeMessage};
+use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::json;

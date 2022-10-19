@@ -216,7 +216,7 @@ async fn entretien<M>(middleware: Arc<M>)
     let intervalle_entretien_transactions = chrono::Duration::minutes(5);
 
     let mut prochain_chargement_certificats_maitredescles = chrono::Utc::now();
-    let intervalle_chargement_certificats_maitredescles = chrono::Duration::minutes(5);
+    let intervalle_chargement_certificats_maitredescles = chrono::Duration::minutes(360);
 
     let mut prochain_entretien_validateur = chrono::Utc::now();
     let intervalle_entretien_validateur = chrono::Duration::minutes(2);
