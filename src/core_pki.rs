@@ -3,7 +3,7 @@ use std::convert::TryFrom;
 use std::error::Error;
 use std::sync::Arc;
 
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
@@ -401,7 +401,7 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Resul
     // }?;
 
     match m.action.as_str() {
-        "certMaitreDesCles" => evenement_certificat_maitredescles(middleware, m).await,
+        EVENEMENT_CERTIFICAT_MAITREDESCLES => evenement_certificat_maitredescles(middleware, m).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
@@ -762,7 +762,7 @@ where M: ValidateurX509 {
 async fn evenement_certificat_maitredescles<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ConfigMessages + ChiffrageFactoryTrait
 {
-    debug!("Recevoir certificat maitre des cles {:?}", m);
+    info!("Recevoir certificat maitre des cles {:?}", m);
     middleware.recevoir_certificat_chiffrage(middleware, &m.message).await?;
     Ok(None)
 }
