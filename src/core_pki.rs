@@ -161,7 +161,11 @@ pub fn preparer_queues() -> Vec<QueueType> {
         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.infoCertificat"), exchange: niveau.clone()});
         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.certificat.*"), exchange: niveau.clone()});
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.CorePki.{}", PKI_COMMANDE_SIGNER_CSR), exchange: niveau.clone()});
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", PKI_DOMAINE_CERTIFICAT_NOM, PKI_REQUETE_CERTIFICAT), exchange: niveau});
     }
+
+    // Ajout evenement certificat pour 4.secure
+    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", PKI_DOMAINE_CERTIFICAT_NOM, PKI_REQUETE_CERTIFICAT), exchange: Securite::L4Secure});
 
     // RK 2.prive (inclus 3.protege)
     for niveau in niveaux_securite_prive {
@@ -390,7 +394,7 @@ where
 }
 
 async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ConfigMessages + ChiffrageFactoryTrait
+    where M: GenerateurMessages + ConfigMessages + ChiffrageFactoryTrait + ValidateurX509 + MongoDao
 {
     debug!("Consommer evenement : {:?}", &m.message);
 
@@ -402,6 +406,7 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Resul
 
     match m.action.as_str() {
         EVENEMENT_CERTIFICAT_MAITREDESCLES => evenement_certificat_maitredescles(middleware, m).await,
+        PKI_REQUETE_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware, m).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
     }
 }
@@ -506,7 +511,7 @@ where
 
 async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
+    M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let commande: CommandeSauvegarderCertificat = m.message.get_msg().map_contenu(None)?;
 
@@ -532,8 +537,13 @@ where
     let enveloppe = middleware.charger_enveloppe(&commande.chaine_pem, None, ca_pem).await?;
     debug!("Commande de sauvegarde de certificat {} traitee", enveloppe.fingerprint);
 
-    let reponse = middleware.formatter_reponse(json!({"ok": true}), None)?;
-    Ok(Some(reponse))
+    if m.domaine.as_str() == PKI_DOMAINE_CERTIFICAT_NOM {
+        // Sauvegarde de l'evenement de certificat - aucune reponse
+        Ok(None)
+    } else {
+        let reponse = middleware.formatter_reponse(json!({"ok": true}), None)?;
+        Ok(Some(reponse))
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
