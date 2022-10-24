@@ -20,7 +20,7 @@ use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sauvegarder_traiter_transaction, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
-use millegrilles_common_rust::chiffrage::Chiffreur;
+use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
 // use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, Mgs3CipherKeys};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -463,7 +463,7 @@ async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<()
 }
 
 async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage + ChiffrageFactoryTrait
 {
     debug!("Consommer requete : {:?}", &message.message);
 
@@ -1632,26 +1632,28 @@ async fn produire_fiche_publique<M>(middleware: &M)
     where M: ValidateurX509 + ChiffrageFactoryTrait + GenerateurMessages + MongoDao
 {
     debug!("produire_fiche_publique");
+
+    let fiche = generer_contenu_fiche_publique(middleware).await?;
+
+    let routage = RoutageMessageAction::builder(
+        DOMAINE_NOM, EVENEMENT_FICHE_PUBLIQUE)
+        .exchanges(vec![Securite::L1Public])
+        .ajouter_ca(true)
+        .build();
+    middleware.emettre_evenement(routage, &fiche).await?;
+
+    Ok(())
+}
+
+async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePublique, Box<dyn Error>>
+    where M: MongoDao + ValidateurX509 + ChiffrageFactoryTrait
+{
     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
 
     let filtre = doc! {};
     let mut curseur = collection.find(filtre, None).await?;
 
-    let chiffrage = {
-        let mut chiffrage = Vec::new();
-        let public_keys = middleware.get_publickeys_chiffrage();
-        for key in public_keys {
-            let fingerprint = &key.fingerprint;
-            if let Some(certificat) = middleware.get_certificat(fingerprint).await {
-                let pem_vec: Vec<String> = certificat.get_pem_vec().into_iter().map(|c| c.pem).collect::<Vec<String>>();
-                // Skip certificat millegrille
-                if pem_vec.len() > 1 {
-                    chiffrage.push(pem_vec);
-                }
-            }
-        }
-        chiffrage
-    };
+    let chiffrage = get_cles_chiffrage(middleware).await;
 
     let mut adresses = Vec::new();
     let mut applications: HashMap<String, Vec<ApplicationPublique>> = HashMap::new();
@@ -1721,35 +1723,43 @@ async fn produire_fiche_publique<M>(middleware: &M)
 
                     apps_mut.push(app_onion);
                 }
-
             }
         }
     }
 
-    let fiche = FichePublique {
+    Ok(FichePublique {
         adresses: Some(adresses),
-        applications,
-        chiffrage,
-        ca: middleware.ca_pem().into(),
+        applications: Some(applications),
+        chiffrage: Some(chiffrage),
+        ca: Some(middleware.ca_pem().into()),
         idmg: middleware.idmg().into(),
-    };
+    })
+}
 
-    let routage = RoutageMessageAction::builder(
-        DOMAINE_NOM, EVENEMENT_FICHE_PUBLIQUE)
-        .exchanges(vec![Securite::L1Public])
-        .ajouter_ca(true)
-        .build();
-    middleware.emettre_evenement(routage, &fiche).await?;
-
-    Ok(())
+async fn get_cles_chiffrage<M>(middleware: &M) -> Vec<Vec<String>>
+    where M: ValidateurX509 + ChiffrageFactoryTrait
+{
+    let mut chiffrage = Vec::new();
+    let public_keys = middleware.get_publickeys_chiffrage();
+    for key in public_keys {
+        let fingerprint = &key.fingerprint;
+        if let Some(certificat) = middleware.get_certificat(fingerprint).await {
+            let pem_vec: Vec<String> = certificat.get_pem_vec().into_iter().map(|c| c.pem).collect::<Vec<String>>();
+            // Skip certificat millegrille
+            if pem_vec.len() > 1 {
+                chiffrage.push(pem_vec);
+            }
+        }
+    }
+    chiffrage
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct FichePublique {
     adresses: Option<Vec<String>>,
-    applications: HashMap<String, Vec<ApplicationPublique>>,
-    chiffrage: Vec<Vec<String>>,
-    ca: String,
+    applications: Option<HashMap<String, Vec<ApplicationPublique>>>,
+    chiffrage: Option<Vec<Vec<String>>>,
+    ca: Option<String>,
     idmg: String,
 }
 
@@ -1917,21 +1927,42 @@ impl TryInto<ApplicationPublique> for InformationApplication {
 
 async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideAction)
                                       -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage + ChiffrageFactoryTrait
 {
     debug!("requete_fiche_millegrille");
     let requete: RequeteFicheMillegrille = message.message.parsed.map_contenu(None)?;
     debug!("requete_fiche_millegrille Parsed : {:?}", requete);
 
-    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
-    let filtre = doc! {
-        TRANSACTION_CHAMP_IDMG: &requete.idmg,
+    let enveloppe_locale = middleware.get_enveloppe_signature();
+    let idmg_local = enveloppe_locale.idmg()?;
+
+    let fiche = match requete.idmg.as_str() == idmg_local.as_str() {
+        true => {
+            // Fiche publique locale
+            Some(generer_contenu_fiche_publique(middleware).await?)
+        },
+        false => {
+            // Fiche publique d'une millegrille tierce
+            let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
+            let filtre = doc! {
+                TRANSACTION_CHAMP_IDMG: &requete.idmg,
+            };
+            match collection.find_one(filtre, None).await? {
+                Some(doc_fiche) => {
+                    let mut fiche: FichePublique = convertir_bson_deserializable(doc_fiche)?;
+                    Some(fiche)
+                },
+                None => None
+            }
+        }
     };
 
-    let reponse = match collection.find_one(filtre, None).await? {
-        Some(doc_fiche) => {
-            let fiche: FichePublique = convertir_bson_deserializable(doc_fiche)?;
-            middleware.formatter_reponse(fiche, None)
+    let reponse = match fiche {
+        Some(r) => {
+            // middleware.formatter_reponse(fiche, None)
+            middleware.formatter_message(
+                &r, Some(DOMAINE_TOPOLOGIE), Some("fichePublique"),
+                None, Some(1), true)
         }
         None => {
             middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)
