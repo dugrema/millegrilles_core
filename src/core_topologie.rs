@@ -9,6 +9,7 @@ use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{Timelike, Utc};
+use millegrilles_common_rust::common_messages::ReponseInformationConsignationFichiers;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
@@ -65,6 +66,7 @@ const REQUETE_LISTE_NOEUDS: &str = "listeNoeuds";
 const REQUETE_RESOLVE_IDMG: &str = "resolveIdmg";
 const REQUETE_FICHE_MILLEGRILLE: &str = "ficheMillegrille";
 const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
+const REQUETE_CONSIGNATION_FICHIERS: &str = "getConsignationFichiers";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_INSTANCE: &str = "instance";
@@ -211,6 +213,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         REQUETE_RESOLVE_IDMG,
         REQUETE_FICHE_MILLEGRILLE,
         REQUETE_APPLICATIONS_TIERS,
+        REQUETE_CONSIGNATION_FICHIERS,
     ];
     for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive });
@@ -499,6 +502,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                             REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
                             REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
                             REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
+                            REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, message).await,
                             _ => {
                                 error!("Message requete/action inconnue : '{}'. Message dropped.", message_action);
                                 Ok(None)
@@ -2088,6 +2092,60 @@ async fn requete_applications_tiers<M>(middleware: &M, message: MessageValideAct
         fiches.push(reponse_applications);
     }
     let reponse = middleware.formatter_reponse(&json!({"fiches": fiches}), None)?;
+
+    // let reponse = match collection.find_one(filtre, Some(options)).await? {
+    //     Some(d) => {
+    //         let document_applications: DocumentApplicationsTiers = convertir_bson_deserializable(d)?;
+    //         let reponse_applications: ReponseApplicationsTiers = document_applications.try_into()?;
+    //         middleware.formatter_reponse(reponse_applications, None)
+    //     }
+    //     None => {
+    //         middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)
+    //     }
+    // }?;
+
+    Ok(Some(reponse))
+}
+
+async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+{
+    debug!("requete_consignation_fichiers");
+    // let requete: RequeteApplicationsTiers = message.message.parsed.map_contenu(None)?;
+    // debug!("requete_consignation_fichiers Parsed : {:?}", requete);
+
+    let projection = doc! {
+        "instance_id": 1,
+        "consignation_url": 1,
+        "type_store": 1,
+        "url_download": 1,
+    };
+
+    let sort = doc! {
+        CHAMP_MODIFICATION: -1
+    };
+
+    let options = FindOneOptions::builder()
+        .projection(projection)
+        .sort(sort)
+        .build();
+
+    let filtre = doc! {
+        "consignation_url": {"$exists": true},
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+    let fiche_consignation = collection.find_one(filtre, Some(options)).await?;
+    let reponse = match fiche_consignation {
+        Some(f) => {
+            let mut fiche_reponse: ReponseInformationConsignationFichiers = convertir_bson_deserializable(f)?;
+            fiche_reponse.ok = Some(true);
+            middleware.formatter_reponse(&fiche_reponse, None)
+        },
+        None => middleware.formatter_reponse(&json!({"ok": false}), None)
+    }?;
+    // let reponse = middleware.formatter_reponse(&json!({"fiches": fiches}), None)?;
 
     // let reponse = match collection.find_one(filtre, Some(options)).await? {
     //     Some(d) => {
