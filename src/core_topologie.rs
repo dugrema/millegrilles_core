@@ -21,7 +21,6 @@ use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sa
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
-// use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, Mgs3CipherKeys};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -48,9 +47,11 @@ pub const NOM_COLLECTION_INSTANCES: &str = "CoreTopologie/instances";
 pub const NOM_COLLECTION_NOEUDS: &str = NOM_COLLECTION_INSTANCES;
 pub const NOM_COLLECTION_MILLEGRILLES: &str = "CoreTopologie/millegrilles";
 pub const NOM_COLLECTION_MILLEGRILLES_ADRESSES: &str = "CoreTopologie/millegrillesAdresses";
+pub const NOM_COLLECTION_FICHIERS: &str = "CoreTopologie/fichiers";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
 pub const DOMAINE_PRESENCE_NOM: &str = "CoreTopologie";
+pub const DOMAINE_FICHIERS: &str = "fichiers";
 
 const NOM_Q_TRANSACTIONS: &str = "CoreTopologie/transactions";
 const NOM_Q_VOLATILS: &str = "CoreTopologie/volatils";
@@ -71,7 +72,7 @@ const TRANSACTION_MONITOR: &str = TRANSACTION_INSTANCE;
 const TRANSACTION_SUPPRIMER_INSTANCE: &str = "supprimerInstance";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
-// const EVENEMENT_PRESENCE_DOMAINE: &str = EVENEMENT_PRESENCE_DOMAINE;
+const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
 const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 const EVENEMENT_INSTANCE_SUPPRIMEE: &str = "instanceSupprimee";
 const EVENEMENT_APPLICATION_DEMARREE: &str = "applicationDemarree";
@@ -249,6 +250,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     // Presence de domaines se fait sur l'evenement du domaine specifique (*)
     rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.*.{}", EVENEMENT_PRESENCE_DOMAINE), exchange: Securite::L4Secure });
+    rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_FICHIERS, EVENEMENT_PRESENCE_FICHIERS), exchange: Securite::L2Prive });
 
     let mut queues = Vec::new();
 
@@ -630,7 +632,13 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction, gestionn
 
     match m.action.as_str() {
         EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m, gestionnaire).await,
-        EVENEMENT_PRESENCE_MONITOR => traiter_presence_monitor(middleware, m, gestionnaire).await,
+        EVENEMENT_PRESENCE_MONITOR | EVENEMENT_PRESENCE_FICHIERS => {
+            match m.domaine.as_str() {
+                DOMAINE_FICHIERS => traiter_presence_fichiers(middleware, m, gestionnaire).await,
+                DOMAINE_APPLICATION_INSTANCE => traiter_presence_monitor(middleware, m, gestionnaire).await,
+                _ => Err(format!("Mauvais domaine ({}) pour un evenement de presence", m.domaine))?,
+            }
+        },
         EVENEMENT_APPLICATION_DEMARREE => traiter_evenement_application(middleware, m).await,
         EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
@@ -837,6 +845,66 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, ges
     Ok(None)
 }
 
+async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let estampille = &m.message.get_entete().estampille;
+    let event: PresenceFichiers = m.message.get_msg().map_contenu(None)?;
+    debug!("traiter_presence_fichiers Presence fichiers : {:?}", event);
+
+    let instance_id = match m.message.certificat.clone() {
+        Some(c) => {
+            if ! c.verifier_roles(vec![RolesCertificats::Fichiers]) {
+                Err(format!("core_topologie.traiter_presence_fichiers Certificat n'a pas le role 'fichiers'"))?
+            }
+            let subject = c.subject()?;
+            debug!("traiter_presence_fichiers Subject enveloppe : {:?}", subject);
+            match subject.get("commonName") {
+                Some(instance_id) => instance_id.clone(),
+                None => Err(format!("core_topologie.traiter_presence_fichiers organizationalUnit absent du message"))?
+            }
+        },
+        None => Err(format!("core_topologie.traiter_presence_fichiers Certificat absent du message"))?
+    };
+
+    debug!("traiter_presence_fichiers Presence fichiers recue pour instance_id {}", instance_id);
+
+    let mut unset_ops = doc! {};
+    let mut set_ops = doc! {
+        "type_store": event.type_store,
+    };
+    if event.url_download.is_some() && Some(String::from("")) != event.url_download {
+        set_ops.insert("url_download", event.url_download);
+    } else {
+        unset_ops.insert("url_download", true);
+    }
+    if event.consignation_url.is_some() && Some(String::from("")) != event.consignation_url {
+        set_ops.insert("consignation_url", event.consignation_url);
+    } else {
+        unset_ops.insert("consignation_url", true);
+    }
+
+    let mut ops = doc! {
+        "$setOnInsert": {"instance_id": &instance_id, CHAMP_CREATION: Utc::now()},
+        "$set": set_ops,
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+    if unset_ops.len() > 0 {
+        ops.insert("$unset", unset_ops);
+    }
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+    let filtre = doc! {"instance_id": &instance_id};
+    let options = UpdateOptions::builder()
+        .upsert(true)
+        .build();
+    let resultat = collection.update_one(filtre, ops, options).await?;
+    debug!("Resultat update : {:?}", resultat);
+
+    Ok(None)
+}
+
 async fn traiter_evenement_application<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
@@ -999,6 +1067,16 @@ struct PresenceMonitor {
     domaine: Option<String>,
     instance_id: String,
     services: Option<HashMap<String, InfoService>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PresenceFichiers {
+    #[serde(rename="typeStore")]
+    type_store: String,
+    #[serde(rename="urlDownload")]
+    url_download: Option<String>,
+    #[serde(rename="consignationUrl")]
+    consignation_url: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
