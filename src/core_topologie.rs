@@ -223,6 +223,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let requetes_publiques = vec![
         REQUETE_FICHE_MILLEGRILLE,
         REQUETE_APPLICATIONS_TIERS,
+        REQUETE_CONSIGNATION_FICHIERS,
     ];
     for req in requetes_publiques {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L1Public });
@@ -482,6 +483,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                         match message.action.as_str() {
                             REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
                             REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
+                            REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, message).await,
                             _ => {
                                 error!("Message requete/action non autorisee sur 1.public : '{}'. Message dropped.", message_action);
                                 Ok(None)
