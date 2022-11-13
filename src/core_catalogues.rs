@@ -8,6 +8,7 @@ use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{RegleValidationIdmg, ValidateurX509, VerificateurPermissions, VerificateurRegles};
 use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
@@ -99,7 +100,7 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
+    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao + ConfigMessages {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
@@ -204,7 +205,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
 /// Creer index MongoDB
 async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
-where M: MongoDao
+where M: MongoDao + ConfigMessages
 {
 
     // Transactions
@@ -218,6 +219,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_ENTETE_UUID_TRANSACTION), direction: 1}
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
@@ -232,6 +234,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1}
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
@@ -248,6 +251,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
@@ -262,6 +266,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(CHAMP_NOM_CATALOGUE), direction: 1},
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_CATALOGUES,
         champs_index_catalogues,
         Some(options_unique_catalogues)

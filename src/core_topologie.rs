@@ -22,6 +22,7 @@ use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sa
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
+use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -141,7 +142,7 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
+    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao + ConfigMessages {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
@@ -302,7 +303,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
 /// Creer index MongoDB
 async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
-    where M: MongoDao
+    where M: MongoDao + ConfigMessages
 {
 
     // Transactions
@@ -316,6 +317,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
         ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_ENTETE_UUID_TRANSACTION), direction: 1 }
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions),
@@ -330,6 +332,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
         ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1 }
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions),
@@ -346,6 +349,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
         ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1 },
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions),
@@ -360,6 +364,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
         ChampIndex { nom_champ: String::from(CHAMP_NOEUD_ID), direction: 1 },
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_NOEUDS,
         champs_index_noeuds,
         Some(options_unique_noeuds),
@@ -374,6 +379,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
         ChampIndex { nom_champ: String::from(CHAMP_DOMAINE), direction: 1 },
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_DOMAINES,
         champs_index_domaine,
         Some(options_unique_domaine),
@@ -388,6 +394,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
         ChampIndex { nom_champ: String::from(TRANSACTION_CHAMP_IDMG), direction: 1 },
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_MILLEGRILLES,
         champs_index_millegrilles,
         Some(options_unique_millegrilles),
@@ -402,6 +409,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
         ChampIndex { nom_champ: String::from(CHAMP_ADRESSES), direction: 1 },
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_MILLEGRILLES,
         champs_index_adresses,
         Some(options_unique_adresses),
@@ -416,6 +424,7 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
         ChampIndex { nom_champ: String::from(CHAMP_ADRESSE), direction: 1 },
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_MILLEGRILLES_ADRESSES,
         champs_index_mg_adresses,
         Some(options_unique_mg_adresses),

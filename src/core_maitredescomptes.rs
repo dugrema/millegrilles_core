@@ -10,7 +10,7 @@ use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{calculer_fingerprint_pk, csr_calculer_fingerprintpk, ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, NaiveDateTime, Utc};
-use millegrilles_common_rust::configuration::IsConfigNoeud;
+use millegrilles_common_rust::configuration::{ConfigMessages, IsConfigNoeud};
 use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L2Prive, L3Protege, L4Secure};
@@ -128,7 +128,7 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
+    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao + ConfigMessages {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
@@ -272,7 +272,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
 /// Creer index MongoDB
 async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
-where M: MongoDao
+where M: MongoDao + ConfigMessages
 {
 
     // Transactions
@@ -286,6 +286,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_ENTETE_UUID_TRANSACTION), direction: 1}
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
@@ -300,6 +301,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1}
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
@@ -316,6 +318,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
@@ -330,6 +333,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_USAGERS,
         champs_index_noeuds,
         Some(options_unique_noeuds)
@@ -344,6 +348,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(CHAMP_USAGER_NOM), direction: 1},
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_USAGERS,
         champs_index_noeuds,
         Some(options_unique_noeuds)
@@ -359,6 +364,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(CHAMP_CODE), direction: 1},
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_RECOVERY,
         champs_index_recovery,
         Some(options_unique_recovery)

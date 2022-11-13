@@ -98,7 +98,7 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao {
+    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao + ConfigMessages {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
@@ -221,7 +221,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
 /// Creer index MongoDB
 async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
-where M: MongoDao
+where M: MongoDao + ConfigMessages
 {
 
     // Transactions
@@ -235,6 +235,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_ENTETE_UUID_TRANSACTION), direction: 1}
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
@@ -249,6 +250,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1}
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
@@ -265,6 +267,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
     );
     middleware.create_index(
+        middleware,
         NOM_COLLECTION_TRANSACTIONS,
         champs_index_transactions,
         Some(options_unique_transactions)
@@ -281,6 +284,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(PKI_DOCUMENT_CHAMP_FINGERPRINT), direction: 1},
     );
     middleware.create_index(
+        middleware,
         COLLECTION_CERTIFICAT_NOM,
         champs_index_fingerprint,
         Some(options_unique_fingerprint)
@@ -295,6 +299,7 @@ where M: MongoDao
         ChampIndex {nom_champ: String::from(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK), direction: 1}
     );
     middleware.create_index(
+        middleware,
         COLLECTION_CERTIFICAT_NOM,
         champs_index_fingerprint_pk,
         Some(options_unique_fingerprint_pk)
