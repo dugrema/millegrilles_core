@@ -520,21 +520,6 @@ where
 {
     let commande: CommandeSauvegarderCertificat = m.message.get_msg().map_contenu(None)?;
 
-    // let pems = match m.message.get_msg().contenu.get("chaine_pem") {
-    //     Some(c) => match c.as_array() {
-    //         Some(c) => Ok(c),
-    //         None => Err("chaine_pem n'est pas une array"),
-    //     },
-    //     None => Err("chaine_pem manquante d'une commande de sauvegarde de certificat")
-    // }?;
-
-    // let mut pems_str = Vec::new();
-    // for pem in &commande.chaine_pem {
-    //     match pem.as_str() {
-    //         Some(p) => Ok(pems_str.push(p.to_owned())),
-    //         None => Err("pem n'est pas une str")
-    //     }?;
-    // }
     let ca_pem = match &commande.ca {
         Some(c) => Some(c.as_str()),
         None => None
@@ -639,6 +624,13 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
 
     // Valider format de la demande avec mapping
     let message_parsed: DemandeSignature = m.message.parsed.map_contenu(None)?;
+    let certificat = match &m.message.certificat {
+        Some(c) => c.clone(),
+        None => {
+            let e = json!({"ok": false, "err": "Certificat invalide"});
+            return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
+        }
+    };
 
     if m.message.verifier_roles(vec![RolesCertificats::Instance]) {
         if m.message.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
@@ -672,19 +664,55 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
                         message = Some(Cow::Borrowed(&m.message.parsed))
                     } else {
                         warn!("valider_demande_signature_csr Signature certificat maitre des cles volatil refuse (mauvais role)");
-                        return Ok(None);
+                        let e = json!({"ok": false, "err": "Mauvais role"});
+                        return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
                     }
                 },
-                None => { return Ok(None); }
+                None => {
+                    let e = json!({"ok": false, "err": "Aucun role"});
+                    return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
+                }
             }
         } else {
             error!("valider_demande_signature_csr Demande de CSR signee par une un certificat MaitreDesClesConnexion de niveau != 4.secure, REFUSE");
+            let e = json!({"ok": false, "err": "niveau != 4.secure"});
+            return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
         }
     } else if m.message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         debug!("valider_demande_signature_csr Demande de CSR signee par une delegation globale (proprietaire), demande approuvee");
         message = Some(Cow::Borrowed(&m.message.parsed));
+    } else if m.message.verifier_exchanges(vec![Securite::L4Secure]) {
+        debug!("valider_demande_signature_csr Demande de CSR signee pour un domaine");
+        if message_parsed.domaines.is_some() || message_parsed.exchanges.is_some() {
+            Err(format!("domaines/exchanges/roles doivent etre vide"))?;
+        }
+
+        let domaines = match certificat.get_domaines()? {
+            Some(d) => d,
+            None => {
+                Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, demandeur sans domaines : {:?}", m.message.certificat))?
+            }
+        };
+
+        let roles = match &message_parsed.roles {
+            Some(r) => r,
+            None => {
+                Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, demande sans roles : {:?}", m.message.certificat))?
+            }
+        };
+
+        // S'assurer que tous les roles demandes sont l'equivalent de domaines en minuscules.
+        let domaines_minuscules: Vec<String> = domaines.iter().map(|d| d.to_lowercase()).collect();
+        for role in roles {
+            debug!("Role {} in roles : {:?}?", role, domaines_minuscules);
+            if ! domaines_minuscules.contains(role) {
+                Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, role {} non autorise pour domaines : {:?}", role, m.message.certificat))?
+            }
+        }
+
+        message = Some(Cow::Borrowed(&m.message.parsed));
     } else {
-        warn!("valider_demande_signature_csr Demande de signature de CSR refusee pour demandeur qui n'est pas une instance : {:?}", m.message.certificat);
+        Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee pour demandeur qui n'est pas autorise : {:?}", m.message.certificat))?;
     }
 
     Ok(message)
