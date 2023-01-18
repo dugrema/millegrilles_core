@@ -797,6 +797,14 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, ges
                             info_app.insert("millegrille", millegrille);
                         }
 
+                        if let Some(a) = labels.get("nom_application") {
+                            info_app.insert("name_property", a.as_str());
+                        };
+
+                        if let Some(s) = labels.get("supporte_usagers") {
+                            info_app.insert("supporte_usagers", s.as_str() != "false");
+                        };
+
                         applications.push(Bson::Document(info_app));
                     }
                 }
@@ -1173,12 +1181,22 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
                                     None => None
                                 };
 
-                                let info_app = json!({
+                                let mut info_app = json!({
                                     "application": app.application.as_str(),
                                     "securite": securite_str(&securite),
                                     "url": url,
                                     "onion": onion,
                                 });
+
+                                let mut info_app_doc = info_app.as_object_mut().expect("as_object_mut");
+
+                                if let Some(p) = app.name_property.as_ref() {
+                                    info_app_doc.insert("name_property".to_string(), Value::String(p.into()));
+                                }
+
+                                if let Some(p) = app.supporte_usagers.as_ref() {
+                                    info_app_doc.insert("supporte_usagers".to_string(), Value::Bool(p.to_owned()));
+                                }
 
                                 apps.push(info_app);
 
@@ -1234,6 +1252,8 @@ struct InformationApplication {
     securite: Option<String>,
     url: Option<String>,
     millegrille: Option<String>,
+    name_property: Option<String>,
+    supporte_usagers: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
