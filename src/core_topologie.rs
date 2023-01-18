@@ -1587,7 +1587,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
             None => None
         };
         let set_json = json!({
-            "adresses": &fiche_publique.adresses,
+            // "adresses": &fiche_publique.adresses,
             "applications": apps,
             "chiffrage": &fiche_publique.chiffrage,
             "ca": &fiche_publique.ca,
@@ -1610,36 +1610,36 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
         }
     }
 
-    // Sauvegarder adresses
-    {
-        let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
-        debug!("Verification headers : {:?}", reponse_fiche.headers);
-        let etag = match reponse_fiche.headers.as_ref() {
-            Some(e) => e.get("ETag").cloned(),
-            None => None
-        };
-        if let Some(adresses) = fiche_publique.adresses.as_ref() {
-            for adresse in adresses {
-                let filtre = doc! { "adresse": adresse };
-                let ops = doc! {
-                    "$set": {
-                        "idmg": &idmg_tiers,
-                        "etag": &etag,
-                    },
-                    "$setOnInsert": {
-                        "adresse": adresse,
-                        CHAMP_CREATION: Utc::now(),
-                    },
-                    "$currentDate": {CHAMP_MODIFICATION: true},
-                };
-                let options = UpdateOptions::builder().upsert(true).build();
-                let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
-                if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
-                    error!("resoudre_url Erreur, adresse {} pour idmg {} n'a pas ete sauvegardee", adresse, idmg_tiers);
-                }
-            }
-        }
-    }
+    // // Sauvegarder adresses
+    // {
+    //     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
+    //     debug!("Verification headers : {:?}", reponse_fiche.headers);
+    //     let etag = match reponse_fiche.headers.as_ref() {
+    //         Some(e) => e.get("ETag").cloned(),
+    //         None => None
+    //     };
+    //     if let Some(adresses) = fiche_publique.adresses.as_ref() {
+    //         for adresse in adresses {
+    //             let filtre = doc! { "adresse": adresse };
+    //             let ops = doc! {
+    //                 "$set": {
+    //                     "idmg": &idmg_tiers,
+    //                     "etag": &etag,
+    //                 },
+    //                 "$setOnInsert": {
+    //                     "adresse": adresse,
+    //                     CHAMP_CREATION: Utc::now(),
+    //                 },
+    //                 "$currentDate": {CHAMP_MODIFICATION: true},
+    //             };
+    //             let options = UpdateOptions::builder().upsert(true).build();
+    //             let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
+    //             if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
+    //                 error!("resoudre_url Erreur, adresse {} pour idmg {} n'a pas ete sauvegardee", adresse, idmg_tiers);
+    //             }
+    //         }
+    //     }
+    // }
 
     Ok(Some(idmg_tiers))
 }
@@ -1768,19 +1768,19 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
 
     let chiffrage = get_cles_chiffrage(middleware).await;
 
-    let mut adresses = Vec::new();
+    // let mut adresses = Vec::new();
     let mut applications: HashMap<String, Vec<ApplicationPublique>> = HashMap::new();
 
     while let Some(inst) = curseur.next().await {
         let doc_instance = inst?;
         let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
         debug!("Information instance : {:?}", info_instance);
-        if let Some(d) = &info_instance.domaine {
-            adresses.push(d.to_owned());
-        }
-        if let Some(o) = &info_instance.onion {
-            adresses.push(o.to_owned());
-        }
+        // if let Some(d) = &info_instance.domaine {
+        //     adresses.push(d.to_owned());
+        // }
+        // if let Some(o) = &info_instance.onion {
+        //     adresses.push(o.to_owned());
+        // }
 
         // Conserver la liste des applications/versions par nom d'application
         let mut app_versions = HashMap::new();
@@ -1841,7 +1841,7 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
     }
 
     Ok(FichePublique {
-        adresses: Some(adresses),
+        // adresses: Some(adresses),
         applications: Some(applications),
         chiffrage: Some(chiffrage),
         ca: Some(middleware.ca_pem().into()),
@@ -1869,7 +1869,7 @@ async fn get_cles_chiffrage<M>(middleware: &M) -> Vec<Vec<String>>
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct FichePublique {
-    adresses: Option<Vec<String>>,
+    // adresses: Option<Vec<String>>,
     applications: Option<HashMap<String, Vec<ApplicationPublique>>>,
     chiffrage: Option<Vec<Vec<String>>>,
     ca: Option<String>,
