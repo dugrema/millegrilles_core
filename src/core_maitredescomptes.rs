@@ -1374,7 +1374,6 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
     let commande: CommandeAjouterCle = message.message.get_msg().map_contenu(None)?;
 
     let nom_usager = commande.nom_usager.as_str();
-    let fingerprint_pk = commande.fingerprint_pk.as_str();
 
     // Validation - s'assurer que le compte usager existe
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
@@ -1449,7 +1448,7 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
         Err(e) => Err(format!("Erreur conversion en CommandeAjouterCle : {:?}", e))?
     };
     let nom_usager = commande.nom_usager.as_str();
-    let fingerprint_pk = commande.fingerprint_pk.as_str();
+    let fingerprint_pk = commande.fingerprint_pk.as_ref();
     let filtre = doc! {CHAMP_USAGER_NOM: nom_usager};
 
     let commande_bson = match convertir_to_bson(commande.cle) {
@@ -1460,10 +1459,12 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
     let reset_cles = match commande.reset_cles {Some(r) => r, None => false};
 
     let commande_push = doc! {CHAMP_WEBAUTHN: &commande_bson};
-    let mut commande_set = doc! {
-        format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): true,
-        format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_association"): Utc::now(),
-    };
+
+    let mut commande_set = doc! {};
+    if let Some(fp) = fingerprint_pk {
+        commande_set.insert(format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fp, "associe"), true);
+        commande_set.insert(format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fp, "date_association"), Utc::now());
+    }
     if reset_cles {
         debug!("Reset cles webauth pour compte {}", nom_usager);
         commande_set.insert(CHAMP_WEBAUTHN, bson!(vec!(commande_bson)));
@@ -1584,7 +1585,7 @@ struct InfoAssociation {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CommandeAjouterCle {
     cle: CompteCredential,
-    fingerprint_pk: String,
+    fingerprint_pk: Option<String>,
     #[serde(rename="nomUsager")]
     nom_usager: String,
     #[serde(rename="reponseClient")]
