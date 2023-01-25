@@ -89,6 +89,7 @@ const CHAMP_DELEGATION_VERSION: &str = "delegations_version";
 const CHAMP_FINGERPRINT_PK: &str = "fingerprint_pk";
 const CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: &str = "activations_par_fingerprint_pk";
 const CHAMP_WEBAUTHN: &str = "webauthn";
+const CHAMP_WEBAUTHN_HOSTNAMES: &str = "webauthn_hostnames";
 const CHAMP_CODE: &str = "code";
 
 /// Instance statique du gestionnaire de maitredescomptes
@@ -1449,6 +1450,8 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
     };
     let nom_usager = commande.nom_usager.as_str();
     let fingerprint_pk = commande.fingerprint_pk.as_ref();
+    let hostname = commande.hostname.as_ref();
+
     let filtre = doc! {CHAMP_USAGER_NOM: nom_usager};
 
     let commande_bson = match convertir_to_bson(commande.cle) {
@@ -1458,16 +1461,27 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
 
     let reset_cles = match commande.reset_cles {Some(r) => r, None => false};
 
-    let commande_push = doc! {CHAMP_WEBAUTHN: &commande_bson};
+    let mut commande_push = doc! {
+        CHAMP_WEBAUTHN: &commande_bson,
+    };
+    if let Some(h) = hostname {
+        let hostname_converti = h.replace(".", "_");
+        commande_push.insert(format!("{}.{}", CHAMP_WEBAUTHN_HOSTNAMES, hostname_converti), &commande_bson);
+    }
 
     let mut commande_set = doc! {};
     if let Some(fp) = fingerprint_pk {
         commande_set.insert(format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fp, "associe"), true);
         commande_set.insert(format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fp, "date_association"), Utc::now());
     }
+
     if reset_cles {
         debug!("Reset cles webauth pour compte {}", nom_usager);
-        commande_set.insert(CHAMP_WEBAUTHN, bson!(vec!(commande_bson)));
+        commande_set.insert(CHAMP_WEBAUTHN, bson!(vec!(&commande_bson)));
+        if let Some(h) = hostname {
+            let hostname_converti = h.replace(".", "_");
+            commande_set.insert(CHAMP_WEBAUTHN_HOSTNAMES, doc!{hostname_converti: bson!(vec!(commande_bson))});
+        }
     }
 
     let mut ops = doc! {
@@ -1591,6 +1605,7 @@ struct CommandeAjouterCle {
     #[serde(rename="reponseClient")]
     reponse_client: MessageMilleGrille,
     reset_cles: Option<bool>,
+    hostname: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
