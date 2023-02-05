@@ -907,6 +907,10 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
     let mut unset_ops = doc! {};
     let mut set_ops = doc! {
         "type_store": event.type_store,
+        "fichiers_nombre": event.fichiers_nombre,
+        "corbeille_nombre": event.corbeille_nombre,
+        "fichiers_taille": event.fichiers_taille,
+        "corbeille_taille": event.corbeille_taille,
     };
     if event.url_download.is_some() && Some(String::from("")) != event.url_download {
         set_ops.insert("url_download", event.url_download);
@@ -1159,6 +1163,10 @@ struct PresenceFichiers {
     url_download: Option<String>,
     #[serde(rename="consignationUrl")]
     consignation_url: Option<String>,
+    fichiers_nombre: Option<i64>,
+    corbeille_nombre: Option<i64>,
+    fichiers_taille: Option<i64>,
+    corbeille_taille: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2203,6 +2211,14 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
     let requete: RequeteConsignationFichiers = message.message.parsed.map_contenu(None)?;
     debug!("requete_consignation_fichiers Parsed : {:?}", requete);
 
+    let instance_id = match message.message.certificat {
+        Some(inner) => match inner.subject()?.get("commonName") {
+            Some(inner) => inner.clone(),
+            None => Err(format!("requete_consignation_fichiers Erreur chargement, certificat sans commonName"))?
+        },
+        None => Err(format!("requete_consignation_fichiers Erreur chargement, certificat absent"))?
+    };
+
     let mut projection = doc! {
         "instance_id": 1,
         "consignation_url": 1,
@@ -2241,7 +2257,23 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
                     }
                 }
             }
-            None => doc! { "primaire": true, }
+            None => {
+                if let Some(true) = requete.primaire {
+                    doc! { "primaire": true, }
+                } else {
+                    // On ne veut pas le primaire si secondaire local est disponible
+                    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+                    let filtre = doc! { "instance_id": &instance_id };
+                    let compte_doc = collection.count_documents(filtre.clone(), None).await?;
+                    if compte_doc > 0 {
+                        debug!("requete_consignation_fichiers Utilisation instance_id local {}", instance_id);
+                        filtre
+                    } else {
+                        // L'instance n'a pas de fichiers localement, on utilise le primaire
+                        doc! { "primaire": true }
+                    }
+                }
+            }
         }
     };
 
