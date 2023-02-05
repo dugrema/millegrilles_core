@@ -18,7 +18,7 @@ use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sauvegarder_traiter_transaction, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
@@ -73,6 +73,7 @@ const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_INSTANCE: &str = "instance";
 const TRANSACTION_MONITOR: &str = TRANSACTION_INSTANCE;
 const TRANSACTION_SUPPRIMER_INSTANCE: &str = "supprimerInstance";
+const TRANSACTION_SET_FICHIERS_PRIMAIRE: &str = "setFichiersPrimaire";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
@@ -281,6 +282,10 @@ pub fn preparer_queues() -> Vec<QueueType> {
     });
     rk_transactions.push(ConfigRoutingExchange {
         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_SUPPRIMER_INSTANCE).into(),
+        exchange: Securite::L4Secure,
+    });
+    rk_transactions.push(ConfigRoutingExchange {
+        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_SET_FICHIERS_PRIMAIRE).into(),
         exchange: Securite::L4Secure,
     });
 
@@ -623,7 +628,7 @@ async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, m
     }?;
 
     match m.action.as_str() {
-        TRANSACTION_DOMAINE | TRANSACTION_MONITOR | TRANSACTION_SUPPRIMER_INSTANCE => {
+        TRANSACTION_DOMAINE | TRANSACTION_MONITOR | TRANSACTION_SUPPRIMER_INSTANCE | TRANSACTION_SET_FICHIERS_PRIMAIRE => {
             // sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             // Ok(None)
             Ok(sauvegarder_traiter_transaction(middleware, m, gestionnaire).await?)
@@ -692,6 +697,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
         TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
+        TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -868,6 +874,11 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, ges
     Ok(None)
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TransactionSetFichiersPrimaire {
+    instance_id: String
+}
+
 async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -923,7 +934,19 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
         .upsert(true)
         .build();
     let resultat = collection.update_one(filtre, ops, options).await?;
-    debug!("Resultat update : {:?}", resultat);
+    debug!("traiter_presence_fichiers Resultat update : {:?}", resultat);
+
+    // Verifier si on a un primaire - sinon generer transaction pour set primaire par defaut
+    let filtre = doc! {"primaire": true};
+    let resultat = collection.find_one(filtre, None).await?;
+    if resultat.is_none() {
+        debug!("traiter_presence_fichiers Assigne le role de fichiers primaire a {}", instance_id);
+        let transaction = TransactionSetFichiersPrimaire { instance_id };
+
+        // Sauvegarder la transaction
+        sauvegarder_traiter_transaction_serializable(
+            middleware, &transaction, gestionnaire, DOMAINE_NOM, TRANSACTION_SET_FICHIERS_PRIMAIRE).await?;
+    }
 
     Ok(None)
 }
@@ -980,6 +1003,42 @@ async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: Message
     // Sauvegarder la transaction, marquer complete et repondre
     let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
     Ok(reponse)
+}
+
+async fn transaction_set_fichiers_primaire<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: ValidateurX509 + GenerateurMessages + MongoDao,
+        T: Transaction
+{
+    let transaction = match transaction.convertir::<TransactionSetFichiersPrimaire>() {
+        Ok(t) => t,
+        Err(e) => Err(format!("transaction_set_fichiers_primaire Erreur convertir {:?}", e))?
+    };
+    debug!("transaction_set_fichiers_primaire Set fichiers primaire : {:?}", transaction);
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+
+    // Retirer le flag primaire de toutes les instances
+    let filtre = doc! {"instance_id": {"$ne": &transaction.instance_id}};
+    let ops = doc!{
+        "$set": {"primaire": false},
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    if let Err(e) = collection.update_many(filtre, ops, None).await {
+        Err(format!("transaction_set_fichiers_primaire Erreur update_many : {:?}", e))?
+    }
+
+    // Set flag primaire sur la bonne instance
+    let filtre = doc! {"instance_id": &transaction.instance_id};
+    let ops = doc!{
+        "$set": {"primaire": true},
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    if let Err(e) = collection.update_one(filtre, ops, None).await {
+        Err(format!("transaction_set_fichiers_primaire Erreur update_one : {:?}", e))?
+    }
+
+    Ok(None)
 }
 
 async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
