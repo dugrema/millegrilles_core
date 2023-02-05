@@ -9,7 +9,7 @@ use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{Timelike, Utc};
-use millegrilles_common_rust::common_messages::ReponseInformationConsignationFichiers;
+use millegrilles_common_rust::common_messages::{ReponseInformationConsignationFichiers, RequeteConsignationFichiers};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
@@ -2153,7 +2153,6 @@ async fn requete_applications_tiers<M>(middleware: &M, message: MessageValideAct
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
-    debug!("requete_applications_tiers");
     let requete: RequeteApplicationsTiers = message.message.parsed.map_contenu(None)?;
     debug!("requete_applications_tiers Parsed : {:?}", requete);
 
@@ -2201,28 +2200,49 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
-    debug!("requete_consignation_fichiers");
-    // let requete: RequeteApplicationsTiers = message.message.parsed.map_contenu(None)?;
-    // debug!("requete_consignation_fichiers Parsed : {:?}", requete);
+    let requete: RequeteConsignationFichiers = message.message.parsed.map_contenu(None)?;
+    debug!("requete_consignation_fichiers Parsed : {:?}", requete);
 
-    let projection = doc! {
+    let mut projection = doc! {
         "instance_id": 1,
         "consignation_url": 1,
         "type_store": 1,
         "url_download": 1,
     };
 
-    let sort = doc! {
-        CHAMP_MODIFICATION: -1
-    };
+    if let Some(true) = requete.stats {
+        // Inclure information des fichiers et espace
+        projection.insert("fichiers_taille", 1);
+        projection.insert("fichiers_nombre", 1);
+        projection.insert("corbeille_taille", 1);
+        projection.insert("corbeille_nombre", 1);
+        projection.insert("espace_disponible", 1);
+    }
 
     let options = FindOneOptions::builder()
         .projection(projection)
-        .sort(sort)
         .build();
 
-    let filtre = doc! {
-        "consignation_url": {"$exists": true},
+    let filtre = match requete.instance_id {
+        Some(inner) => doc! { "instance_id": inner },
+        None => match requete.hostname {
+            Some(inner) => {
+                // Trouver une instance avec le hostname demande
+                let collection = middleware.get_collection(NOM_COLLECTION_INSTANCES)?;
+                let filtre = doc! {"$or": [{"domaine": &inner}, {"onion": &inner}]};
+                match collection.find_one(filtre, None).await? {
+                    Some(inner) => {
+                        let info_instance: InformationMonitor = convertir_bson_deserializable(inner)?;
+                        doc! { "instance_id": info_instance.instance_id }
+                    },
+                    None => {
+                        let reponse = json!({"ok": false});
+                        return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+                    }
+                }
+            }
+            None => doc! { "primaire": true, }
+        }
     };
 
     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
@@ -2231,22 +2251,26 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
         Some(f) => {
             let mut fiche_reponse: ReponseInformationConsignationFichiers = convertir_bson_deserializable(f)?;
             fiche_reponse.ok = Some(true);
+
+            // Recuperer info instance pour domaine et onion
+            let filtre = doc! {"instance_id": &fiche_reponse.instance_id};
+            let collection = middleware.get_collection(NOM_COLLECTION_INSTANCES)?;
+            if let Some(doc_instance) = collection.find_one(filtre, None).await? {
+                let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
+                let mut domaines = Vec::new();
+                if let Some(inner) = info_instance.domaine {
+                    domaines.push(inner);
+                }
+                if let Some(inner) = info_instance.onion {
+                    domaines.push(inner);
+                }
+                fiche_reponse.hostnames = Some(domaines);
+            }
+
             middleware.formatter_reponse(&fiche_reponse, None)
         },
         None => middleware.formatter_reponse(&json!({"ok": false}), None)
     }?;
-    // let reponse = middleware.formatter_reponse(&json!({"fiches": fiches}), None)?;
-
-    // let reponse = match collection.find_one(filtre, Some(options)).await? {
-    //     Some(d) => {
-    //         let document_applications: DocumentApplicationsTiers = convertir_bson_deserializable(d)?;
-    //         let reponse_applications: ReponseApplicationsTiers = document_applications.try_into()?;
-    //         middleware.formatter_reponse(reponse_applications, None)
-    //     }
-    //     None => {
-    //         middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)
-    //     }
-    // }?;
 
     Ok(Some(reponse))
 }
