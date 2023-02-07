@@ -8,7 +8,7 @@ use millegrilles_common_rust::bson::{Bson, DateTime, doc, to_bson};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::chrono::{Timelike, Utc};
+use millegrilles_common_rust::chrono::{Datelike, Timelike, Utc};
 use millegrilles_common_rust::common_messages::{ReponseInformationConsignationFichiers, RequeteConsignationFichiers};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
@@ -19,7 +19,7 @@ use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, convertir_value_mongodate, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
 use millegrilles_common_rust::configuration::ConfigMessages;
@@ -68,6 +68,7 @@ const REQUETE_RESOLVE_IDMG: &str = "resolveIdmg";
 const REQUETE_FICHE_MILLEGRILLE: &str = "ficheMillegrille";
 const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
 const REQUETE_CONSIGNATION_FICHIERS: &str = "getConsignationFichiers";
+const REQUETE_CONFIGURATION_FICHIERS: &str = "getConfigurationFichiers";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_INSTANCE: &str = "instance";
@@ -201,6 +202,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let requetes_protegees = vec![
         REQUETE_LISTE_DOMAINES,
         REQUETE_LISTE_NOEUDS,
+        REQUETE_CONFIGURATION_FICHIERS,
         // REQUETE_INFO_DOMAINE,
         // REQUETE_INFO_NOEUD,
     ];
@@ -537,6 +539,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                         match message_action.as_str() {
                             REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
                             REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
+                            REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, message).await,
                             _ => {
                                 error!("Message requete/action inconnue : '{}'. Message dropped.", message_action);
                                 Ok(None)
@@ -560,26 +563,6 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
         }
     }
 
-    // match message.domaine.as_str() {
-    //     DOMAINE_NOM => {
-    //         match message.action.as_str() {
-    //             REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
-    //             REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
-    //             REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
-    //             REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
-    //             REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
-    //             REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
-    //             _ => {
-    //                 error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
-    //                 Ok(None)
-    //             }
-    //         }
-    //     }
-    //     _ => {
-    //         error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
-    //         Ok(None)
-    //     }
-    // }
 }
 
 async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
@@ -2305,6 +2288,72 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
     }?;
 
     Ok(Some(reponse))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReponseConsignationSatellite {
+    pub instance_id: String,
+    pub consignation_url: String,
+    pub type_store: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_download: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostnames: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primaire: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fichiers_taille: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fichiers_nombre: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corbeille_taille: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub corbeille_nombre: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub espace_disponible: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub derniere_modification: Option<DateEpochSeconds>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReponseConfigurationFichiers {
+    liste: Vec<ReponseConsignationSatellite>,
+    ok: bool,
+}
+
+async fn requete_configuration_fichiers<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+{
+    let requete: RequeteConfigurationFichiers = message.message.parsed.map_contenu(None)?;
+    debug!("requete_configuration_fichiers Parsed : {:?}", requete);
+
+    let mut liste = Vec::new();
+
+    let filtre = doc! {};
+    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+    let mut curseur = collection.find(filtre, None).await?;
+    while let Some(inner) = curseur.next().await {
+        let doc_inner = inner?;
+
+        // Extraire date BSON separement
+        let date_modif = match doc_inner.get(CHAMP_MODIFICATION) {
+            Some(inner) => Some(DateEpochSeconds::try_from(inner.to_owned())?),
+            None => None
+        };
+
+        let mut fiche: ReponseConsignationSatellite = convertir_bson_deserializable(doc_inner)?;
+        fiche.derniere_modification = date_modif;  // Re-injecter date
+
+        liste.push(fiche);
+    }
+
+    let reponse = ReponseConfigurationFichiers { liste, ok: true };
+    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RequeteConfigurationFichiers {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
