@@ -23,7 +23,7 @@ use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializa
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
 use millegrilles_common_rust::configuration::ConfigMessages;
-use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions};
+use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions, ReturnDocument};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::reqwest::Url;
@@ -75,6 +75,7 @@ const TRANSACTION_INSTANCE: &str = "instance";
 const TRANSACTION_MONITOR: &str = TRANSACTION_INSTANCE;
 const TRANSACTION_SUPPRIMER_INSTANCE: &str = "supprimerInstance";
 const TRANSACTION_SET_FICHIERS_PRIMAIRE: &str = "setFichiersPrimaire";
+const TRANSACTION_CONFIGURER_CONSIGNATION: &str = "configurerConsignation";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
@@ -237,6 +238,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         //TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
         TRANSACTION_MONITOR,
         TRANSACTION_SUPPRIMER_INSTANCE,
+        TRANSACTION_CONFIGURER_CONSIGNATION,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
@@ -273,23 +275,20 @@ pub fn preparer_queues() -> Vec<QueueType> {
         }
     ));
 
+
+    let transactions_liste = vec![
+        TRANSACTION_MONITOR,
+        TRANSACTION_SUPPRIMER_INSTANCE,
+        TRANSACTION_SET_FICHIERS_PRIMAIRE,
+        TRANSACTION_CONFIGURER_CONSIGNATION,
+    ];
     let mut rk_transactions = Vec::new();
-    // rk_transactions.push(ConfigRoutingExchange {
-    //     routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_MONITOR).into(),
-    //     exchange: Securite::L3Protege,
-    // });
-    rk_transactions.push(ConfigRoutingExchange {
-        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_MONITOR).into(),
-        exchange: Securite::L4Secure,
-    });
-    rk_transactions.push(ConfigRoutingExchange {
-        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_SUPPRIMER_INSTANCE).into(),
-        exchange: Securite::L4Secure,
-    });
-    rk_transactions.push(ConfigRoutingExchange {
-        routing_key: format!("transaction.{}.{}", DOMAINE_NOM, TRANSACTION_SET_FICHIERS_PRIMAIRE).into(),
-        exchange: Securite::L4Secure,
-    });
+    for t in transactions_liste {
+        rk_transactions.push(ConfigRoutingExchange {
+            routing_key: format!("transaction.{}.{}", DOMAINE_NOM, t).into(),
+            exchange: Securite::L4Secure,
+        });
+    }
 
     // Queue de transactions
     queues.push(QueueType::ExchangeQueue(
@@ -584,6 +583,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionna
         // Commandes standard
         TRANSACTION_MONITOR => traiter_commande_monitor(middleware, m, gestionnaire).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire).await,
+        TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire).await,
         //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
         //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
         //
@@ -611,7 +611,8 @@ async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, m
     }?;
 
     match m.action.as_str() {
-        TRANSACTION_DOMAINE | TRANSACTION_MONITOR | TRANSACTION_SUPPRIMER_INSTANCE | TRANSACTION_SET_FICHIERS_PRIMAIRE => {
+        TRANSACTION_DOMAINE | TRANSACTION_MONITOR | TRANSACTION_SUPPRIMER_INSTANCE |
+        TRANSACTION_SET_FICHIERS_PRIMAIRE | TRANSACTION_CONFIGURER_CONSIGNATION => {
             // sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             // Ok(None)
             Ok(sauvegarder_traiter_transaction(middleware, m, gestionnaire).await?)
@@ -681,6 +682,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
+        TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
     }
 }
@@ -889,22 +891,22 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
 
     let mut unset_ops = doc! {};
     let mut set_ops = doc! {
-        "type_store": event.type_store,
+        // "type_store": event.type_store,
         "fichiers_nombre": event.fichiers_nombre,
         "corbeille_nombre": event.corbeille_nombre,
         "fichiers_taille": event.fichiers_taille,
         "corbeille_taille": event.corbeille_taille,
     };
-    if event.url_download.is_some() && Some(String::from("")) != event.url_download {
-        set_ops.insert("url_download", event.url_download);
-    } else {
-        unset_ops.insert("url_download", true);
-    }
-    if event.consignation_url.is_some() && Some(String::from("")) != event.consignation_url {
-        set_ops.insert("consignation_url", event.consignation_url);
-    } else {
-        unset_ops.insert("consignation_url", true);
-    }
+    // if event.url_download.is_some() && Some(String::from("")) != event.url_download {
+    //     set_ops.insert("url_download", event.url_download);
+    // } else {
+    //     unset_ops.insert("url_download", true);
+    // }
+    // if event.consignation_url.is_some() && Some(String::from("")) != event.consignation_url {
+    //     set_ops.insert("consignation_url", event.consignation_url);
+    // } else {
+    //     unset_ops.insert("consignation_url", true);
+    // }
 
     let mut ops = doc! {
         "$setOnInsert": {"instance_id": &instance_id, CHAMP_CREATION: Utc::now()},
@@ -992,6 +994,31 @@ async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: Message
     Ok(reponse)
 }
 
+async fn traiter_commande_configurer_consignation<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("traiter_commande_configurer_consignation : {:?}", &message.message);
+
+    // Verifier autorisation
+    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+        }
+    }
+
+    // Valider commande
+    if let Err(e) = message.message.get_msg().map_contenu::<TransactionConfigurerConsignation>(None) {
+        Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?;
+    };
+
+    // Sauvegarder la transaction, marquer complete et repondre
+    let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
+    Ok(reponse)
+}
+
 async fn transaction_set_fichiers_primaire<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -1026,6 +1053,77 @@ async fn transaction_set_fichiers_primaire<M, T>(middleware: &M, transaction: T)
     }
 
     Ok(None)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TransactionConfigurerConsignation {
+    instance_id: String,
+    type_store: String,
+    url_download: Option<String>,
+    consignation_url: Option<String>,
+    hostname_sftp: Option<String>,
+    username_sftp: Option<String>,
+    remote_path_sftp: Option<String>,
+    key_type_sftp: Option<String>,
+}
+
+async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: ValidateurX509 + GenerateurMessages + MongoDao,
+        T: Transaction
+{
+    let transaction = match transaction.convertir::<TransactionConfigurerConsignation>() {
+        Ok(t) => t,
+        Err(e) => Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
+    };
+    debug!("transaction_configurer_consignation Set fichiers primaire : {:?}", transaction);
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+
+    let set_ops = doc! {
+        "type_store": transaction.type_store,
+        "url_download": transaction.url_download,
+        "consignation_url": transaction.consignation_url,
+        "hostname_sftp": transaction.hostname_sftp,
+        "username_sftp": transaction.username_sftp,
+        "remote_path_sftp": transaction.remote_path_sftp,
+        "key_type_sftp": transaction.key_type_sftp,
+    };
+
+    let ops = doc! {
+        "$set": set_ops,
+        "$setOnInsert": {
+            "instance_id": &transaction.instance_id,
+            CHAMP_CREATION: Utc::now(),
+            "primaire": false,
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+
+    let options = FindOneAndUpdateOptions::builder()
+        .return_document(ReturnDocument::After)
+        .upsert(true)
+        .build();
+
+    let filtre = doc!{ "instance_id": &transaction.instance_id };
+    let configuration = match collection.find_one_and_update(filtre, ops, Some(options)).await {
+        Ok(inner) => match inner {
+            Some(inner) => inner,
+            None => Err(format!("transaction_configurer_consignation Erreur sauvegarde configuration consignation : Aucun doc conserve"))?
+        },
+        Err(e) => Err(format!("transaction_configurer_consignation Erreur sauvegarde configuration consignation : {:?}", e))?
+    };
+
+    // Emettre commande de modification de configuration pour fichiers
+    let routage = RoutageMessageAction::builder("fichiers", "modifierConfiguration")
+        .exchanges(vec![Securite::L2Prive])
+        .partition(transaction.instance_id)
+        .build();
+
+    // Transmettre commande non-blocking
+    middleware.transmettre_commande(routage, &configuration, false).await?;
+
+    middleware.reponse_ok()
 }
 
 async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
@@ -1140,11 +1238,8 @@ struct PresenceMonitor {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceFichiers {
-    #[serde(rename="typeStore")]
     type_store: String,
-    #[serde(rename="urlDownload")]
     url_download: Option<String>,
-    #[serde(rename="consignationUrl")]
     consignation_url: Option<String>,
     fichiers_nombre: Option<i64>,
     corbeille_nombre: Option<i64>,
@@ -2207,6 +2302,10 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
         "consignation_url": 1,
         "type_store": 1,
         "url_download": 1,
+        "hostname_sftp": 1,
+        "username_sftp": 1,
+        "remote_path_sftp": 1,
+        "key_type_sftp": 1,
     };
 
     if let Some(true) = requete.stats {
@@ -2301,6 +2400,16 @@ pub struct ReponseConsignationSatellite {
     pub hostnames: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primaire: Option<bool>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname_sftp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username_sftp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_path_sftp: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_type_sftp: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fichiers_taille: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
