@@ -239,6 +239,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_MONITOR,
         TRANSACTION_SUPPRIMER_INSTANCE,
         TRANSACTION_CONFIGURER_CONSIGNATION,
+        TRANSACTION_SET_FICHIERS_PRIMAIRE,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
@@ -584,6 +585,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionna
         TRANSACTION_MONITOR => traiter_commande_monitor(middleware, m, gestionnaire).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire).await,
+        TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire).await,
         //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
         //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
         //
@@ -1019,6 +1021,31 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, message: Me
     Ok(reponse)
 }
 
+async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("traiter_commande_set_fichiers_primaire : {:?}", &message.message);
+
+    // Verifier autorisation
+    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("traiter_commande_set_fichiers_primaire autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("core_topologie.traiter_commande_set_fichiers_primaire Erreur preparation reponse  : {:?}", e))?
+        }
+    }
+
+    // Valider commande
+    if let Err(e) = message.message.get_msg().map_contenu::<TransactionSetFichiersPrimaire>(None) {
+        Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?;
+    };
+
+    // Sauvegarder la transaction, marquer complete et repondre
+    let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
+    Ok(reponse)
+}
+
 async fn transaction_set_fichiers_primaire<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -1052,7 +1079,13 @@ async fn transaction_set_fichiers_primaire<M, T>(middleware: &M, transaction: T)
         Err(format!("transaction_set_fichiers_primaire Erreur update_one : {:?}", e))?
     }
 
-    Ok(None)
+    // Emettre evenement de changement de consignation primaire
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM, "changementConsignationPrimaire")
+        .exchanges(vec![Securite::L2Prive])
+        .build();
+    middleware.emettre_evenement(routage, &transaction).await?;
+
+    middleware.reponse_ok()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
