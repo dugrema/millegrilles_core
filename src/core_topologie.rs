@@ -2425,8 +2425,8 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReponseConsignationSatellite {
     pub instance_id: String,
-    pub consignation_url: String,
-    pub type_store: String,
+    pub consignation_url: Option<String>,
+    pub type_store: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url_download: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
