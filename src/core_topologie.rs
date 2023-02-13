@@ -1102,6 +1102,12 @@ struct TransactionConfigurerConsignation {
     username_sftp: Option<String>,
     remote_path_sftp: Option<String>,
     key_type_sftp: Option<String>,
+    // AWS S3
+    s3_access_key_id: Option<String>,
+    s3_region: Option<String>,
+    s3_endpoint: Option<String>,
+    s3_bucket: Option<String>,
+
     // Backup
     type_backup: Option<String>,
     hostname_sftp_backup: Option<String>,
@@ -1143,6 +1149,10 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
         "username_sftp": transaction.username_sftp,
         "remote_path_sftp": transaction.remote_path_sftp,
         "key_type_sftp": transaction.key_type_sftp,
+        "s3_access_key_id": transaction.s3_access_key_id,
+        "s3_region": transaction.s3_region,
+        "s3_endpoint": transaction.s3_endpoint,
+        "s3_bucket": transaction.s3_bucket,
         "type_backup": transaction.type_backup,
         "hostname_sftp_backup": transaction.hostname_sftp_backup,
         "username_sftp_backup": transaction.username_sftp_backup,
@@ -2369,6 +2379,10 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
         "username_sftp": 1,
         "remote_path_sftp": 1,
         "key_type_sftp": 1,
+        "s3_access_key_id": 1,
+        "s3_region": 1,
+        "s3_endpoint": 1,
+        "s3_bucket": 1,
         "type_backup": 1,
         "hostname_sftp_backup": 1,
         "username_sftp_backup": 1,
@@ -2485,6 +2499,15 @@ pub struct ReponseConsignationSatellite {
     pub remote_path_sftp: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_type_sftp: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s3_access_key_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s3_region: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s3_endpoint: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub s3_bucket: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fichiers_taille: Option<usize>,
