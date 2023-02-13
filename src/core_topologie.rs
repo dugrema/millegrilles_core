@@ -9,7 +9,7 @@ use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{Datelike, Timelike, Utc};
-use millegrilles_common_rust::common_messages::{ReponseInformationConsignationFichiers, RequeteConsignationFichiers};
+use millegrilles_common_rust::common_messages::{DataChiffre, ReponseInformationConsignationFichiers, RequeteConsignationFichiers};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
@@ -1094,10 +1094,21 @@ struct TransactionConfigurerConsignation {
     type_store: String,
     url_download: Option<String>,
     consignation_url: Option<String>,
+    sync_intervalle: Option<i64>,
+    sync_actif: Option<bool>,
+    data_chiffre: Option<DataChiffre>,
+    // SFTP
     hostname_sftp: Option<String>,
     username_sftp: Option<String>,
     remote_path_sftp: Option<String>,
     key_type_sftp: Option<String>,
+    // Backup
+    type_backup: Option<String>,
+    hostname_sftp_backup: Option<String>,
+    port_sftp_backup: Option<String>,
+    username_sftp_backup: Option<String>,
+    remote_path_sftp_backup: Option<String>,
+    key_type_sftp_backup: Option<String>,
 }
 
 async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
@@ -1113,14 +1124,30 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
 
     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
 
+    let data_chiffre = match transaction.data_chiffre {
+        Some(d) => match convertir_to_bson(d) {
+            Ok(d) => Some(d),
+            Err(e) => Err(format!("transaction_configurer_consignation Erreur conversion data_chiffre {:?}", e))?
+        },
+        None => None
+    };
+
     let set_ops = doc! {
         "type_store": transaction.type_store,
         "url_download": transaction.url_download,
         "consignation_url": transaction.consignation_url,
+        "sync_intervalle": transaction.sync_intervalle,
+        "sync_actif": transaction.sync_actif,
+        "data_chiffre": data_chiffre,
         "hostname_sftp": transaction.hostname_sftp,
         "username_sftp": transaction.username_sftp,
         "remote_path_sftp": transaction.remote_path_sftp,
         "key_type_sftp": transaction.key_type_sftp,
+        "type_backup": transaction.type_backup,
+        "hostname_sftp_backup": transaction.hostname_sftp_backup,
+        "username_sftp_backup": transaction.username_sftp_backup,
+        "remote_path_sftp_backup": transaction.remote_path_sftp_backup,
+        "key_type_sftp_backup": transaction.key_type_sftp_backup,
     };
 
     let ops = doc! {
@@ -2335,10 +2362,18 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
         "consignation_url": 1,
         "type_store": 1,
         "url_download": 1,
+        "sync_intervalle": 1,
+        "sync_actif": 1,
+        "data_chiffre": 1,
         "hostname_sftp": 1,
         "username_sftp": 1,
         "remote_path_sftp": 1,
         "key_type_sftp": 1,
+        "type_backup": 1,
+        "hostname_sftp_backup": 1,
+        "username_sftp_backup": 1,
+        "remote_path_sftp_backup": 1,
+        "key_type_sftp_backup": 1,
     };
 
     if let Some(true) = requete.stats {
@@ -2427,6 +2462,14 @@ pub struct ReponseConsignationSatellite {
     pub instance_id: String,
     pub consignation_url: Option<String>,
     pub type_store: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sync_intervalle: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sync_actif: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    data_chiffre: Option<DataChiffre>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url_download: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
