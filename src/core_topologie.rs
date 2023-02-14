@@ -69,6 +69,7 @@ const REQUETE_FICHE_MILLEGRILLE: &str = "ficheMillegrille";
 const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
 const REQUETE_CONSIGNATION_FICHIERS: &str = "getConsignationFichiers";
 const REQUETE_CONFIGURATION_FICHIERS: &str = "getConfigurationFichiers";
+const REQUETE_GET_CLE_CONFIGURATION: &str = "getCleConfiguration";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_INSTANCE: &str = "instance";
@@ -219,6 +220,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         REQUETE_FICHE_MILLEGRILLE,
         REQUETE_APPLICATIONS_TIERS,
         REQUETE_CONSIGNATION_FICHIERS,
+        REQUETE_GET_CLE_CONFIGURATION,
     ];
     for req in requetes_privees {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive });
@@ -275,7 +277,6 @@ pub fn preparer_queues() -> Vec<QueueType> {
             autodelete: false,
         }
     ));
-
 
     let transactions_liste = vec![
         TRANSACTION_MONITOR,
@@ -521,6 +522,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                             REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
                             REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
                             REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, message).await,
+                            REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, message).await,
                             _ => {
                                 error!("Message requete/action inconnue : '{}'. Message dropped.", message_action);
                                 Ok(None)
@@ -540,6 +542,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                             REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
                             REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
                             REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, message).await,
+                            REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, message).await,
                             _ => {
                                 error!("Message requete/action inconnue : '{}'. Message dropped.", message_action);
                                 Ok(None)
@@ -2469,6 +2472,61 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
     }?;
 
     Ok(Some(reponse))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ParametresGetCleConfiguration {
+    ref_hachage_bytes: String,
+}
+
+async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: GenerateurMessages + MongoDao + VerificateurMessage
+{
+    debug!("requete_get_cle_configuration Message : {:?}", &m.message);
+    let requete: ParametresGetCleConfiguration = m.message.get_msg().map_contenu(None)?;
+    debug!("requete_get_cle_configuration cle parsed : {:?}", requete);
+
+    if ! m.verifier_roles(vec![RolesCertificats::Fichiers]) {
+        let reponse = json!({"err": true, "message": "certificat doit etre de role fichiers"});
+        return Ok(Some(middleware.formatter_reponse(reponse, None)?));
+    }
+
+    // Utiliser certificat du message client (requete) pour demande de rechiffrage
+    let pem_rechiffrage: Vec<String> = match &m.message.certificat {
+        Some(c) => {
+            let fp_certs = c.get_pem_vec();
+            fp_certs.into_iter().map(|cert| cert.pem).collect()
+        },
+        None => Err(format!(""))?
+    };
+
+    let permission = json!({
+        "liste_hachage_bytes": vec![requete.ref_hachage_bytes],
+        "certificat_rechiffrage": pem_rechiffrage,
+    });
+
+    // Emettre requete de rechiffrage de cle, reponse acheminee directement au demandeur
+    let reply_to = match m.reply_q {
+        Some(r) => r,
+        None => Err(format!("requetes.requete_get_cle_configuration Pas de reply q pour message"))?
+    };
+    let correlation_id = match m.correlation_id {
+        Some(r) => r,
+        None => Err(format!("requetes.requete_get_cle_configuration Pas de correlation_id pour message"))?
+    };
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE)
+        .exchanges(vec![Securite::L4Secure])
+        .reply_to(reply_to)
+        .correlation_id(correlation_id)
+        .blocking(false)
+        .build();
+
+    debug!("requete_get_cle_configuration Transmettre requete permission dechiffrage cle : {:?}", permission);
+
+    middleware.transmettre_requete(routage, &permission).await?;
+
+    Ok(None)  // Aucune reponse a transmettre, c'est le maitre des cles qui va repondre
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
