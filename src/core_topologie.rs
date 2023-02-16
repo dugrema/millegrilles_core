@@ -1181,7 +1181,10 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
     let filtre = doc!{ "instance_id": &transaction.instance_id };
     let configuration = match collection.find_one_and_update(filtre, ops, Some(options)).await {
         Ok(inner) => match inner {
-            Some(inner) => inner,
+            Some(inner) => match convertir_bson_deserializable::<ReponseInformationConsignationFichiers>(inner) {
+                Ok(inner) => inner,
+                Err(e) => Err(format!("transaction_configurer_consignation Erreur mapper reponse : {:?}", e))?
+            },
             None => Err(format!("transaction_configurer_consignation Erreur sauvegarde configuration consignation : Aucun doc conserve"))?
         },
         Err(e) => Err(format!("transaction_configurer_consignation Erreur sauvegarde configuration consignation : {:?}", e))?
