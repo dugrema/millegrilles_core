@@ -2570,6 +2570,20 @@ pub struct ReponseConsignationSatellite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub s3_bucket: Option<String>,
 
+    // Backup
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub type_backup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hostname_sftp_backup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_sftp_backup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub username_sftp_backup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub remote_path_sftp_backup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key_type_sftp_backup: Option<String>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fichiers_taille: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
