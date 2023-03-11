@@ -59,6 +59,7 @@ const REQUETE_CHARGER_USAGER: &str = "chargerUsager";
 const REQUETE_LISTE_USAGERS: &str = "getListeUsagers";
 const REQUETE_USERID_PAR_NOMUSAGER: &str = "getUserIdParNomUsager";
 const REQUETE_GET_CSR_RECOVERY_PARCODE: &str = "getCsrRecoveryParcode";
+const REQUETE_LISTE_PROPRIETAIRES: &str = "getListeProprietaires";
 
 // const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
 const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
@@ -91,6 +92,8 @@ const CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK: &str = "activations_par_fingerprint_
 const CHAMP_WEBAUTHN: &str = "webauthn";
 const CHAMP_WEBAUTHN_HOSTNAMES: &str = "webauthn_hostnames";
 const CHAMP_CODE: &str = "code";
+
+const DELEGATION_PROPRIETAIRE: &str = "proprietaire";
 
 /// Instance statique du gestionnaire de maitredescomptes
 pub const GESTIONNAIRE_MAITREDESCOMPTES: GestionnaireDomaineMaitreDesComptes = GestionnaireDomaineMaitreDesComptes {};
@@ -195,6 +198,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     let requetes_protegees: Vec<&str> = vec![
         REQUETE_LISTE_USAGERS,
+        REQUETE_LISTE_PROPRIETAIRES,
     ];
     for req in requetes_protegees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
@@ -425,6 +429,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 REQUETE_LISTE_USAGERS => liste_usagers(middleware, message).await,
                 REQUETE_USERID_PAR_NOMUSAGER => get_userid_par_nomusager(middleware, message).await,
                 REQUETE_GET_CSR_RECOVERY_PARCODE => get_csr_recovery_parcode(middleware, message).await,
+                REQUETE_LISTE_PROPRIETAIRES => get_liste_proprietaires(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -634,6 +639,19 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteUsager {
+    #[serde(rename="userId")]
+    user_id: Option<String>,
+    #[serde(rename="nomUsager")]
+    nom_usager: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteListeUsagers {
+    liste_userids: Option<Vec<String>>,
+}
+
 async fn liste_usagers<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -679,17 +697,43 @@ async fn liste_usagers<M>(middleware: &M, message: MessageValideAction) -> Resul
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct RequeteUsager {
-    #[serde(rename="userId")]
-    user_id: Option<String>,
-    #[serde(rename="nomUsager")]
-    nom_usager: Option<String>,
-}
+async fn get_liste_proprietaires<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("get_liste_proprietaires : {:?}", &message.message);
+    let requete: RequeteListeUsagers = message.message.get_msg().map_contenu(None)?;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct RequeteListeUsagers {
-    liste_userids: Option<Vec<String>>,
+    let usagers = {
+        let filtre = doc! { CHAMP_DELEGATION_GLOBALE: DELEGATION_PROPRIETAIRE };
+        let projection = doc! {
+            CHAMP_USAGER_NOM: true,
+            CHAMP_USER_ID: true,
+        };
+        let ops = FindOptions::builder().projection(Some(projection)).build();
+
+        let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+        let mut curseur = collection.find(filtre, ops).await?;
+
+        let mut vec_comptes = Vec::new();
+        while let Some(d) = curseur.next().await {
+            let mut doc_usager = d?;
+            filtrer_doc_id(&mut doc_usager);
+            let val_compte = convertir_bson_value(doc_usager)?;
+            vec_comptes.push(val_compte);
+        }
+
+        vec_comptes
+    };
+
+    let val_reponse = json!({
+        "complet": true,
+        "usagers": usagers,
+    });
+
+    match middleware.formatter_reponse(&val_reponse,None) {
+        Ok(m) => Ok(Some(m)),
+        Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
+    }
 }
 
 async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
