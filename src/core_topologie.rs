@@ -2685,8 +2685,7 @@ async fn verifier_instances_horsligne<M>(middleware: &M)
     debug!("verifier_instances_horsligne Debut verification");
 
     let now = Utc::now().timestamp();
-
-    let expiration = now - 30 * 60000;
+    let expiration = now - 400;  // Date expiration epoch (secondes)
 
     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
 
@@ -2770,10 +2769,25 @@ async fn verifier_instances_horsligne<M>(middleware: &M)
             subject: Some(sujet),
             content: message_str,
         };
+
+        // Marquer les instances
+        if nouveau_hors_ligne.len() > 0 {
+            let instances_id: Vec<String> = nouveau_hors_ligne.iter().map(|r| r.instance_id.clone()).collect();
+            let filtre = doc!{"instance_id": {"$in": instances_id}};
+            let ops = doc!{"$set": {"date_hors_ligne": now}, "$currentDate": {CHAMP_MODIFICATION: true}};
+            collection.update_many(filtre, ops, None).await?;
+        }
+        if nouveau_en_ligne.len() > 0 {
+            let instances_id: Vec<String> = nouveau_en_ligne.iter().map(|r| r.instance_id.clone()).collect();
+            let filtre = doc!{"instance_id": {"$in": instances_id}};
+            let ops = doc!{"$unset": {"date_hors_ligne": 1}, "$currentDate": {CHAMP_MODIFICATION: true}};
+            collection.update_many(filtre, ops, None).await?;
+        }
+
         middleware.emettre_notification_proprietaire(
             notification,
             "warn",
-            Some(now + 7 * 86400),
+            Some(now + 7 * 86400),  // Expiration epoch
             None
         ).await?;
     }
