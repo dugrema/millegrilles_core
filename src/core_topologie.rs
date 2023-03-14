@@ -466,6 +466,10 @@ async fn entretien<M>(middleware: Arc<M>)
                 warn!("Erreur emission notification demarrage {:?}", e);
             }
         }
+
+        if let Err(e) = verifier_instances_horsligne(middleware.as_ref()).await {
+            warn!("Erreur verification etat instances hors ligne {:?}", e);
+        }
     }
 }
 
@@ -2664,6 +2668,117 @@ pub struct RequeteConfigurationFichiers {
 struct RequeteApplicationsTiers {
     idmgs: Vec<String>,
     application: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RowInstanceActivite {
+    instance_id: String,
+    hostname: Option<String>,
+    date_presence: Option<i64>,
+    date_hors_ligne: Option<i64>,
+}
+
+async fn verifier_instances_horsligne<M>(middleware: &M)
+    -> Result<(), Box<dyn Error>>
+    where M: MongoDao + EmetteurNotificationsTrait
+{
+    debug!("verifier_instances_horsligne Debut verification");
+
+    let now = Utc::now().timestamp();
+
+    let expiration = now - 30 * 60000;
+
+    let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+
+    let projection = doc!{"instance_id": 1, "hostname": 1, "date_presence": 1, "date_hors_ligne": 1};
+
+    let nouveau_hors_ligne = {
+        let mut nouveau_hors_ligne = Vec::new();
+        let filtre_horsligne = doc! {
+            "date_presence": {"$lt": &expiration},
+            "date_hors_ligne": {"$exists": false}
+        };
+        let options = FindOptions::builder().projection(projection.clone()).build();
+        let mut curseur = collection.find(filtre_horsligne, options).await?;
+
+        while let Some(d) = curseur.next().await {
+            let row: RowInstanceActivite = convertir_bson_deserializable(d?)?;
+            debug!("Instance hors ligne : {:?}", row);
+            nouveau_hors_ligne.push(row);
+        }
+
+        nouveau_hors_ligne
+    };
+
+    let nouveau_en_ligne = {
+        let mut nouveau_en_ligne = Vec::new();
+        let filtre_en_ligne = doc! {
+            "date_presence": {"$gte": &expiration},
+            "date_hors_ligne": {"$exists": true}
+        };
+        let options = FindOptions::builder().projection(projection.clone()).build();
+        let mut curseur = collection.find(filtre_en_ligne, options).await?;
+
+        while let Some(d) = curseur.next().await {
+            let row: RowInstanceActivite = convertir_bson_deserializable(d?)?;
+            debug!("Instance en ligne : {:?}", row);
+            nouveau_en_ligne.push(row);
+        }
+
+        nouveau_en_ligne
+    };
+
+    if nouveau_hors_ligne.len() == 0 && nouveau_en_ligne.len() == 0 {
+        debug!("Aucun changement hors ligne/en ligne pour instances");
+    } else {
+        let mut message_lignes = Vec::new();
+        if nouveau_hors_ligne.len() > 0 {
+            message_lignes.push("<p>Instances hors ligne</p>".to_string());
+            for instance in &nouveau_hors_ligne {
+                if let Some(h) = instance.hostname.as_ref() {
+                    message_lignes.push(format!("<p>{:?}</p>", h))
+                }
+            }
+        }
+        message_lignes.push("<p></p>".to_string());
+        if nouveau_en_ligne.len() > 0 {
+            message_lignes.push("<p>Instances en ligne</p>".to_string());
+            for instance in &nouveau_en_ligne {
+                if let Some(h) = instance.hostname.as_ref() {
+                    message_lignes.push(format!("<p>{}</p>", h))
+                }
+            }
+        }
+
+        let message_str = message_lignes.join("\n");
+        debug!("verifier_instances_horsligne Message notification {}", message_str);
+
+        let sujet = if nouveau_hors_ligne.len() == 1 {
+            let row = &nouveau_hors_ligne.get(0).expect("get(0)");
+            match &row.hostname {
+                Some(h) => format!("{:?} est hors ligne", h),
+                None => format!("{:?} est hors ligne", row.instance_id)
+            }
+        } else if nouveau_hors_ligne.len() > 1 {
+            format!("{} instances hors ligne", nouveau_hors_ligne.len())
+        } else {
+            format!("{} instances de retour en ligne", nouveau_en_ligne.len())
+        };
+
+        let notification = NotificationMessageInterne {
+            from: Some("CoreTopologie".to_string()),
+            subject: Some(sujet),
+            content: message_str,
+        };
+        middleware.emettre_notification_proprietaire(
+            notification,
+            "warn",
+            Some(now + 7 * 86400),
+            None
+        ).await?;
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
