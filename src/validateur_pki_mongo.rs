@@ -17,11 +17,12 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMilleGrille, MessageSerialise};
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
-use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, ChiffrageFactoryTrait, MiddlewareRessources, RabbitMqTrait};
+use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, ChiffrageFactoryTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait};
 use millegrilles_common_rust::middleware_db::MiddlewareDb;
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao, MongoDaoImpl, initialiser as initialiser_mongodb};
 use millegrilles_common_rust::mongodb::Database;
 use millegrilles_common_rust::mongodb::options::FindOptions;
+use millegrilles_common_rust::notifications::NotificationMessageInterne;
 use millegrilles_common_rust::openssl::x509::store::X509Store;
 use millegrilles_common_rust::openssl::x509::X509;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, NamedQueue, QueueType, run_rabbitmq, TypeMessageOut};
@@ -54,6 +55,18 @@ impl MiddlewareDbPki {}
 impl MiddlewareMessages for MiddlewareDbPki {}
 
 impl Middleware for MiddlewareDbPki {}
+
+#[async_trait]
+impl EmetteurNotificationsTrait for MiddlewareDbPki {
+    async fn emettre_notification_proprietaire(
+        &self, contenu: NotificationMessageInterne, niveau: &str, expiration: Option<i64>, destinataires: Option<Vec<String>>
+    )
+        -> Result<(), Box<dyn Error>>
+    {
+        self.ressources.emetteur_notifications.emettre_notification_proprietaire(
+            self, contenu, niveau, expiration, destinataires).await
+    }
+}
 
 impl RedisTrait for MiddlewareDbPki {
     fn get_redis(&self) -> Option<&RedisDao> { self.redis.as_ref() }

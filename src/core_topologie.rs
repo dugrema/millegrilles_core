@@ -18,12 +18,13 @@ use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, EmetteurNotificationsTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, convertir_value_mongodate, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions, ReturnDocument};
+use millegrilles_common_rust::notifications::NotificationMessageInterne;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
 use millegrilles_common_rust::reqwest::Url;
@@ -445,6 +446,7 @@ async fn entretien<M>(middleware: Arc<M>)
     where M: Middleware + 'static
 {
     let mut catalogues_charges = false;
+    let mut notification_demarrage_emise = false;
 
     // Production fiche publique initiale
     sleep(Duration::new(5, 0)).await;
@@ -458,7 +460,26 @@ async fn entretien<M>(middleware: Arc<M>)
     loop {
         sleep(Duration::new(30, 0)).await;
         debug!("Cycle entretien {}", DOMAINE_NOM);
+        if notification_demarrage_emise == false {
+            notification_demarrage_emise = true;
+            if let Err(e) = emettre_notification_demarrage(middleware.as_ref()).await {
+                warn!("Erreur emission notification demarrage {:?}", e);
+            }
+        }
     }
+}
+
+async fn emettre_notification_demarrage<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+    where M: EmetteurNotificationsTrait
+{
+    let notification = NotificationMessageInterne {
+        from: Some("CoreTopologie".to_string()),
+        subject: Some("Demarrage core".to_string()),
+        content: "<p>Core demarre</p>".to_string()
+    };
+    let expiration_ts = Utc::now().timestamp() + 7 * 86400;
+    Ok(middleware.emettre_notification_proprietaire(
+        notification, "info", Some(expiration_ts), None).await?)
 }
 
 async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
