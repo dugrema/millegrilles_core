@@ -391,10 +391,15 @@ async fn entretien<M>(_middleware: Arc<M>)
 }
 
 async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
-where M: MongoDao {
+where M: MongoDao + GenerateurMessages {
     // let message = trigger.message;
 
     debug!("Traiter cedule {}", DOMAINE_NOM);
+
+    if middleware.get_mode_regeneration() == true {
+        debug!("traiter_cedule Mode regeneration, skip entretien");
+        return Ok(());
+    }
 
     if trigger.flag_jour {
         match nettoyer_comptes_usagers(middleware).await {

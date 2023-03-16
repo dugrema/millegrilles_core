@@ -459,6 +459,11 @@ async fn entretien<M>(middleware: Arc<M>)
 
     loop {
         sleep(Duration::new(30, 0)).await;
+        if middleware.get_mode_regeneration() == true {
+            debug!("entretien Mode regeneration, skip entretien");
+            continue;
+        }
+
         debug!("Cycle entretien {}", DOMAINE_NOM);
         if notification_demarrage_emise == false {
             notification_demarrage_emise = true;
@@ -490,6 +495,11 @@ async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<()
     where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait {
     let date_epoch = trigger.get_date();
     debug!("Traiter cedule {}\n{:?}", DOMAINE_NOM, date_epoch);
+
+    if middleware.get_mode_regeneration() == true {
+        debug!("traiter_cedule Mode regeneration, skip entretien");
+        return Ok(());
+    }
 
     let minutes = date_epoch.get_datetime().minute();
 

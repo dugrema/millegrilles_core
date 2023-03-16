@@ -285,6 +285,11 @@ async fn entretien<M>(middleware: Arc<M>)
         sleep(Duration::new(30, 0)).await;
         debug!("Cycle entretien {}", DOMAINE_NOM);
 
+        if middleware.get_mode_regeneration() == true {
+            debug!("entretien Mode regeneration, skip entretien");
+            continue;
+        }
+
         if ! catalogues_charges {
             debug!("Charger catalogues");
 
