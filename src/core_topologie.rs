@@ -933,9 +933,11 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
     let mut set_ops = doc! {
         // "type_store": event.type_store,
         "fichiers_nombre": event.fichiers_nombre,
-        "corbeille_nombre": event.corbeille_nombre,
+        "archives_nombre": event.archives_nombre,
+        "orphelins_nombre": event.orphelins_nombre,
         "fichiers_taille": event.fichiers_taille,
-        "corbeille_taille": event.corbeille_taille,
+        "archives_taille": event.archives_taille,
+        "orphelins_taille": event.orphelins_taille,
     };
     // if event.url_download.is_some() && Some(String::from("")) != event.url_download {
     //     set_ops.insert("url_download", event.url_download);
@@ -1358,9 +1360,11 @@ struct PresenceFichiers {
     url_archives: Option<String>,
     consignation_url: Option<String>,
     fichiers_nombre: Option<i64>,
-    corbeille_nombre: Option<i64>,
+    archives_nombre: Option<i64>,
+    orphelins_nombre: Option<i64>,
     fichiers_taille: Option<i64>,
-    corbeille_taille: Option<i64>,
+    archives_taille: Option<i64>,
+    orphelins_taille: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2442,8 +2446,10 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
         // Inclure information des fichiers et espace
         projection.insert("fichiers_taille", 1);
         projection.insert("fichiers_nombre", 1);
-        projection.insert("corbeille_taille", 1);
-        projection.insert("corbeille_nombre", 1);
+        projection.insert("archives_taille", 1);
+        projection.insert("archives_nombre", 1);
+        projection.insert("orphelins_taille", 1);
+        projection.insert("orphelins_nombre", 1);
         projection.insert("espace_disponible", 1);
     }
 
@@ -2635,9 +2641,13 @@ pub struct ReponseConsignationSatellite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fichiers_nombre: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub corbeille_taille: Option<usize>,
+    pub archives_taille: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub corbeille_nombre: Option<usize>,
+    pub archives_nombre: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orphelins_taille: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub orphelins_nombre: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub espace_disponible: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
