@@ -1187,7 +1187,7 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
         "consignation_url": transaction.consignation_url,
         "sync_intervalle": transaction.sync_intervalle,
         "sync_actif": transaction.sync_actif,
-        "suppporte_archives": transaction.supporte_archives,
+        "supporte_archives": transaction.supporte_archives,
         "data_chiffre": data_chiffre,
         "hostname_sftp": transaction.hostname_sftp,
         "username_sftp": transaction.username_sftp,
