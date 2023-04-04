@@ -7,7 +7,13 @@
     <cargoProject FILE="$PROJECT_DIR$/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f8c2faca-a829-49cf-9c2c-988a8af0de6e" name="Changes" comment="Ajout TRANSACTION_SET_FICHIERS_PRIMAIRE" />
+    <list default="true" id="f8c2faca-a829-49cf-9c2c-988a8af0de6e" name="Changes" comment="build 2023.2.2, fix regeneration&#10;&#10;common">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build.txt" beforeDir="false" afterPath="$PROJECT_DIR$/build.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core_topologie.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core_topologie.rs" afterDir="false" />
+    </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -16,7 +22,7 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$/millegrilles_common_rust" value="2023.0" />
+        <entry key="$PROJECT_DIR$/millegrilles_common_rust" value="2023.2" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -71,7 +77,7 @@
         <env name="MG_NOEUD_ID" value="42c6d697-84d7-4b07-b62a-f7758804f5b2" />
         <env name="MG_REDIS_PASSWORD_FILE" value="/var/opt/millegrilles/secrets/passwd.redis.txt" />
         <env name="MG_REDIS_URL" value="rediss://client_rust@localhost:6379#insecure" />
-        <env name="RUST_LOG" value="warn,millegrilles_core::core_topologie=debug" />
+        <env name="RUST_LOG" value="warn,millegrilles_core::core_topologie=debug,millegrilles_common_rust::notifications=debug" />
       </envs>
       <option name="isRedirectInput" value="false" />
       <option name="redirectInputPath" value="" />
@@ -92,118 +98,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1656787583997</updated>
-    </task>
-    <task id="LOCAL-00024" summary="Ajout support signer_csr avec instance 4.secure">
-      <created>1663956521815</created>
-      <option name="number" value="00024" />
-      <option name="presentableId" value="LOCAL-00024" />
-      <option name="project" value="LOCAL" />
-      <updated>1663956521815</updated>
-    </task>
-    <task id="LOCAL-00025" summary="Ajout support signer compte usager avec instance 4.secure">
-      <created>1663959606947</created>
-      <option name="number" value="00025" />
-      <option name="presentableId" value="LOCAL-00025" />
-      <option name="project" value="LOCAL" />
-      <updated>1663959606947</updated>
-    </task>
-    <task id="LOCAL-00026" summary="common&#10;&#10;Fix validation cert tiers">
-      <created>1664134250573</created>
-      <option name="number" value="00026" />
-      <option name="presentableId" value="LOCAL-00026" />
-      <option name="project" value="LOCAL" />
-      <updated>1664134250573</updated>
-    </task>
-    <task id="LOCAL-00027" summary="Fix bugs traitement triggers, message global">
-      <created>1664192999647</created>
-      <option name="number" value="00027" />
-      <option name="presentableId" value="LOCAL-00027" />
-      <option name="project" value="LOCAL" />
-      <updated>1664192999648</updated>
-    </task>
-    <task id="LOCAL-00028" summary="Ajout logging pour troubleshooting cles">
-      <created>1664198214040</created>
-      <option name="number" value="00028" />
-      <option name="presentableId" value="LOCAL-00028" />
-      <option name="project" value="LOCAL" />
-      <updated>1664198214040</updated>
-    </task>
-    <task id="LOCAL-00029" summary="Fix chargement cles chiffrage pour middleware_db.rs">
-      <created>1664200612048</created>
-      <option name="number" value="00029" />
-      <option name="presentableId" value="LOCAL-00029" />
-      <option name="project" value="LOCAL" />
-      <updated>1664200612049</updated>
-    </task>
-    <task id="LOCAL-00030" summary="Fix chargement cles chiffrage pour backup">
-      <created>1664200630754</created>
-      <option name="number" value="00030" />
-      <option name="presentableId" value="LOCAL-00030" />
-      <option name="project" value="LOCAL" />
-      <updated>1664200630754</updated>
-    </task>
-    <task id="LOCAL-00031" summary="Ajout flag persiste dans cache certificats">
-      <created>1664209156391</created>
-      <option name="number" value="00031" />
-      <option name="presentableId" value="LOCAL-00031" />
-      <option name="project" value="LOCAL" />
-      <updated>1664209156391</updated>
-    </task>
-    <task id="LOCAL-00032" summary="Fix sauvegarde certificats dans pki">
-      <created>1664215766092</created>
-      <option name="number" value="00032" />
-      <option name="presentableId" value="LOCAL-00032" />
-      <option name="project" value="LOCAL" />
-      <updated>1664215766092</updated>
-    </task>
-    <task id="LOCAL-00033" summary="Fix sauvegarde certificats dans pki">
-      <created>1664215783434</created>
-      <option name="number" value="00033" />
-      <option name="presentableId" value="LOCAL-00033" />
-      <option name="project" value="LOCAL" />
-      <updated>1664215783434</updated>
-    </task>
-    <task id="LOCAL-00034" summary="Sync certificats redis">
-      <created>1664221509442</created>
-      <option name="number" value="00034" />
-      <option name="presentableId" value="LOCAL-00034" />
-      <option name="project" value="LOCAL" />
-      <updated>1664221509442</updated>
-    </task>
-    <task id="LOCAL-00035" summary="common">
-      <created>1664221520619</created>
-      <option name="number" value="00035" />
-      <option name="presentableId" value="LOCAL-00035" />
-      <option name="project" value="LOCAL" />
-      <updated>1664221520619</updated>
-    </task>
-    <task id="LOCAL-00036" summary="Fix detection certificats connus dans redis">
-      <created>1664221923194</created>
-      <option name="number" value="00036" />
-      <option name="presentableId" value="LOCAL-00036" />
-      <option name="project" value="LOCAL" />
-      <updated>1664221923194</updated>
-    </task>
-    <task id="LOCAL-00037" summary="Ajustement entretien validateur (2 minutes)">
-      <created>1664222132669</created>
-      <option name="number" value="00037" />
-      <option name="presentableId" value="LOCAL-00037" />
-      <option name="project" value="LOCAL" />
-      <updated>1664222132669</updated>
-    </task>
-    <task id="LOCAL-00038" summary="Fix message commande access denied">
-      <created>1665530355480</created>
-      <option name="number" value="00038" />
-      <option name="presentableId" value="LOCAL-00038" />
-      <option name="project" value="LOCAL" />
-      <updated>1665530355480</updated>
-    </task>
-    <task id="LOCAL-00039" summary="Capture evenement cert maitredescles">
-      <created>1666183501800</created>
-      <option name="number" value="00039" />
-      <option name="presentableId" value="LOCAL-00039" />
-      <option name="project" value="LOCAL" />
-      <updated>1666183501800</updated>
     </task>
     <task id="LOCAL-00040" summary="Retrait cert millegrille de chiffrage dans fiche">
       <created>1666185066174</created>
@@ -436,7 +330,119 @@
       <option name="project" value="LOCAL" />
       <updated>1675811563080</updated>
     </task>
-    <option name="localTasksCounter" value="73" />
+    <task id="LOCAL-00073" summary="consignation_url optionnel&#10;&#10;Doit etre fourni par fichiers">
+      <created>1675948298510</created>
+      <option name="number" value="00073" />
+      <option name="presentableId" value="LOCAL-00073" />
+      <option name="project" value="LOCAL" />
+      <updated>1675948298510</updated>
+    </task>
+    <task id="LOCAL-00074" summary="Ajout consignation backup">
+      <created>1676314353260</created>
+      <option name="number" value="00074" />
+      <option name="presentableId" value="LOCAL-00074" />
+      <option name="project" value="LOCAL" />
+      <updated>1676314353261</updated>
+    </task>
+    <task id="LOCAL-00075" summary="Ajout consignation backup, chiffrage config">
+      <created>1676314374109</created>
+      <option name="number" value="00075" />
+      <option name="presentableId" value="LOCAL-00075" />
+      <option name="project" value="LOCAL" />
+      <updated>1676314374109</updated>
+    </task>
+    <task id="LOCAL-00076" summary="Ajout params S3">
+      <created>1676329402953</created>
+      <option name="number" value="00076" />
+      <option name="presentableId" value="LOCAL-00076" />
+      <option name="project" value="LOCAL" />
+      <updated>1676329402953</updated>
+    </task>
+    <task id="LOCAL-00077" summary="Ajout params S3">
+      <created>1676329418939</created>
+      <option name="number" value="00077" />
+      <option name="presentableId" value="LOCAL-00077" />
+      <option name="project" value="LOCAL" />
+      <updated>1676329418940</updated>
+    </task>
+    <task id="LOCAL-00078" summary="Ajout getCleConfiguration">
+      <created>1676381307394</created>
+      <option name="number" value="00078" />
+      <option name="presentableId" value="LOCAL-00078" />
+      <option name="project" value="LOCAL" />
+      <updated>1676381307394</updated>
+    </task>
+    <task id="LOCAL-00079" summary="Fix message changement config consignation&#10;&#10;Erreur hachage/signature entre rust et JS">
+      <created>1676506738793</created>
+      <option name="number" value="00079" />
+      <option name="presentableId" value="LOCAL-00079" />
+      <option name="project" value="LOCAL" />
+      <updated>1676506738794</updated>
+    </task>
+    <task id="LOCAL-00080" summary="Fix commande configuration consignation">
+      <created>1676508333295</created>
+      <option name="number" value="00080" />
+      <option name="presentableId" value="LOCAL-00080" />
+      <option name="project" value="LOCAL" />
+      <updated>1676508333296</updated>
+    </task>
+    <task id="LOCAL-00081" summary="Ajout info backup dans liste fichiers">
+      <created>1676637825707</created>
+      <option name="number" value="00081" />
+      <option name="presentableId" value="LOCAL-00081" />
+      <option name="project" value="LOCAL" />
+      <updated>1676637825708</updated>
+    </task>
+    <task id="LOCAL-00082" summary="Ajout requete getListeProprietaires&#10;&#10;Utilise pour notifications">
+      <created>1678553008420</created>
+      <option name="number" value="00082" />
+      <option name="presentableId" value="LOCAL-00082" />
+      <option name="project" value="LOCAL" />
+      <updated>1678553008420</updated>
+    </task>
+    <task id="LOCAL-00083" summary="fix domaine requete cert maitredescles">
+      <created>1678819257199</created>
+      <option name="number" value="00083" />
+      <option name="presentableId" value="LOCAL-00083" />
+      <option name="project" value="LOCAL" />
+      <updated>1678819257200</updated>
+    </task>
+    <task id="LOCAL-00084" summary="Ajout notification au demarrage de core">
+      <created>1678819278839</created>
+      <option name="number" value="00084" />
+      <option name="presentableId" value="LOCAL-00084" />
+      <option name="project" value="LOCAL" />
+      <updated>1678819278839</updated>
+    </task>
+    <task id="LOCAL-00085" summary="Fix signature messages notification">
+      <created>1678821817368</created>
+      <option name="number" value="00085" />
+      <option name="presentableId" value="LOCAL-00085" />
+      <option name="project" value="LOCAL" />
+      <updated>1678821817368</updated>
+    </task>
+    <task id="LOCAL-00086" summary="Detection instance en/hors ligne">
+      <created>1678828351347</created>
+      <option name="number" value="00086" />
+      <option name="presentableId" value="LOCAL-00086" />
+      <option name="project" value="LOCAL" />
+      <updated>1678828351348</updated>
+    </task>
+    <task id="LOCAL-00087" summary="Detection instance en/hors ligne avec delai 400s">
+      <created>1678829819845</created>
+      <option name="number" value="00087" />
+      <option name="presentableId" value="LOCAL-00087" />
+      <option name="project" value="LOCAL" />
+      <updated>1678829819845</updated>
+    </task>
+    <task id="LOCAL-00088" summary="build 2023.2.2, fix regeneration&#10;&#10;common">
+      <created>1678969802319</created>
+      <option name="number" value="00088" />
+      <option name="presentableId" value="LOCAL-00088" />
+      <option name="project" value="LOCAL" />
+      <updated>1678969802320</updated>
+    </task>
+    <option name="localTasksCounter" value="89" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -451,21 +457,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Fix reception cert maitredescles" />
-    <MESSAGE value="Fix exchange commande cert maitredescles (3.protege)" />
-    <MESSAGE value="Const domaine certificat" />
-    <MESSAGE value="Ajout traitement evenement.certificat.infoCertificat" />
-    <MESSAGE value="2022.8 common" />
-    <MESSAGE value="Support requete fiche locale" />
-    <MESSAGE value="Reception evenement.fichiers.presence" />
-    <MESSAGE value="Ajout message info consignation fichier" />
-    <MESSAGE value="Ajout requete info consignation fichiers" />
-    <MESSAGE value="Ajout L1public pour requete consignation fichiers" />
-    <MESSAGE value="common&#10;&#10;Support satellite 4.secure" />
-    <MESSAGE value="common - fix restaurer sur satellite 4.secure" />
-    <MESSAGE value="Signature cert demande par un domaine" />
-    <MESSAGE value="Ajout props dans name_property, support_usagers dans applications" />
-    <MESSAGE value="Retraire liste adresses dans fiche publique&#10;&#10;Exposait serveurs protege (non-web) et secure" />
     <MESSAGE value="Fix ajout cle (fingerprint optionnel)" />
     <MESSAGE value="Ajout webauthn_hostnames dans compte usager" />
     <MESSAGE value="Ajout sauvegarder_traiter_transaction_serializable" />
@@ -476,6 +467,21 @@
     <MESSAGE value="Ajout getConfigurationFichiers" />
     <MESSAGE value="Ajout info sftp pour consignation" />
     <MESSAGE value="Ajout TRANSACTION_SET_FICHIERS_PRIMAIRE" />
-    <option name="LAST_COMMIT_MESSAGE" value="Ajout TRANSACTION_SET_FICHIERS_PRIMAIRE" />
+    <MESSAGE value="consignation_url optionnel&#10;&#10;Doit etre fourni par fichiers" />
+    <MESSAGE value="Ajout consignation backup" />
+    <MESSAGE value="Ajout consignation backup, chiffrage config" />
+    <MESSAGE value="Ajout params S3" />
+    <MESSAGE value="Ajout getCleConfiguration" />
+    <MESSAGE value="Fix message changement config consignation&#10;&#10;Erreur hachage/signature entre rust et JS" />
+    <MESSAGE value="Fix commande configuration consignation" />
+    <MESSAGE value="Ajout info backup dans liste fichiers" />
+    <MESSAGE value="Ajout requete getListeProprietaires&#10;&#10;Utilise pour notifications" />
+    <MESSAGE value="fix domaine requete cert maitredescles" />
+    <MESSAGE value="Ajout notification au demarrage de core" />
+    <MESSAGE value="Fix signature messages notification" />
+    <MESSAGE value="Detection instance en/hors ligne" />
+    <MESSAGE value="Detection instance en/hors ligne avec delai 400s" />
+    <MESSAGE value="build 2023.2.2, fix regeneration&#10;&#10;common" />
+    <option name="LAST_COMMIT_MESSAGE" value="build 2023.2.2, fix regeneration&#10;&#10;common" />
   </component>
 </project>

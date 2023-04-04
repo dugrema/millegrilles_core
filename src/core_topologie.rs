@@ -1131,9 +1131,11 @@ struct TransactionConfigurerConsignation {
     instance_id: String,
     type_store: String,
     url_download: Option<String>,
+    url_archives: Option<String>,
     consignation_url: Option<String>,
     sync_intervalle: Option<i64>,
     sync_actif: Option<bool>,
+    supporte_archives: Option<bool>,
     data_chiffre: Option<DataChiffre>,
     // SFTP
     hostname_sftp: Option<String>,
@@ -1179,9 +1181,11 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
     let set_ops = doc! {
         "type_store": transaction.type_store,
         "url_download": transaction.url_download,
+        "url_archives": transaction.url_archives,
         "consignation_url": transaction.consignation_url,
         "sync_intervalle": transaction.sync_intervalle,
         "sync_actif": transaction.sync_actif,
+        "suppporte_archives": transaction.supporte_archives,
         "data_chiffre": data_chiffre,
         "hostname_sftp": transaction.hostname_sftp,
         "username_sftp": transaction.username_sftp,
@@ -1351,6 +1355,7 @@ struct PresenceMonitor {
 struct PresenceFichiers {
     type_store: String,
     url_download: Option<String>,
+    url_archives: Option<String>,
     consignation_url: Option<String>,
     fichiers_nombre: Option<i64>,
     corbeille_nombre: Option<i64>,
@@ -2413,8 +2418,10 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
         "consignation_url": 1,
         "type_store": 1,
         "url_download": 1,
+        "url_archives": 1,
         "sync_intervalle": 1,
         "sync_actif": 1,
+        "supporte_archives": 1,
         "data_chiffre": 1,
         "hostname_sftp": 1,
         "username_sftp": 1,
@@ -2578,10 +2585,14 @@ pub struct ReponseConsignationSatellite {
     #[serde(skip_serializing_if = "Option::is_none")]
     sync_actif: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    supporte_archives: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     data_chiffre: Option<DataChiffre>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url_download: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url_archives: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostnames: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
