@@ -951,7 +951,13 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
     // }
 
     let mut ops = doc! {
-        "$setOnInsert": {"instance_id": &instance_id, CHAMP_CREATION: Utc::now()},
+        "$setOnInsert": {
+            "instance_id": &instance_id, CHAMP_CREATION: Utc::now(),
+            // Defaut pour nouvelle instance
+            "type_store": "millegrille",
+            "consignation_url": "https://fichiers:443",
+            "sync_actif": true,
+        },
         "$set": set_ops,
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
@@ -1180,14 +1186,28 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
         None => None
     };
 
+    // Defaults
+    let consignation_url = match transaction.consignation_url.as_ref() {
+        Some(inner) => inner.as_str(),
+        None => "https://fichiers:443"
+    };
+    let supporte_archives = match transaction.supporte_archives.as_ref() {
+        Some(inner) => inner.to_owned(),
+        None => true
+    };
+    let sync_actif = match transaction.sync_actif.as_ref() {
+        Some(inner) => inner.to_owned(),
+        None => true
+    };
+
     let set_ops = doc! {
         "type_store": transaction.type_store,
         "url_download": transaction.url_download,
         "url_archives": transaction.url_archives,
-        "consignation_url": transaction.consignation_url,
+        "consignation_url": consignation_url,
         "sync_intervalle": transaction.sync_intervalle,
-        "sync_actif": transaction.sync_actif,
-        "supporte_archives": transaction.supporte_archives,
+        "sync_actif": sync_actif,
+        "supporte_archives": supporte_archives,
         "data_chiffre": data_chiffre,
         "hostname_sftp": transaction.hostname_sftp,
         "username_sftp": transaction.username_sftp,
