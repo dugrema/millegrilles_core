@@ -1303,11 +1303,13 @@ async fn traiter_transaction_monitor<M, T>(middleware: &M, transaction: T) -> Re
         M: GenerateurMessages + MongoDao,
         T: Transaction
 {
-    let mut doc = transaction.contenu();
-    let mut doc_transaction: PresenceMonitor = match convertir_bson_deserializable(doc) {
+    // let mut doc = transaction.contenu();
+    let mut doc_transaction: PresenceMonitor = match transaction.convertir() {
         Ok(d) => d,
         Err(e) => Err(format!("core_topologie.traiter_transaction_monitor Erreur conversion transaction monitor : {:?}", e))?
     };
+    debug!("traiter_transaction_monitor {:?}", doc_transaction);
+
     let instance_id = doc_transaction.instance_id;
 
     let ops = doc! {
