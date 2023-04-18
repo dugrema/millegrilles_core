@@ -212,11 +212,11 @@ where M: MongoDao + ConfigMessages
 
     // Index transactions par uuid-transaction
     let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from(TRANSACTION_CHAMP_UUID_TRANSACTION)),
+        nom_index: Some(String::from("index_champ_id")),
         unique: true
     };
     let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_ENTETE_UUID_TRANSACTION), direction: 1}
+        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_ID), direction: 1}
     );
     middleware.create_index(
         middleware,
@@ -576,9 +576,9 @@ async fn maj_catalogue<M>(middleware: &M, transaction: impl Transaction)
     let mut set_ops = Document::new();
     let iter: millegrilles_common_rust::bson::document::IntoIter = contenu.into_iter();
     for (k, v) in iter {
-        if ! k.starts_with("_") && k != TRANSACTION_CHAMP_ENTETE {
+        //if ! k.starts_with("_") && k != TRANSACTION_CHAMP_ENTETE {
             set_ops.insert(k, v);
-        }
+        //}
     }
 
     debug!("set-ops : {:?}", set_ops);
