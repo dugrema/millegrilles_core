@@ -15,7 +15,7 @@ use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{thread_emettre_presence_domaine, Middleware, sauvegarder_traiter_transaction};
-use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, filtrer_doc_id, IndexOptions, MongoDao};
+use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
@@ -29,7 +29,7 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::verificateur::ValidationOptions;
 use mongodb::options::{FindOptions, UpdateOptions};
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
@@ -560,26 +560,45 @@ struct CatalogueApplication {
     version: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Catalogue {
+    nom: String,
+    securite: String,
+    version: String,
+    description: Option<HashMap<String, String>>,
+    dependances: Option<Vec<Value>>,
+    nginx: Option<HashMap<String, Value>>
+}
+
 async fn maj_catalogue<M>(middleware: &M, transaction: impl Transaction)
     -> Result<Option<MessageMilleGrille>, String>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Sauvegarder application recu via catalogue (transaction)");
 
-    let contenu = transaction.contenu();
-    let nom = match contenu.get_str("nom") {
-        Ok(c) => Ok(c.to_owned()),
-        Err(e) => Err(format!("Champ nom manquant de transaction application : {:?}", e)),
-    }?;
+    let catalogue: Catalogue = match transaction.convertir() {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur transaction.convertir {:?}", e))?
+    };
+    let nom = catalogue.nom.clone();
+    // let contenu = transaction.contenu();
+    // let nom = match contenu.get_str("nom") {
+    //     Ok(c) => Ok(c.to_owned()),
+    //     Err(e) => Err(format!("Champ nom manquant de transaction application : {:?}", e)),
+    // }?;
 
     // Filtrer le contenu (retirer champs _)
-    let mut set_ops = Document::new();
-    let iter: millegrilles_common_rust::bson::document::IntoIter = contenu.into_iter();
-    for (k, v) in iter {
-        //if ! k.starts_with("_") && k != TRANSACTION_CHAMP_ENTETE {
-            set_ops.insert(k, v);
-        //}
-    }
+    let set_ops = match convertir_to_bson(catalogue) {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur convertir_to_bson {:?}", e))?
+    };
+
+    // let iter: millegrilles_common_rust::bson::document::IntoIter = contenu.into_iter();
+    // for (k, v) in iter {
+    //     //if ! k.starts_with("_") && k != TRANSACTION_CHAMP_ENTETE {
+    //         set_ops.insert(k, v);
+    //     //}
+    // }
 
     debug!("set-ops : {:?}", set_ops);
     let ops = doc! {
