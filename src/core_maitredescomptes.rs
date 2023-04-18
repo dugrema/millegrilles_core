@@ -554,7 +554,8 @@ async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+    // let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+    let trigger: TriggerTransaction = match m.message.parsed.map_contenu() {
         Ok(t) => t,
         Err(e) => Err(format!("core_maitredescomptes.traiter_transaction Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
@@ -593,7 +594,7 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("charger_usager : {:?}", &message.message);
-    let requete: RequeteUsager = message.message.get_msg().map_contenu(None)?;
+    let requete: RequeteUsager = message.message.get_msg().map_contenu()?;
 
     let mut filtre = doc!{};
 
@@ -661,7 +662,7 @@ async fn liste_usagers<M>(middleware: &M, message: MessageValideAction) -> Resul
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("liste_usagers : {:?}", &message.message);
-    let requete: RequeteListeUsagers = message.message.get_msg().map_contenu(None)?;
+    let requete: RequeteListeUsagers = message.message.get_msg().map_contenu()?;
 
     let usagers = {
         let mut filtre = doc! {};
@@ -706,7 +707,7 @@ async fn get_liste_proprietaires<M>(middleware: &M, message: MessageValideAction
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_liste_proprietaires : {:?}", &message.message);
-    let requete: RequeteListeUsagers = message.message.get_msg().map_contenu(None)?;
+    let requete: RequeteListeUsagers = message.message.get_msg().map_contenu()?;
 
     let usagers = {
         let filtre = doc! { CHAMP_DELEGATION_GLOBALE: DELEGATION_PROPRIETAIRE };
@@ -745,7 +746,7 @@ async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValideActio
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_userid_par_nomusager : {:?}", &message.message);
-    let requete: RequeteUserIdParNomUsager = message.message.get_msg().map_contenu(None)?;
+    let requete: RequeteUserIdParNomUsager = message.message.get_msg().map_contenu()?;
 
     // Inserer tous les nom_usagers demandes avec None. Assurer de retourner la reponse complete
     // si certains usagers sont inconnus.
@@ -796,7 +797,7 @@ async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValideActio
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_userid_par_nomusager : {:?}", &message.message);
-    let requete: RequeteCsrRecoveryParcode = message.message.get_msg().map_contenu(None)?;
+    let requete: RequeteCsrRecoveryParcode = message.message.get_msg().map_contenu()?;
 
     let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
 
@@ -876,7 +877,7 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Res
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("Consommer inscrire_usager : {:?}", &message.message);
-    let transaction: TransactionInscrireUsager = message.message.get_msg().map_contenu(None)?;
+    let transaction: TransactionInscrireUsager = message.message.get_msg().map_contenu()?;
     let nom_usager = transaction.nom_usager.as_str();
 
     // Verifier que l'usager n'existe pas deja (collection usagers)
@@ -893,7 +894,7 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Res
             }
         },
         None => {
-            let uuid_transaction = message.message.get_entete().uuid_transaction.as_str();
+            let uuid_transaction = message.message.parsed.id.as_str();
             debug!("L'usager '{}' n'existe pas, on genere un certificat", nom_usager);
             let user_id = &transaction.user_id;
             let securite = &transaction.securite;
@@ -1020,7 +1021,7 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
         Some(vec!(RolesCertificats::NoeudPrive, RolesCertificats::MaitreComptes)),
     );
 
-    let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu(None)?;
+    let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu()?;
     debug!("commande_signer_compte_usager CommandeSignerCertificat : {:?}", commande);
 
     // Determiner la source du user_id. Pour delegation globale, on supporte un champ userId dans la commande.
@@ -1151,7 +1152,7 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     debug!("commande_signer_compte_usager Activation tierce : {:?}", activation_tierce);
     if let Some(true) = activation_tierce {
         // Calculer fingerprint du nouveau certificat
-        let reponsecert_obj: ReponseCertificatUsager = reponse_commande.map_contenu(None)?;
+        let reponsecert_obj: ReponseCertificatUsager = reponse_commande.map_contenu()?;
         let pem = reponsecert_obj.certificat;
         let enveloppe_cert = middleware.charger_enveloppe(&pem, None, None).await?;
         let fingerprint_pk = enveloppe_cert.fingerprint_pk()?;
@@ -1199,7 +1200,7 @@ async fn commande_ajouter_csr_recovery<M>(middleware: &M, message: MessageValide
 {
     debug!("commande_ajouter_csr_recovery : {:?}", message);
 
-    let commande: CommandeAjouterCsrRecovery = message.message.get_msg().map_contenu(None)?;
+    let commande: CommandeAjouterCsrRecovery = message.message.get_msg().map_contenu()?;
     debug!("commande_ajouter_csr_recovery CommandeAjouterCsrRecovery : {:?}", commande);
 
     let csr = commande.csr;
@@ -1293,7 +1294,7 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
 
     let commande_signature = CommandeSignatureUsager::new(nom_usager_str, user_id_str, csr_str, compte);
     let commande_signee = middleware.formatter_message(
-        &commande_signature, None::<&str>, None::<&str>, None::<&str>, None, false)?;
+        MessageKind::Document, &commande_signature, None::<&str>, None::<&str>, None::<&str>, None, false)?;
 
     // On retransmet le message recu tel quel
     match client.post(url_post).json(&commande_signee).send().await {
@@ -1323,7 +1324,7 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
     match middleware.transmettre_commande(routage, &commande_signee.contenu, true).await? {
         Some(reponse) => {
             if let TypeMessage::Valide(reponse) = reponse {
-                let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu(None)?;
+                let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu()?;
                 Ok(middleware.formatter_reponse(reponse_json, None)?)
             } else {
                 error!("core_pki.commande_signer_csr Erreur signature, echec local et relai 4.secure");
@@ -1421,7 +1422,7 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
         }
     }
 
-    let commande: CommandeAjouterCle = message.message.get_msg().map_contenu(None)?;
+    let commande: CommandeAjouterCle = message.message.get_msg().map_contenu()?;
 
     let nom_usager = commande.nom_usager.as_str();
 
@@ -1445,7 +1446,7 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
     match valider_message(middleware, &mut reponse_client_serialise).await {
         Ok(()) => {
             // S'assurer que le contenu du message est coherent - credId == response.id (doit convertir en bytes)
-            let rep_challenge: ReponseClientAjouterCle = reponse_client.map_contenu(None)?;
+            let rep_challenge: ReponseClientAjouterCle = reponse_client.map_contenu()?;
             let id_client = rep_challenge.reponse_challenge.id;
             debug!("id client : {:?}, commande a decoder : {:?}", id_client, commande.cle);
             let (_, cred_id): (_, Vec<u8>) = multibase::decode(commande.cle.cred_id)?;
@@ -1479,7 +1480,7 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
     }
 
     // Sauvegarder la transaction, marquer complete et repondre
-    let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
+    let uuid_transaction = message.message.parsed.id.clone();
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
     let transaction: TransactionImpl = message.try_into()?;
     let reponse = transaction_ajouter_cle(middleware, transaction).await?;
@@ -1686,47 +1687,49 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     }
 
     // Valider contenu
-    let commande: CommandeAjouterDelegationSignee = message.message.get_msg().map_contenu(None)?;
+    let commande: CommandeAjouterDelegationSignee = message.message.parsed.map_contenu()?;
+
+    todo!("fix me - changer structure du message");
 
     // Valider la signature de la cle de millegrille
-    let val_message_filtre = match message.message.get_msg().contenu.get("confirmation") {
-        Some(v) => {
-            // Retirer l'element _signature
-            match v.as_object() {
-                Some(mut vd) => {
-                    let mut vdc = vd.clone();
-                    vdc.remove("_signature");
-                    vdc
-                },
-                None => Err(format!("commande_ajouter_delegation_signee Confirmation n'est pas un document"))?
-            }
-        },
-        None => Err(format!("commande_ajouter_delegation_signee Confirmation manquante du message"))?
-    };
+    // let val_message_filtre = match message.message.get_msg().contenu.get("confirmation") {
+    //     Some(v) => {
+    //         // Retirer l'element _signature
+    //         match v.as_object() {
+    //             Some(mut vd) => {
+    //                 let mut vdc = vd.clone();
+    //                 vdc.remove("_signature");
+    //                 vdc
+    //             },
+    //             None => Err(format!("commande_ajouter_delegation_signee Confirmation n'est pas un document"))?
+    //         }
+    //     },
+    //     None => Err(format!("commande_ajouter_delegation_signee Confirmation manquante du message"))?
+    // };
 
-    // Verifier la signature avec la cle de millegrille
-    let pk_millegrille = middleware.ca_cert().public_key()?;
-    let signature_valide = verifier_signature_serialize(
-        &pk_millegrille, commande.confirmation.signature.as_str(), &val_message_filtre)?;
-
-    if ! signature_valide {
-        Err(format!("commande_ajouter_delegation_signee Signature de la commande est invalide"))?
-    }
-
-    // Signature valide, on sauvegarde et traite la transaction
-    let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
-    sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
-    let transaction: TransactionImpl = message.try_into()?;
-    let _ = transaction_ajouter_delegation_signee(middleware, transaction).await?;
-    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
-
-    // Charger le document de compte et retourner comme reponse
-    let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
-        Some(compte) => serde_json::to_value(&compte)?,
-        None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
-    };
-
-    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+    // // Verifier la signature avec la cle de millegrille
+    // let pk_millegrille = middleware.ca_cert().public_key()?;
+    // let signature_valide = verifier_signature_serialize(
+    //     &pk_millegrille, commande.confirmation.signature.as_str(), &val_message_filtre)?;
+    //
+    // if ! signature_valide {
+    //     Err(format!("commande_ajouter_delegation_signee Signature de la commande est invalide"))?
+    // }
+    //
+    // // Signature valide, on sauvegarde et traite la transaction
+    // let uuid_transaction = message.message.parsed.id.clone();
+    // sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
+    // let transaction: TransactionImpl = message.try_into()?;
+    // let _ = transaction_ajouter_delegation_signee(middleware, transaction).await?;
+    // marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
+    //
+    // // Charger le document de compte et retourner comme reponse
+    // let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
+    //     Some(compte) => serde_json::to_value(&compte)?,
+    //     None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
+    // };
+    //
+    // Ok(Some(middleware.formatter_reponse(&reponse, None)?))
 }
 
 async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -1744,7 +1747,7 @@ async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &Gestio
     }
 
     // Valider contenu en faisant le mapping
-    let _commande_resultat: CommandeResetWebauthnUsager = match message.message.get_msg().map_contenu(None) {
+    let _commande_resultat: CommandeResetWebauthnUsager = match message.message.get_msg().map_contenu() {
         Ok(c) => c,
         Err(e) => {
             let reponse = json!({"ok": false, "code": 2, "err": format!("Format de la commande invalide : {:?}", e)});
@@ -1922,11 +1925,11 @@ pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: Message
     debug!("Consommer commande_maj_usager_delegations : {:?}", &message.message);
 
     // Valider contenu
-    let commande: TransactionMajUsagerDelegations = message.message.get_msg().map_contenu(None)?;
+    let commande: TransactionMajUsagerDelegations = message.message.get_msg().map_contenu()?;
     let user_id = commande.user_id.as_str();
 
     // Commande valide, on sauvegarde et traite la transaction
-    let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
+    let uuid_transaction = message.message.parsed.id.clone();
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
     let transaction: TransactionImpl = message.try_into()?;
     let _ = transaction_maj_usager_delegations(middleware, transaction).await?;
@@ -1991,11 +1994,11 @@ pub async fn commande_supprimer_cles<M>(middleware: &M, message: MessageValideAc
     debug!("Consommer commande_supprimer_cles : {:?}", &message.message);
 
     // Valider contenu
-    let commande: TransactionSupprimerCles = message.message.get_msg().map_contenu(None)?;
+    let commande: TransactionSupprimerCles = message.message.get_msg().map_contenu()?;
     let user_id = commande.user_id.as_str();
 
     // Commande valide, on sauvegarde et traite la transaction
-    let uuid_transaction = message.message.get_entete().uuid_transaction.clone();
+    let uuid_transaction = message.message.parsed.id.clone();
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
     let transaction: TransactionImpl = message.try_into()?;
     let _ = transaction_supprimer_cles(middleware, transaction).await?;

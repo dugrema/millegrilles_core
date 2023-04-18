@@ -693,7 +693,8 @@ async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+    //let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+    let trigger: TriggerTransaction = match m.message.parsed.map_contenu() {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
@@ -731,7 +732,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Evenement presence domaine : {:?}", m.message.get_msg());
-    let event: PresenceDomaine = m.message.get_msg().map_contenu(None)?;
+    let event: PresenceDomaine = m.message.get_msg().map_contenu()?;
     debug!("Presence domaine : {:?}", event);
 
     let mut set_ops = m.message.get_msg().map_to_bson()?;
@@ -776,6 +777,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
         });
 
         let transaction = middleware.formatter_message(
+            MessageKind::Transaction,
             &tval,
             Some(DOMAINE_NOM),
             Some(TRANSACTION_DOMAINE),
@@ -802,8 +804,8 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
 async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let estampille = &m.message.get_entete().estampille;
-    let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
+    let estampille = &m.message.parsed.estampille;
+    let event: PresenceMonitor = m.message.get_msg().map_contenu()?;
     debug!("Presence monitor : {:?}", event);
 
     // Preparer valeurs applications
@@ -881,7 +883,9 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, ges
         });
 
         let transaction = middleware.formatter_message(
-            &tval, Some(DOMAINE_NOM), Some(TRANSACTION_MONITOR), None, None, false)?;
+            MessageKind::Transaction, &tval,
+            Some(DOMAINE_NOM), Some(TRANSACTION_MONITOR), None, None,
+            false)?;
 
         // Sauvegarder la transation
         let msg = MessageSerialise::from_parsed(transaction)?;
@@ -908,8 +912,8 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let estampille = &m.message.get_entete().estampille;
-    let event: PresenceFichiers = m.message.get_msg().map_contenu(None)?;
+    let estampille = &m.message.parsed.estampille;
+    let event: PresenceFichiers = m.message.get_msg().map_contenu()?;
     debug!("traiter_presence_fichiers Presence fichiers : {:?}", event);
 
     let instance_id = match m.message.certificat.clone() {
@@ -991,7 +995,7 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
 async fn traiter_evenement_application<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
-    let estampille = &m.message.get_entete().estampille;
+    let estampille = &m.message.parsed.estampille;
     // let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
     debug!("Evenement application monitor : {:?}", m);
 
@@ -1058,7 +1062,7 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, message: Me
     }
 
     // Valider commande
-    if let Err(e) = message.message.get_msg().map_contenu::<TransactionConfigurerConsignation>(None) {
+    if let Err(e) = message.message.get_msg().map_contenu::<TransactionConfigurerConsignation>() {
         Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?;
     };
 
@@ -1083,7 +1087,7 @@ async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: Mess
     }
 
     // Valider commande
-    if let Err(e) = message.message.get_msg().map_contenu::<TransactionSetFichiersPrimaire>(None) {
+    if let Err(e) = message.message.get_msg().map_contenu::<TransactionSetFichiersPrimaire>() {
         Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?;
     };
 
@@ -1547,6 +1551,11 @@ struct ApplicationConfiguree {
     version: Option<String>,
 }
 
+#[derive(Clone, Deserialize)]
+struct MessageInstanceId {
+    instance_id: Option<String>
+}
+
 async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
                          -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -1563,12 +1572,16 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
 
     let mut curseur = {
         let mut filtre = doc! {};
-        let msg = message.message.get_msg();
-        if let Some(instance_id) = msg.contenu.get("instance_id") {
-            if let Some(instance_id) = instance_id.as_str() {
-                filtre.insert("instance_id", millegrilles_common_rust::bson::Bson::String(instance_id.into()));
-            }
+        let message_instance_id: MessageInstanceId = message.message.parsed.map_contenu()?;
+        if let Some(inner) = message_instance_id.instance_id.as_ref() {
+            filtre.insert("instance_id", inner.to_owned());
         }
+        // let msg = message.message.get_msg();
+        // if let Some(instance_id) = msg.contenu.get("instance_id") {
+        //     if let Some(instance_id) = instance_id.as_str() {
+        //         filtre.insert("instance_id", millegrilles_common_rust::bson::Bson::String(instance_id.into()));
+        //     }
+        // }
 
         // let projection = doc! {"instance_id": true, "domaine": true, "securite": true};
         let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
@@ -1667,7 +1680,7 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
 
     let idmg_local = middleware.get_enveloppe_signature().idmg()?;
 
-    let requete: RequeteResolveIdmg = message.message.parsed.map_contenu(None)?;
+    let requete: RequeteResolveIdmg = message.message.parsed.map_contenu()?;
     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
 
     // Map reponse, associe toutes les adresses dans la requete aux idmg trouves
@@ -1811,7 +1824,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     }?;
 
     // Mapper message avec la fiche
-    let reponse_fiche: ReponseFichePubliqueTierce = reponse.message.get_msg().map_contenu(None)?;
+    let reponse_fiche: ReponseFichePubliqueTierce = reponse.message.get_msg().map_contenu()?;
     debug!("Reponse fiche : {:?}", reponse);
 
     // Verifier code reponse HTTP
@@ -1853,7 +1866,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
         None => Err(format!("core_topologie.resoudre_url Erreur chargement certificat de fiche publique, certificat manquant"))
     }?;
 
-    let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu(None)?;
+    let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu()?;
     debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
 
     // Sauvegarder/mettre a jour fiche publique
@@ -2328,7 +2341,7 @@ async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideActi
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage + ChiffrageFactoryTrait
 {
     debug!("requete_fiche_millegrille");
-    let requete: RequeteFicheMillegrille = message.message.parsed.map_contenu(None)?;
+    let requete: RequeteFicheMillegrille = message.message.parsed.map_contenu()?;
     debug!("requete_fiche_millegrille Parsed : {:?}", requete);
 
     let enveloppe_locale = middleware.get_enveloppe_signature();
@@ -2359,7 +2372,7 @@ async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideActi
         Some(r) => {
             // middleware.formatter_reponse(fiche, None)
             middleware.formatter_message(
-                &r, Some(DOMAINE_TOPOLOGIE), Some("fichePublique"),
+                MessageKind::Commande, &r, Some(DOMAINE_TOPOLOGIE), Some("fichePublique"),
                 None, Some(1), true)
         }
         None => {
@@ -2379,7 +2392,7 @@ async fn requete_applications_tiers<M>(middleware: &M, message: MessageValideAct
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
-    let requete: RequeteApplicationsTiers = message.message.parsed.map_contenu(None)?;
+    let requete: RequeteApplicationsTiers = message.message.parsed.map_contenu()?;
     debug!("requete_applications_tiers Parsed : {:?}", requete);
 
     let projection = doc! {
@@ -2426,7 +2439,7 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
-    let requete: RequeteConsignationFichiers = message.message.parsed.map_contenu(None)?;
+    let requete: RequeteConsignationFichiers = message.message.parsed.map_contenu()?;
     debug!("requete_consignation_fichiers Parsed : {:?}", requete);
 
     let instance_id = match message.message.certificat {
@@ -2555,7 +2568,7 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValideAction
     where M: GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("requete_get_cle_configuration Message : {:?}", &m.message);
-    let requete: ParametresGetCleConfiguration = m.message.get_msg().map_contenu(None)?;
+    let requete: ParametresGetCleConfiguration = m.message.get_msg().map_contenu()?;
     debug!("requete_get_cle_configuration cle parsed : {:?}", requete);
 
     if ! m.verifier_roles(vec![RolesCertificats::Fichiers]) {
@@ -2684,7 +2697,7 @@ async fn requete_configuration_fichiers<M>(middleware: &M, message: MessageValid
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
-    let requete: RequeteConfigurationFichiers = message.message.parsed.map_contenu(None)?;
+    let requete: RequeteConfigurationFichiers = message.message.parsed.map_contenu()?;
     debug!("requete_configuration_fichiers Parsed : {:?}", requete);
 
     let mut liste = Vec::new();

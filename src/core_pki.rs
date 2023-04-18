@@ -416,25 +416,45 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Resul
     }
 }
 
+#[derive(Clone, Deserialize)]
+struct MessageFingerprint {
+    fingerprint: String
+}
+
 async fn requete_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     let fingerprint = match m.domaine.as_str() {
         DOMAINE_NOM => {
-            match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT) {
-                Some(fp) => match fp.as_str() {
-                    Some(fp) => Ok(fp),
-                    None =>Err("Fingerprint manquant pour requete de certificat"),
+            let message_fingerprint: Result<String, String> = match m.message.parsed.map_contenu::<MessageFingerprint>() {
+                Ok(inner) => Ok(inner.fingerprint),
+                Err(e) => Err(format!("core_pki.requete_certificat Fingerprint manquant pour requete de certificat : {:?}", e)),
+            };
+            message_fingerprint
+
+            // match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT) {
+            //     Some(fp) => match fp.as_str() {
+            //         Some(fp) => Ok(fp),
+            //         None =>Err("Fingerprint manquant pour requete de certificat"),
+            //     },
+            //     None => Err("Fingerprint manquant pour requete de certificat"),
+            // }
+        },
+        DOMAINE_CERTIFICAT_NOM => {
+            //Ok(m.message.parsed.routage.action.as_str())
+            match m.message.parsed.routage.as_ref() {
+                Some(inner) => match inner.action.as_ref() {
+                    Some(inner) => Ok(inner.to_owned()),
+                    None => Err(String::from("action manquante pour requete certificat (fingerprint)")),
                 },
-                None => Err("Fingerprint manquant pour requete de certificat"),
+                None => Err(String::from("routage manquant pour requete certificat (fingerprint)")),
             }
         },
-        DOMAINE_CERTIFICAT_NOM => Ok(m.action.as_str()),
-        _ => Err("Mauvais type de requete de certificat")
+        _ => Err(String::from("Mauvais type de requete de certificat"))
     }?;
 
-    let enveloppe = match middleware.get_certificat(fingerprint).await {
+    let enveloppe = match middleware.get_certificat(fingerprint.as_str()).await {
         Some(inner) => inner,
         None => {
             debug!("Certificat inconnu : {}", fingerprint);
@@ -467,18 +487,17 @@ async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValideAction) ->
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let fingerprint_pk = match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK) {
-        Some(inner) => match inner.as_str() {
-            Some(inner) => Ok(inner),
-            None => Err("Erreur fingerprint pk mauvais format"),
-        },
-        None => Err("Erreur fingerprint pk absent"),
-    }?;
+    // let fingerprint_pk = match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK) {
+    let message_fingerprint: MessageFingerprint = match m.message.parsed.map_contenu() {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("Erreur fingerprint pk absent/erreur mapping {:?}", e))?,
+    };
+    let fingerprint_pk = message_fingerprint.fingerprint;
 
     let db = middleware.get_database()?;
     let collection = db.collection::<Document>(COLLECTION_CERTIFICAT_NOM);
     let filtre = doc! {
-        PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: fingerprint_pk,
+        PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: &fingerprint_pk,
     };
     let document_certificat = match collection.find_one(filtre, None).await {
         Ok(inner) => match inner {
@@ -518,7 +537,7 @@ async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageVa
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let commande: CommandeSauvegarderCertificat = m.message.get_msg().map_contenu(None)?;
+    let commande: CommandeSauvegarderCertificat = m.message.get_msg().map_contenu()?;
 
     let ca_pem = match &commande.ca {
         Some(c) => Some(c.as_str()),
@@ -597,7 +616,7 @@ async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Resul
     match middleware.transmettre_commande(routage, &commande.contenu, true).await? {
         Some(reponse) => {
             if let TypeMessage::Valide(reponse) = reponse {
-                let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu(None)?;
+                let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu()?;
                 Ok(Some(middleware.formatter_reponse(reponse_json, None)?))
             } else {
                 error!("core_pki.commande_signer_csr Erreur signature, echec local et relai 4.secure");
@@ -623,7 +642,7 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
     let mut message = None;
 
     // Valider format de la demande avec mapping
-    let message_parsed: DemandeSignature = m.message.parsed.map_contenu(None)?;
+    let message_parsed: DemandeSignature = m.message.parsed.map_contenu()?;
     let certificat = match &m.message.certificat {
         Some(c) => c.clone(),
         None => {
@@ -728,7 +747,8 @@ async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+    //let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+    let trigger: TriggerTransaction = match m.message.parsed.map_contenu() {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };

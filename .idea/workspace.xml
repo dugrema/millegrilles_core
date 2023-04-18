@@ -7,11 +7,14 @@
     <cargoProject FILE="$PROJECT_DIR$/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f8c2faca-a829-49cf-9c2c-988a8af0de6e" name="Changes" comment="build 2023.2.2, fix regeneration&#10;&#10;common">
+    <list default="true" id="f8c2faca-a829-49cf-9c2c-988a8af0de6e" name="Changes" comment="Common 2023.5.0">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/build.txt" beforeDir="false" afterPath="$PROJECT_DIR$/build.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/millegrilles_common_rust" beforeDir="false" afterPath="$PROJECT_DIR$/millegrilles_common_rust" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core_catalogues.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core_catalogues.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core_maitredescomptes.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core_maitredescomptes.rs" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/core_pki.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core_pki.rs" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/core_topologie.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core_topologie.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -22,7 +25,7 @@
   <component name="Git.Settings">
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
-        <entry key="$PROJECT_DIR$/millegrilles_common_rust" value="2023.2" />
+        <entry key="$PROJECT_DIR$/millegrilles_common_rust" value="2022.5" />
       </map>
     </option>
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
@@ -60,10 +63,10 @@
     <configuration name="Run millegrilles_core" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
       <option name="command" value="run --package millegrilles_core --bin millegrilles_core" />
       <option name="workingDirectory" value="file://$PROJECT_DIR$" />
+      <option name="emulateTerminal" value="false" />
       <option name="channel" value="DEFAULT" />
       <option name="requiredFeatures" value="true" />
       <option name="allFeatures" value="false" />
-      <option name="emulateTerminal" value="false" />
       <option name="withSudo" value="false" />
       <option name="buildTarget" value="REMOTE" />
       <option name="backtrace" value="SHORT" />
@@ -98,62 +101,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1656787583997</updated>
-    </task>
-    <task id="LOCAL-00040" summary="Retrait cert millegrille de chiffrage dans fiche">
-      <created>1666185066174</created>
-      <option name="number" value="00040" />
-      <option name="presentableId" value="LOCAL-00040" />
-      <option name="project" value="LOCAL" />
-      <updated>1666185066174</updated>
-    </task>
-    <task id="LOCAL-00041" summary="Ajout logging pour chiffrage">
-      <created>1666297620794</created>
-      <option name="number" value="00041" />
-      <option name="presentableId" value="LOCAL-00041" />
-      <option name="project" value="LOCAL" />
-      <updated>1666297620795</updated>
-    </task>
-    <task id="LOCAL-00042" summary="Fix reception cert maitredescles">
-      <created>1666297645207</created>
-      <option name="number" value="00042" />
-      <option name="presentableId" value="LOCAL-00042" />
-      <option name="project" value="LOCAL" />
-      <updated>1666297645207</updated>
-    </task>
-    <task id="LOCAL-00043" summary="Fix exchange commande cert maitredescles (3.protege)">
-      <created>1666300768034</created>
-      <option name="number" value="00043" />
-      <option name="presentableId" value="LOCAL-00043" />
-      <option name="project" value="LOCAL" />
-      <updated>1666300768034</updated>
-    </task>
-    <task id="LOCAL-00044" summary="Fix exchange commande cert maitredescles (3.protege)">
-      <created>1666300781070</created>
-      <option name="number" value="00044" />
-      <option name="presentableId" value="LOCAL-00044" />
-      <option name="project" value="LOCAL" />
-      <updated>1666300781070</updated>
-    </task>
-    <task id="LOCAL-00045" summary="Const domaine certificat">
-      <created>1666352808525</created>
-      <option name="number" value="00045" />
-      <option name="presentableId" value="LOCAL-00045" />
-      <option name="project" value="LOCAL" />
-      <updated>1666352808525</updated>
-    </task>
-    <task id="LOCAL-00046" summary="Ajout traitement evenement.certificat.infoCertificat">
-      <created>1666353109681</created>
-      <option name="number" value="00046" />
-      <option name="presentableId" value="LOCAL-00046" />
-      <option name="project" value="LOCAL" />
-      <updated>1666353109681</updated>
-    </task>
-    <task id="LOCAL-00047" summary="2022.8 common">
-      <created>1666629802514</created>
-      <option name="number" value="00047" />
-      <option name="presentableId" value="LOCAL-00047" />
-      <option name="project" value="LOCAL" />
-      <updated>1666629802514</updated>
     </task>
     <task id="LOCAL-00048" summary="2022.8 common">
       <created>1666629814468</created>
@@ -442,7 +389,63 @@
       <option name="project" value="LOCAL" />
       <updated>1678969802320</updated>
     </task>
-    <option name="localTasksCounter" value="89" />
+    <task id="LOCAL-00089" summary="Ajout params fichiers supporte_archives, url_archives&#10;&#10;build 2023.3.0">
+      <created>1680611377172</created>
+      <option name="number" value="00089" />
+      <option name="presentableId" value="LOCAL-00089" />
+      <option name="project" value="LOCAL" />
+      <updated>1680611377173</updated>
+    </task>
+    <task id="LOCAL-00090" summary="Ajout info orphelins">
+      <created>1680615899951</created>
+      <option name="number" value="00090" />
+      <option name="presentableId" value="LOCAL-00090" />
+      <option name="project" value="LOCAL" />
+      <updated>1680615899951</updated>
+    </task>
+    <task id="LOCAL-00091" summary="Fix sauvegarde supporte_archives (avait 3 p)">
+      <created>1680616691085</created>
+      <option name="number" value="00091" />
+      <option name="presentableId" value="LOCAL-00091" />
+      <option name="project" value="LOCAL" />
+      <updated>1680616691086</updated>
+    </task>
+    <task id="LOCAL-00092" summary="Fix supporte_archive pour config (fiche)">
+      <created>1680636919950</created>
+      <option name="number" value="00092" />
+      <option name="presentableId" value="LOCAL-00092" />
+      <option name="project" value="LOCAL" />
+      <updated>1680636919950</updated>
+    </task>
+    <task id="LOCAL-00093" summary="common">
+      <created>1680636934650</created>
+      <option name="number" value="00093" />
+      <option name="presentableId" value="LOCAL-00093" />
+      <option name="project" value="LOCAL" />
+      <updated>1680636934650</updated>
+    </task>
+    <task id="LOCAL-00094" summary="Changement info store a optionnel &#10;&#10;consignation_url, type_store">
+      <created>1680780969961</created>
+      <option name="number" value="00094" />
+      <option name="presentableId" value="LOCAL-00094" />
+      <option name="project" value="LOCAL" />
+      <updated>1680780969962</updated>
+    </task>
+    <task id="LOCAL-00095" summary="Changement info store a optionnel, default params consignation &#10;&#10;consignation_url, type_store">
+      <created>1680781012433</created>
+      <option name="number" value="00095" />
+      <option name="presentableId" value="LOCAL-00095" />
+      <option name="project" value="LOCAL" />
+      <updated>1680781012433</updated>
+    </task>
+    <task id="LOCAL-00096" summary="Common 2023.5.0">
+      <created>1681687604449</created>
+      <option name="number" value="00096" />
+      <option name="presentableId" value="LOCAL-00096" />
+      <option name="project" value="LOCAL" />
+      <updated>1681687604450</updated>
+    </task>
+    <option name="localTasksCounter" value="97" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -457,14 +460,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Fix ajout cle (fingerprint optionnel)" />
-    <MESSAGE value="Ajout webauthn_hostnames dans compte usager" />
-    <MESSAGE value="Ajout sauvegarder_traiter_transaction_serializable" />
-    <MESSAGE value="Ajout set fichiers primaire" />
-    <MESSAGE value="Ajout RequeteConsignationFichiers&#10;&#10;Ajout params stats reponse consignation fichiers" />
-    <MESSAGE value="Ajout stats pour evenement fichiers" />
-    <MESSAGE value="common" />
-    <MESSAGE value="Ajout getConfigurationFichiers" />
     <MESSAGE value="Ajout info sftp pour consignation" />
     <MESSAGE value="Ajout TRANSACTION_SET_FICHIERS_PRIMAIRE" />
     <MESSAGE value="consignation_url optionnel&#10;&#10;Doit etre fourni par fichiers" />
@@ -482,6 +477,14 @@
     <MESSAGE value="Detection instance en/hors ligne" />
     <MESSAGE value="Detection instance en/hors ligne avec delai 400s" />
     <MESSAGE value="build 2023.2.2, fix regeneration&#10;&#10;common" />
-    <option name="LAST_COMMIT_MESSAGE" value="build 2023.2.2, fix regeneration&#10;&#10;common" />
+    <MESSAGE value="Ajout params fichiers supporte_archives, url_archives&#10;&#10;build 2023.3.0" />
+    <MESSAGE value="Ajout info orphelins" />
+    <MESSAGE value="Fix sauvegarde supporte_archives (avait 3 p)" />
+    <MESSAGE value="Fix supporte_archive pour config (fiche)" />
+    <MESSAGE value="common" />
+    <MESSAGE value="Changement info store a optionnel &#10;&#10;consignation_url, type_store" />
+    <MESSAGE value="Changement info store a optionnel, default params consignation &#10;&#10;consignation_url, type_store" />
+    <MESSAGE value="Common 2023.5.0" />
+    <option name="LAST_COMMIT_MESSAGE" value="Common 2023.5.0" />
   </component>
 </project>

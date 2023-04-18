@@ -454,7 +454,8 @@ async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+    // let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+    let trigger: TriggerTransaction = match m.message.parsed.map_contenu() {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
@@ -482,20 +483,26 @@ where M: ValidateurX509 {
     Ok(())
 }
 
+#[derive(Clone, Deserialize)]
+struct MessageCatalogue {
+    catalogue: MessageMilleGrille,
+}
+
 async fn traiter_commande_application<M>(middleware: &M, commande: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where M: ValidateurX509 + MongoDao + GenerateurMessages
 {
     // let message = commande.message.get_msg();
     debug!("Traitement catalogue application {:?}", commande);
 
-    let value_catalogue: MessageMilleGrille = match commande.message.parsed.contenu.get("catalogue") {
-        Some(v) => serde_json::from_value(v.to_owned())?,
-        None => Err(format!("Commande application sans champ catalogue"))?
-    };
+    // let value_catalogue: MessageMilleGrille = match commande.message.parsed.contenu.get("catalogue") {
+    let message_catalogue: MessageCatalogue = commande.message.parsed.map_contenu()?;
+    let value_catalogue = message_catalogue.catalogue;
+
     let mut catalogue = MessageSerialise::from_parsed(value_catalogue)?;
     debug!("Catalogue charge : {:?}", catalogue);
 
-    let info_catalogue: CatalogueApplication = serde_json::from_value(Value::Object(catalogue.get_msg().contenu.to_owned()))?;
+    // let info_catalogue: CatalogueApplication = serde_json::from_value(Value::Object(catalogue.get_msg().contenu.to_owned()))?;
+    let info_catalogue: CatalogueApplication = catalogue.parsed.map_contenu()?;
     debug!("Information catalogue charge : {:?}", info_catalogue);
 
     let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
@@ -645,11 +652,17 @@ async fn liste_applications<M>(middleware: &M)
     Ok(Some(reponse))
 }
 
+#[derive(Deserialize)]
+struct ReponseNom {
+    nom: String,
+}
+
 async fn repondre_application<M>(middleware: &M, param: &MessageMilleGrille)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let nom_application: String = param.map_contenu(Some("nom"))?;
+    let message_nom: ReponseNom = param.map_contenu()?;
+    let nom_application = message_nom.nom;
 
     let filtre = doc! {"nom": nom_application};
     let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
