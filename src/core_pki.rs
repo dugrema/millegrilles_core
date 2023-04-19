@@ -421,6 +421,11 @@ struct MessageFingerprint {
     fingerprint: String
 }
 
+#[derive(Clone, Deserialize)]
+struct MessageFingerprintPublicKey {
+    fingerprint_pk: String
+}
+
 async fn requete_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -488,11 +493,11 @@ where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     // let fingerprint_pk = match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK) {
-    let message_fingerprint: MessageFingerprint = match m.message.parsed.map_contenu() {
+    let message_fingerprint: MessageFingerprintPublicKey = match m.message.parsed.map_contenu() {
         Ok(inner) => inner,
         Err(e) => Err(format!("Erreur fingerprint pk absent/erreur mapping {:?}", e))?,
     };
-    let fingerprint_pk = message_fingerprint.fingerprint;
+    let fingerprint_pk = message_fingerprint.fingerprint_pk;
 
     let db = middleware.get_database()?;
     let collection = db.collection::<Document>(COLLECTION_CERTIFICAT_NOM);
