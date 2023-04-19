@@ -1321,7 +1321,7 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
         .exchanges(vec![Securite::L4Secure])
         .build();
 
-    match middleware.transmettre_commande(routage, &commande_signee.contenu, true).await? {
+    match middleware.transmettre_commande(routage, &commande_signature, true).await? {
         Some(reponse) => {
             if let TypeMessage::Valide(reponse) = reponse {
                 let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu()?;
