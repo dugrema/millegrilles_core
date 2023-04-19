@@ -777,9 +777,14 @@ where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
     T: Transaction
 {
-    match transaction.get_action() {
+    let action = match transaction.get_routage().action.as_ref() {
+        Some(inner) => inner.as_str(),
+        None => Err(format!("Transaction {} n'a pas d'action", transaction.get_uuid_transaction()))?
+    };
+
+    match action {
         PKI_TRANSACTION_NOUVEAU_CERTIFICAT => sauvegarder_certificat(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), action)),
     }
 }
 

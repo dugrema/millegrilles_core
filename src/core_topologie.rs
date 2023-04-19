@@ -718,13 +718,18 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         M: ValidateurX509 + GenerateurMessages + MongoDao,
         T: Transaction
 {
-    match transaction.get_action() {
-        TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
+    let action = match transaction.get_routage().action.as_ref() {
+        Some(inner) => inner.as_str(),
+        None => Err(format!("Transaction {} n'a pas d'action", transaction.get_uuid_transaction()))?
+    };
+
+    match action {
+        // TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
         TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), action)),
     }
 }
 
@@ -1272,30 +1277,31 @@ async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Re
         M: GenerateurMessages + MongoDao,
         T: Transaction
 {
-    let mut doc = transaction.contenu();
-    let domaine = match doc.get_str("domaine") {
-        Ok(d) => d,
-        Err(e) => Err(format!("Erreur traitement transaction domaine {:?}", e))?
-    };
-
-    let ops = doc! {
-        "$set": {"dirty": false},
-        "$setOnInsert": {CHAMP_DOMAINE: domaine, CHAMP_CREATION: Utc::now()},
-        "$currentDate": {CHAMP_MODIFICATION: true},
-    };
-    let filtre = doc! {CHAMP_DOMAINE: domaine};
-    let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
-    let options = UpdateOptions::builder().upsert(true).build();
-    match collection.update_one(filtre, ops, options).await {
-        Ok(_) => (),
-        Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
-    }
-
-    let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
-        Ok(r) => r,
-        Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
-    };
-    Ok(Some(reponse))
+    todo!("fix me");
+    // let mut doc = transaction.contenu();
+    // let domaine = match doc.get_str("domaine") {
+    //     Ok(d) => d,
+    //     Err(e) => Err(format!("Erreur traitement transaction domaine {:?}", e))?
+    // };
+    //
+    // let ops = doc! {
+    //     "$set": {"dirty": false},
+    //     "$setOnInsert": {CHAMP_DOMAINE: domaine, CHAMP_CREATION: Utc::now()},
+    //     "$currentDate": {CHAMP_MODIFICATION: true},
+    // };
+    // let filtre = doc! {CHAMP_DOMAINE: domaine};
+    // let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
+    // let options = UpdateOptions::builder().upsert(true).build();
+    // match collection.update_one(filtre, ops, options).await {
+    //     Ok(_) => (),
+    //     Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
+    // }
+    //
+    // let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
+    //     Ok(r) => r,
+    //     Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
+    // };
+    // Ok(Some(reponse))
 }
 
 async fn traiter_transaction_monitor<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
@@ -1337,8 +1343,7 @@ async fn traiter_transaction_supprimer_instance<M, T>(middleware: &M, transactio
         M: GenerateurMessages + MongoDao,
         T: Transaction
 {
-    let mut doc = transaction.contenu();
-    let mut doc_transaction: PresenceMonitor = match convertir_bson_deserializable(doc) {
+    let mut doc_transaction: PresenceMonitor = match transaction.convertir() {
         Ok(d) => d,
         Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_instance Erreur conversion transaction monitor : {:?}", e))?
     };

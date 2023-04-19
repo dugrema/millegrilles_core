@@ -579,14 +579,19 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         M: ValidateurX509 + GenerateurMessages + MongoDao,
         T: Transaction
 {
-    match transaction.get_action() {
+    let action = match transaction.get_routage().action.as_ref() {
+        Some(inner) => inner.as_str(),
+        None => Err(format!("Transaction {} n'a pas d'action", transaction.get_uuid_transaction()))?
+    };
+
+    match action {
         TRANSACTION_INSCRIRE_USAGER => sauvegarder_inscrire_usager(middleware, transaction).await,
         TRANSACTION_AJOUTER_CLE => transaction_ajouter_cle(middleware, transaction).await,
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE => transaction_ajouter_delegation_signee(middleware, transaction).await,
         TRANSACTION_MAJ_USAGER_DELEGATIONS => transaction_maj_usager_delegations(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_CLES => transaction_supprimer_cles(middleware, transaction).await,
         TRANSACTION_RESET_WEBAUTHN_USAGER => transaction_reset_webauthn_usager(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), transaction.get_action())),
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), action)),
     }
 }
 
@@ -918,14 +923,6 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Res
 
             let reponse = match certificat {
                 Some(inner) => Some(inner),
-                // {
-                //     // Modifier reponse, on retourne le certificat
-                //     let reponse = json!({"ok": true, "userId": user_id, "certificat": inner});
-                //     match middleware.formatter_reponse(&reponse,None) {
-                //         Ok(m) => return Ok(Some(m)),
-                //         Err(e) => Err(format!("core_maitredescomptes.inscrire_usager Erreur preparation reponse avec certificat : {:?}", e))?
-                //     }
-                // },
                 None => resultat_inscrire_usager
             };
 
@@ -941,6 +938,7 @@ async fn sauvegarder_inscrire_usager<M, T>(middleware: &M, transaction: T)
     where T: Transaction,
           M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
+    debug!("sauvegarder_inscrire_usager {:?}", transaction);
     let transaction: TransactionInscrireUsager = match transaction.clone().convertir() {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion en TransactionInscrireUsager : {:?}", e))?
