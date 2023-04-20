@@ -1438,6 +1438,8 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
         }
     };
 
+    debug!("ajouter_cle CompteUsager charge : {:?}", compte_usager);
+
     // Verifier autorisation client - le certificat doit correspondre au user_id du compte
     let reponse_client = &commande.reponse_client;
     let mut reponse_client_serialise = MessageSerialise::from_parsed(reponse_client.to_owned())?;
@@ -1860,7 +1862,7 @@ struct CommandeAjouterDelegationSignee {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ConfirmationSigneeDelegationGlobale {
-    #[serde(rename="_signature")]
+    #[serde(rename="sig")]
     signature: String,
     #[serde(rename="activerDelegation")]
     activer_delegation: Option<bool>,
