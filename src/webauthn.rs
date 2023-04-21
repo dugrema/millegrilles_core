@@ -221,12 +221,14 @@ fn verifier_commande<S>(commande: &CommandeWebauthn, message: &S) -> Result<bool
         None => Err("Serializable n'est pas un document")?
     };
 
+    debug!("verifier_commande Contenu {:?}", contenu);
+
     match commande {
         CommandeWebauthn::DemandeSignerCertificat(h) => {
             // match contenu.get("demandeCertificat") {
-            //     Some(d) => Ok(
+            //     Some(d) => {
                     Ok(verifier_hachage_serializable(h.as_slice(), Code::Blake2b512, &contenu)?)
-            //     ),
+            //     },
             //     None => Err("Element 'demandeCertificat' absent de la commande")?
             // }
         }

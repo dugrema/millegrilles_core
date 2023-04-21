@@ -4,6 +4,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
+use millegrilles_common_rust::base64_url;
 use millegrilles_common_rust::hex;
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::{Bson, bson, doc};
@@ -45,6 +46,7 @@ use crate::validateur_pki_mongo::MiddlewareDbPki;
 use crate::webauthn::{ClientAssertionResponse, CompteCredential, multibase_to_safe, valider_commande};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
+use millegrilles_common_rust::multibase::Base::Base64Url;
 use crate::core_pki::COLLECTION_CERTIFICAT_NOM;
 
 // Constantes
