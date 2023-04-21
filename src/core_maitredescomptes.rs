@@ -4,6 +4,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
+use millegrilles_common_rust::hex;
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::{Bson, bson, doc};
 use millegrilles_common_rust::bson::Array;
@@ -35,6 +36,7 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::verificateur::{ValidationOptions, verifier_message, verifier_signature_serialize, verifier_signature_str};
 use millegrilles_common_rust::{reqwest, reqwest::Url};
+use millegrilles_common_rust::common_messages::MessageConfirmation;
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 use webauthn_rs::base64_data::Base64UrlSafeData;
@@ -1680,54 +1682,54 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
         debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
         match middleware.formatter_reponse(&err, None) {
             Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse (1) ajouter_delegation_signee : {:?}", e))?
+            Err(e) => Err(format!("commande_ajouter_delegation_signee Erreur preparation reponse (1) ajouter_delegation_signee : {:?}", e))?
         }
     }
 
     // Valider contenu
     let commande: CommandeAjouterDelegationSignee = message.message.parsed.map_contenu()?;
-
-    todo!("fix me - changer structure du message");
+    let mut message_confirmation = commande.confirmation;
 
     // Valider la signature de la cle de millegrille
-    // let val_message_filtre = match message.message.get_msg().contenu.get("confirmation") {
-    //     Some(v) => {
-    //         // Retirer l'element _signature
-    //         match v.as_object() {
-    //             Some(mut vd) => {
-    //                 let mut vdc = vd.clone();
-    //                 vdc.remove("_signature");
-    //                 vdc
-    //             },
-    //             None => Err(format!("commande_ajouter_delegation_signee Confirmation n'est pas un document"))?
-    //         }
-    //     },
-    //     None => Err(format!("commande_ajouter_delegation_signee Confirmation manquante du message"))?
-    // };
+    let (signature, hachage) = message_confirmation.verifier_contenu()?;
+    if signature != true || hachage != true {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, signature/hachage confirmation invalides"});
+        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err, None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse (2) ajouter_delegation_signee : {:?}", e))?
+        }
+    }
 
-    // // Verifier la signature avec la cle de millegrille
-    // let pk_millegrille = middleware.ca_cert().public_key()?;
-    // let signature_valide = verifier_signature_serialize(
-    //     &pk_millegrille, commande.confirmation.signature.as_str(), &val_message_filtre)?;
-    //
-    // if ! signature_valide {
-    //     Err(format!("commande_ajouter_delegation_signee Signature de la commande est invalide"))?
-    // }
-    //
-    // // Signature valide, on sauvegarde et traite la transaction
-    // let uuid_transaction = message.message.parsed.id.clone();
-    // sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
-    // let transaction: TransactionImpl = message.try_into()?;
-    // let _ = transaction_ajouter_delegation_signee(middleware, transaction).await?;
-    // marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
-    //
-    // // Charger le document de compte et retourner comme reponse
-    // let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
-    //     Some(compte) => serde_json::to_value(&compte)?,
-    //     None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
-    // };
-    //
-    // Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+    // Valider la pubkey, elle doit correspondre au certificat de la MilleGrille.
+    let public_key_millegrille = middleware.ca_cert().public_key()?.raw_public_key()?;
+    if hex::decode(message_confirmation.pubkey.as_str())? != public_key_millegrille {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, pubkey n'est pas la cle de la MilleGrille"});
+        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err, None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse (3) ajouter_delegation_signee : {:?}", e))?
+        }
+    }
+
+    // Valider le format du contenu (parse)
+    let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = message_confirmation.map_contenu()?;
+    debug!("commande_ajouter_delegation_signee Commande ajouter delegation verifiee {:?}", commande_ajouter_delegation);
+
+    // Signature valide, on sauvegarde et traite la transaction
+    let uuid_transaction = message.message.parsed.id.clone();
+    sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
+    let transaction: TransactionImpl = message.try_into()?;
+    let _ = transaction_ajouter_delegation_signee(middleware, transaction).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
+
+    // Charger le document de compte et retourner comme reponse
+    let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
+        Some(compte) => serde_json::to_value(&compte)?,
+        None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
+    };
+
+    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
 }
 
 async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -1763,15 +1765,49 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
 {
     let commande: CommandeAjouterDelegationSignee = match transaction.clone().convertir() {
         Ok(t) => t,
-        Err(e) => Err(format!("Erreur conversion en CommandeAjouterCle : {:?}", e))?
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur conversion en CommandeAjouterCle : {:?}", e))?
     };
 
-    debug!("transaction_ajouter_delegation_signee {:?}", commande);
+    // Valider contenu
+    let mut message_confirmation = commande.confirmation;
+
+    // Valider la signature de la cle de millegrille
+    let (signature, hachage) = match message_confirmation.verifier_contenu() {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur verifier_contenu : {:?}", e))?
+    };
+    if signature != true || hachage != true {
+        Err(format!("transaction_ajouter_delegation_signee Permission refusee, signature/hachage confirmation invalides"))?
+    }
+
+    // Valider la pubkey, elle doit correspondre au certificat de la MilleGrille.
+    let public_key_millegrille = match middleware.ca_cert().public_key() {
+        Ok(inner) => match inner.raw_public_key() {
+            Ok(inner) => inner,
+            Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur raw_public_key {:?}", e))?
+        },
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur raw_public_key {:?}", e))?
+    };
+
+    let public_key_recue = match hex::decode(message_confirmation.pubkey.as_str()) {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur hex::decode {:?}", e))?
+    } ;
+    if public_key_recue != public_key_millegrille {
+        Err(format!("transaction_ajouter_delegation_signee Permission refusee, pubkey n'est pas la cle de la MilleGrille"))?
+    }
+
+    debug!("transaction_ajouter_delegation_signee {:?}", message_confirmation);
+    let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = match message_confirmation.map_contenu() {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur map_contenu : {:?}", e))?
+    };
+    debug!("commande_ajouter_delegation_signee Commande ajouter delegation verifiee {:?}", commande_ajouter_delegation);
 
     // Le filtre agit a la fois sur le nom usager (valide par la cle) et le user_id (valide par serveur)
     let filtre = doc! {
         CHAMP_USER_ID: commande.user_id.as_str(),
-        CHAMP_USAGER_NOM: commande.confirmation.nom_usager.as_str(),
+        CHAMP_USAGER_NOM: commande_ajouter_delegation.nom_usager.as_str(),
     };
     let ops = doc! {
         "$set": {"delegation_globale": "proprietaire", "delegations_date": &DateEpochSeconds::now()},
@@ -1782,13 +1818,13 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
     let resultat = match collection.update_one(filtre, ops, None).await {
         Ok(r) => r,
-        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", commande, e))?
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", message_confirmation, e))?
     };
     debug!("transaction_ajouter_delegation_signee resultat {:?}", resultat);
     if resultat.matched_count == 1 {
         Ok(None)
     } else {
-        Err(format!("transaction_ajouter_delegation_signee Aucun match pour usager {:?}", commande))
+        Err(format!("transaction_ajouter_delegation_signee Aucun match pour usager {:?}", commande.user_id.as_str()))
     }
 }
 
@@ -1854,14 +1890,14 @@ struct CommandeResetWebauthnUsager {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CommandeAjouterDelegationSignee {
-    confirmation: ConfirmationSigneeDelegationGlobale,
+    confirmation: MessageMilleGrille,
     #[serde(rename="userId")]
     user_id: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ConfirmationSigneeDelegationGlobale {
-    #[serde(rename="_signature")]
-    signature: String,
+    // #[serde(rename="_signature")]
+    // signature: String,
     #[serde(rename="activerDelegation")]
     activer_delegation: Option<bool>,
     data: Option<String>,
