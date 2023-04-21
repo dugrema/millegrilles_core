@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::bson::{Bson, DateTime, doc, to_bson};
+use millegrilles_common_rust::bson::{Bson, bson, DateTime, doc, to_bson};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
@@ -852,8 +852,10 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, ges
 
     debug!("Applications noeud : {:?}", &applications);
 
-    let mut set_ops = m.message.get_msg().map_to_bson()?;
-    filtrer_doc_id(&mut set_ops);
+    // let mut set_ops = m.message.get_msg().map_to_bson()?;
+    // filtrer_doc_id(&mut set_ops);
+
+    let mut set_ops = convertir_to_bson(event.clone())?;
 
     // Retirer champ cle
     set_ops.remove("instance_id");
@@ -1382,6 +1384,18 @@ struct PresenceMonitor {
     domaine: Option<String>,
     instance_id: String,
     services: Option<HashMap<String, InfoService>>,
+    applications_configurees: Option<Vec<Value>>,
+    containers: Option<HashMap<String, Value>>,
+    disk: Option<Vec<Value>>,
+    fqdn_detecte: Option<String>,
+    hostname: Option<String>,
+    info: Option<HashMap<String, Value>>,
+    ip_detectee: Option<String>,
+    load_average: Option<Vec<Value>>,
+    securite: Option<String>,
+    system_battery: Option<Value>,
+    system_fans: Option<Value>,
+    system_temperature: Option<HashMap<String, Value>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
