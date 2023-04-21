@@ -7,15 +7,8 @@
     <cargoProject FILE="$PROJECT_DIR$/Cargo.toml" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f8c2faca-a829-49cf-9c2c-988a8af0de6e" name="Changes" comment="Common 2023.5.0">
+    <list default="true" id="f8c2faca-a829-49cf-9c2c-988a8af0de6e" name="Changes" comment="Fix ajouter delegation">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Cargo.lock" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.lock" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/Cargo.toml" beforeDir="false" afterPath="$PROJECT_DIR$/Cargo.toml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/millegrilles_common_rust" beforeDir="false" afterPath="$PROJECT_DIR$/millegrilles_common_rust" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core_catalogues.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core_catalogues.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core_maitredescomptes.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core_maitredescomptes.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core_pki.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core_pki.rs" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/core_topologie.rs" beforeDir="false" afterPath="$PROJECT_DIR$/src/core_topologie.rs" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -43,22 +36,23 @@
     <option name="hideEmptyMiddlePackages" value="true" />
     <option name="showLibraryContents" value="true" />
   </component>
-  <component name="PropertiesComponent">{
-  &quot;keyToString&quot;: {
-    &quot;Git.Branch.Popup.ShowAllRemotes&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.OpenProjectViewOnStart&quot;: &quot;true&quot;,
-    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
-    &quot;TODO_SCOPE&quot;: &quot;All Places&quot;,
-    &quot;last_opened_file_path&quot;: &quot;/home/mathieu/PycharmProjects/millegrilles_core&quot;,
-    &quot;org.rust.cargo.project.model.PROJECT_DISCOVERY&quot;: &quot;true&quot;
+  <component name="PropertiesComponent"><![CDATA[{
+  "keyToString": {
+    "Git.Branch.Popup.ShowAllRemotes": "true",
+    "RunOnceActivity.OpenProjectViewOnStart": "true",
+    "RunOnceActivity.ShowReadmeOnStart": "true",
+    "TODO_SCOPE": "All Places",
+    "git-widget-placeholder": "Merging 2023.5",
+    "last_opened_file_path": "/home/mathieu/PycharmProjects/millegrilles_core",
+    "org.rust.cargo.project.model.PROJECT_DISCOVERY": "true"
   },
-  &quot;keyToStringList&quot;: {
-    &quot;com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File&quot;: [
-      &quot;JSON&quot;,
-      &quot;TEXT&quot;
+  "keyToStringList": {
+    "com.intellij.ide.scratch.ScratchImplUtil$2/New Scratch File": [
+      "JSON",
+      "TEXT"
     ]
   }
-}</component>
+}]]></component>
   <component name="RunManager">
     <configuration name="Run millegrilles_core" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
       <option name="command" value="run --package millegrilles_core --bin millegrilles_core" />
@@ -74,13 +68,13 @@
         <env name="CAFILE" value="/var/opt/millegrilles/configuration/pki.millegrille.cert" />
         <env name="CERTFILE" value="/var/opt/millegrilles/secrets/pki.core.cert" />
         <env name="KEYFILE" value="/var/opt/millegrilles/secrets/pki.core.cle" />
-        <env name="MG_CERTISSUER_URL" value="http://mg-dev1.maple.maceroc.com:2080" />
+        <env name="MG_CERTISSUER_URL" value="http://thinkcentre1.maple.maceroc.com:2080" />
         <env name="MG_MONGO_HOST" value="localhost" />
         <env name="MG_MQ_HOST" value="localhost" />
         <env name="MG_NOEUD_ID" value="42c6d697-84d7-4b07-b62a-f7758804f5b2" />
         <env name="MG_REDIS_PASSWORD_FILE" value="/var/opt/millegrilles/secrets/passwd.redis.txt" />
         <env name="MG_REDIS_URL" value="rediss://client_rust@localhost:6379#insecure" />
-        <env name="RUST_LOG" value="warn,millegrilles_core::core_topologie=debug,millegrilles_common_rust::notifications=debug" />
+        <env name="RUST_LOG" value="warn,millegrilles_core::core_maitredescomptes=debug" />
       </envs>
       <option name="isRedirectInput" value="false" />
       <option name="redirectInputPath" value="" />
@@ -101,13 +95,6 @@
       <option name="number" value="Default" />
       <option name="presentableId" value="Default" />
       <updated>1656787583997</updated>
-    </task>
-    <task id="LOCAL-00048" summary="2022.8 common">
-      <created>1666629814468</created>
-      <option name="number" value="00048" />
-      <option name="presentableId" value="LOCAL-00048" />
-      <option name="project" value="LOCAL" />
-      <updated>1666629814468</updated>
     </task>
     <task id="LOCAL-00049" summary="Support requete fiche locale">
       <created>1666635634561</created>
@@ -445,7 +432,14 @@
       <option name="project" value="LOCAL" />
       <updated>1681687604450</updated>
     </task>
-    <option name="localTasksCounter" value="97" />
+    <task id="LOCAL-00097" summary="Fix ajouter delegation">
+      <created>1682083030304</created>
+      <option name="number" value="00097" />
+      <option name="presentableId" value="LOCAL-00097" />
+      <option name="project" value="LOCAL" />
+      <updated>1682083030304</updated>
+    </task>
+    <option name="localTasksCounter" value="98" />
     <servers />
   </component>
   <component name="Vcs.Log.Tabs.Properties">
@@ -460,7 +454,6 @@
     </option>
   </component>
   <component name="VcsManagerConfiguration">
-    <MESSAGE value="Ajout info sftp pour consignation" />
     <MESSAGE value="Ajout TRANSACTION_SET_FICHIERS_PRIMAIRE" />
     <MESSAGE value="consignation_url optionnel&#10;&#10;Doit etre fourni par fichiers" />
     <MESSAGE value="Ajout consignation backup" />
@@ -485,6 +478,7 @@
     <MESSAGE value="Changement info store a optionnel &#10;&#10;consignation_url, type_store" />
     <MESSAGE value="Changement info store a optionnel, default params consignation &#10;&#10;consignation_url, type_store" />
     <MESSAGE value="Common 2023.5.0" />
-    <option name="LAST_COMMIT_MESSAGE" value="Common 2023.5.0" />
+    <MESSAGE value="Fix ajouter delegation" />
+    <option name="LAST_COMMIT_MESSAGE" value="Fix ajouter delegation" />
   </component>
 </project>
