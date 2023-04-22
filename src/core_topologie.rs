@@ -1641,12 +1641,14 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
 {
     debug!("liste_domaines");
     if !message.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
-        let refus = json!({"ok": false, "err": "Acces refuse"});
-        let reponse = match middleware.formatter_reponse(&refus, None) {
-            Ok(m) => m,
-            Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse applications : {:?}", e))?
-        };
-        return Ok(Some(reponse));
+        if !message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+            let refus = json!({"ok": false, "err": "Acces refuse"});
+            let reponse = match middleware.formatter_reponse(&refus, None) {
+                Ok(m) => m,
+                Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse applications : {:?}", e))?
+            };
+            return Ok(Some(reponse));
+        }
     }
 
     let mut curseur = {
