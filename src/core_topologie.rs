@@ -1106,7 +1106,8 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message
                 }
             };
 
-            match middleware.transmettre_commande(routage, &message_cle.parsed, true).await {
+            // match middleware.transmettre_commande(routage, &message_cle.parsed, true).await {
+            match middleware.emettre_message_millegrille(routage, true, TypeMessageOut::Commande, message_cle.parsed).await {
                 Ok(inner) => {
                     if let Some(TypeMessage::Valide(reponse)) = inner {
                         let reponse_contenu: MessageReponse = reponse.message.parsed.map_contenu()?;
