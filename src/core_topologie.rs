@@ -16,7 +16,7 @@ use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMilleGrille};
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse, transmettre_cle_attachee};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, EmetteurNotificationsTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, convertir_value_mongodate, filtrer_doc_id, IndexOptions, MongoDao};
@@ -1054,7 +1054,8 @@ async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: Message
     Ok(reponse)
 }
 
-async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("traiter_commande_configurer_consignation : {:?}", &message.message);
@@ -1077,55 +1078,9 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message
     // Traiter la cle
     if let Some(mut attachements) = message.message.parsed.attachements.take() {
         if let Some(cle) = attachements.remove("cle") {
-            debug!("Reception commande MaitreDesCles : {:?}", cle);
-            let mut message_cle = MessageSerialise::from_serializable(cle)?;
-
-            // Extraire partition pour le routage
-            let routage = match message_cle.parsed.attachements.take() {
-                Some(mut attachments_cle) => match attachments_cle.remove("partition") {
-                    Some(partition) => match partition.as_str() {
-                        Some(partition) => {
-                            RoutageMessageAction::builder(DOMAINE_NOM_MAITREDESCLES, COMMANDE_SAUVEGARDER_CLE)
-                                .exchanges(vec![Securite::L3Protege])
-                                .partition(partition)
-                                .build()
-                        },
-                        None => {
-                            error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : partition n'est pas str");
-                            return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (1)"}), None)?));
-                        }
-                    },
-                    None => {
-                        error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : partition manquante");
-                        return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (2)"}), None)?));
-                    }
-                },
-                None => {
-                    error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : attachements.partition manquant");
-                    return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (3)"}), None)?));
-                }
-            };
-
-            // match middleware.transmettre_commande(routage, &message_cle.parsed, true).await {
-            match middleware.emettre_message_millegrille(routage, true, TypeMessageOut::Commande, message_cle.parsed).await {
-                Ok(inner) => {
-                    if let Some(TypeMessage::Valide(reponse)) = inner {
-                        let reponse_contenu: MessageReponse = reponse.message.parsed.map_contenu()?;
-                        if let Some(true) = reponse_contenu.ok {
-                            debug!("Cle sauvegardee OK");
-                        } else {
-                            error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : reponse ok == false");
-                            return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (4)"}), None)?));
-                        }
-                    } else {
-                        error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : mauvais type reponse");
-                        return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (5)"}), None)?));
-                    }
-                },
-                Err(e) => {
-                    error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : {:?}", e);
-                    return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (6)"}), None)?));
-                }
+            if let Some(reponse) = transmettre_cle_attachee(middleware, cle).await? {
+                error!("Erreur sauvegarde cle : {:?}", reponse);
+                return Ok(Some(reponse));
             }
         }
     }
@@ -1134,6 +1089,65 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message
     let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
     Ok(reponse)
 }
+
+// async fn transmettre_cle_attachee<M,V>(middleware: &M, cle: V) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+//     where M: ValidateurX509 + GenerateurMessages + MongoDao,
+//           V: Serialize
+// {
+//     let ser_value = serde_json::to_value(cle)?;
+//     debug!("Reception commande MaitreDesCles : {:?}", ser_value);
+//     let mut message_cle = MessageSerialise::from_serializable(ser_value)?;
+//
+//     // Extraire partition pour le routage
+//     let routage = match message_cle.parsed.attachements.take() {
+//         Some(mut attachments_cle) => match attachments_cle.remove("partition") {
+//             Some(partition) => match partition.as_str() {
+//                 Some(partition) => {
+//                     RoutageMessageAction::builder(DOMAINE_NOM_MAITREDESCLES, COMMANDE_SAUVEGARDER_CLE)
+//                         .exchanges(vec![Securite::L3Protege])
+//                         .partition(partition)
+//                         .build()
+//                 },
+//                 None => {
+//                     error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : partition n'est pas str");
+//                     return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (1)"}), None)?));
+//                 }
+//             },
+//             None => {
+//                 error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : partition manquante");
+//                 return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (2)"}), None)?));
+//             }
+//         },
+//         None => {
+//             error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : attachements.partition manquant");
+//             return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (3)"}), None)?));
+//         }
+//     };
+//
+//     // match middleware.transmettre_commande(routage, &message_cle.parsed, true).await {
+//     match middleware.emettre_message_millegrille(routage, true, TypeMessageOut::Commande, message_cle.parsed).await {
+//         Ok(inner) => {
+//             if let Some(TypeMessage::Valide(reponse)) = inner {
+//                 let reponse_contenu: MessageReponse = reponse.message.parsed.map_contenu()?;
+//                 if let Some(true) = reponse_contenu.ok {
+//                     debug!("Cle sauvegardee OK");
+//                 } else {
+//                     error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : reponse ok == false");
+//                     return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (4)"}), None)?));
+//                 }
+//             } else {
+//                 error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : mauvais type reponse");
+//                 return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (5)"}), None)?));
+//             }
+//         },
+//         Err(e) => {
+//             error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : {:?}", e);
+//             return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (6)"}), None)?));
+//         }
+//     }
+//
+//     Ok(None)
+// }
 
 async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
