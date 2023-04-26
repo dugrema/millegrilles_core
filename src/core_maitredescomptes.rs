@@ -609,20 +609,31 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
 
     // Le filtre utilise le user_id du certificat de preference (et ignore les parametres).
     // Pour un certificat 2.prive, 3.protege ou 4.public, va utiliser les parametres.
-    match message.get_user_id() {
-        Some(u) => {
-            filtre.insert(CHAMP_USER_ID, u);
-        },
-        None => match message.verifier_exchanges(vec![L2Prive, L3Protege, L4Secure]) {
-            true => {
-                if let Some(nom_usager) = requete.nom_usager {
-                    filtre.insert(CHAMP_USAGER_NOM, nom_usager);
-                }
-                if let Some(user_id) = requete.user_id {
-                    filtre.insert(CHAMP_USER_ID, user_id);
-                }
+    if message.verifier_exchanges(vec![L2Prive, L3Protege, L4Secure]) || message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        if let Some(nom_usager) = requete.nom_usager.as_ref() {
+            filtre.insert(CHAMP_USAGER_NOM, nom_usager);
+        }
+        if let Some(user_id) = requete.user_id.as_ref() {
+            filtre.insert(CHAMP_USER_ID, user_id);
+        }
+    }
+
+    if filtre.len() == 0 {
+        match message.get_user_id() {
+            Some(u) => {
+                filtre.insert(CHAMP_USER_ID, u);
             },
-            false => Err(format!("core_maitredescomptes.charger_usager Requete non autorisee en fonction du certificat"))?
+            None => match message.verifier_exchanges(vec![L2Prive, L3Protege, L4Secure]) {
+                true => {
+                    if let Some(nom_usager) = requete.nom_usager.as_ref() {
+                        filtre.insert(CHAMP_USAGER_NOM, nom_usager);
+                    }
+                    if let Some(user_id) = requete.user_id.as_ref() {
+                        filtre.insert(CHAMP_USER_ID, user_id);
+                    }
+                },
+                false => Err(format!("core_maitredescomptes.charger_usager Requete non autorisee en fonction du certificat"))?
+            }
         }
     }
 
