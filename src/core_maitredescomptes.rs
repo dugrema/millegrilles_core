@@ -35,7 +35,7 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::{ValidationOptions, verifier_message, verifier_signature_serialize, verifier_signature_str};
+use millegrilles_common_rust::verificateur::{ValidationOptions, VerificateurMessage, verifier_message, verifier_signature_serialize, verifier_signature_str};
 use millegrilles_common_rust::{reqwest, reqwest::Url};
 use millegrilles_common_rust::common_messages::MessageConfirmation;
 use mongodb::options::{FindOptions, UpdateOptions};
@@ -1746,7 +1746,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
 }
 
 async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
     // Verifier autorisation

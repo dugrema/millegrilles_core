@@ -638,7 +638,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionna
 
 async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where
-        M: ValidateurX509 + GenerateurMessages + MongoDao,
+        M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("Consommer transaction : {:?}", &m.message);
 
@@ -663,7 +663,7 @@ async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, m
 }
 
 async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait + VerificateurMessage
 {
     debug!("Consommer evenement : {:?}", &m.message);
 
@@ -735,7 +735,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
 }
 
 async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("Evenement presence domaine : {:?}", m.message.get_msg());
     let event: PresenceDomaine = m.message.get_msg().map_contenu()?;
@@ -808,7 +808,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
 }
 
 async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     let estampille = &m.message.parsed.estampille;
     let event: PresenceMonitor = m.message.get_msg().map_contenu()?;
@@ -918,7 +918,7 @@ struct TransactionSetFichiersPrimaire {
 
 async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     let estampille = &m.message.parsed.estampille;
     let event: PresenceFichiers = m.message.get_msg().map_contenu()?;
@@ -1015,7 +1015,7 @@ async fn traiter_evenement_application<M>(middleware: &M, m: MessageValideAction
 
 
 async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("Consommer traiter_commande_monitor : {:?}", &message.message);
 
@@ -1035,7 +1035,7 @@ async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValideActio
 }
 
 async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("Consommer traiter_commande_supprimer_instance : {:?}", &message.message);
 
@@ -1056,7 +1056,7 @@ async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: Message
 
 async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("traiter_commande_configurer_consignation : {:?}", &message.message);
 
@@ -1150,7 +1150,7 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message
 // }
 
 async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("traiter_commande_set_fichiers_primaire : {:?}", &message.message);
 

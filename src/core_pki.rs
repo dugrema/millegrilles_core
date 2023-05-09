@@ -28,6 +28,7 @@ use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
+use millegrilles_common_rust::verificateur::VerificateurMessage;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 
@@ -379,7 +380,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
 
 async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomainePki, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
 where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
+    M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
     debug!("Consommer transaction core_pki : {:?}", &m.message);
 

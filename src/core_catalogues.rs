@@ -27,7 +27,7 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::ValidationOptions;
+use millegrilles_common_rust::verificateur::{ValidationOptions, VerificateurMessage};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Serialize, Deserialize};
 
@@ -408,7 +408,10 @@ where
     Ok(None)
 }
 
-async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
+async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+{
     debug!("Consommer evenement : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 4.secure
@@ -494,7 +497,7 @@ struct MessageCatalogue {
 }
 
 async fn traiter_commande_application<M>(middleware: &M, commande: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-where M: ValidateurX509 + MongoDao + GenerateurMessages
+where M: ValidateurX509 + MongoDao + GenerateurMessages + VerificateurMessage
 {
     // let message = commande.message.get_msg();
     debug!("Traitement catalogue application {:?}", commande);
