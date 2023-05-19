@@ -2493,7 +2493,6 @@ async fn requete_applications_tiers<M>(middleware: &M, message: MessageValideAct
 
     let projection = doc! {
         "idmg": 1,
-        "adresses": 1,
         "ca": 1,
         "chiffrage": 1,
         format!("applications.{}", requete.application): 1
