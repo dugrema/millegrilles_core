@@ -483,9 +483,11 @@ async fn emettre_notification_demarrage<M>(middleware: &M) -> Result<(), Box<dyn
     where M: EmetteurNotificationsTrait
 {
     let notification = NotificationMessageInterne {
-        from: Some("CoreTopologie".to_string()),
+        from: "CoreTopologie".to_string(),
         subject: Some("Demarrage core".to_string()),
-        content: "<p>Core demarre</p>".to_string()
+        content: "<p>Core demarre</p>".to_string(),
+        version: 1,
+        format: "html".into()
     };
     let expiration_ts = Utc::now().timestamp() + 7 * 86400;
     Ok(middleware.emettre_notification_proprietaire(
@@ -2924,9 +2926,11 @@ async fn verifier_instances_horsligne<M>(middleware: &M)
         };
 
         let notification = NotificationMessageInterne {
-            from: Some("CoreTopologie".to_string()),
+            from: "CoreTopologie".to_string(),
             subject: Some(sujet),
             content: message_str,
+            version: 1,
+            format: "html".to_string(),
         };
 
         // Marquer les instances
