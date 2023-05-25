@@ -10,6 +10,7 @@ use millegrilles_common_rust::bson::{doc, Document};
 use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, EnveloppeCertificat, EnveloppePrivee, FingerprintCertPublicKey, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur, MgsCipherData, CleChiffrageHandler, ChiffrageFactory, ChiffrageFactoryImpl};
 use millegrilles_common_rust::chiffrage_aesgcm::CipherMgs2;
+use millegrilles_common_rust::chiffrage_cle::CleDechiffree;
 use millegrilles_common_rust::chiffrage_streamxchacha20poly1305::CipherMgs4;
 // use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, DecipherMgs3, Mgs3CipherData, Mgs3CipherKeys};
 use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMessagesDb, ConfigurationMq, ConfigurationNoeud, ConfigurationPki, IsConfigNoeud};
@@ -65,6 +66,17 @@ impl EmetteurNotificationsTrait for MiddlewareDbPki {
     {
         self.ressources.emetteur_notifications.emettre_notification_proprietaire(
             self, contenu, niveau, expiration, destinataires).await
+    }
+
+    async fn emettre_notification_usager<D,S,N>(
+        &self, user_id: S, contenu: NotificationMessageInterne,
+        niveau: N, domaine: D, expiration: Option<i64>, cle_dechiffree: Option<CleDechiffree>
+    )
+        -> Result<String, Box<dyn Error>>
+        where D: AsRef<str> + Send, S: AsRef<str> + Send, N: AsRef<str> + Send
+    {
+        self.ressources.emetteur_notifications.emettre_notification_usager(
+            self, user_id, contenu, niveau, domaine, expiration, cle_dechiffree).await
     }
 }
 
