@@ -9,7 +9,7 @@ use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{Datelike, Timelike, Utc};
-use millegrilles_common_rust::common_messages::{DataChiffre, MessageReponse, ReponseInformationConsignationFichiers, RequeteConsignationFichiers};
+use millegrilles_common_rust::common_messages::{DataChiffre, MessageReponse, ReponseInformationConsignationFichiers, RequeteConsignationFichiers, RequeteDechiffrage};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
@@ -2682,10 +2682,16 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValideAction
         None => Err(format!(""))?
     };
 
-    let permission = json!({
-        "liste_hachage_bytes": vec![requete.ref_hachage_bytes],
-        "certificat_rechiffrage": pem_rechiffrage,
-    });
+    let permission = RequeteDechiffrage {
+        domaine: DOMAINE_NOM.to_string(),
+        liste_hachage_bytes: vec![requete.ref_hachage_bytes],
+        certificat_rechiffrage: Some(pem_rechiffrage)
+    };
+    // let permission = json!({
+    //     "domaine":
+    //     "liste_hachage_bytes": vec![requete.ref_hachage_bytes],
+    //     "certificat_rechiffrage": pem_rechiffrage,
+    // });
 
     // Emettre requete de rechiffrage de cle, reponse acheminee directement au demandeur
     let reply_to = match m.reply_q {
