@@ -18,7 +18,7 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMilleGrille, MessageSerialise};
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
-use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, ChiffrageFactoryTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait};
+use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, ChiffrageFactoryTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait, repondre_certificat};
 use millegrilles_common_rust::middleware_db::MiddlewareDb;
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao, MongoDaoImpl, initialiser as initialiser_mongodb};
 use millegrilles_common_rust::mongodb::Database;
@@ -971,6 +971,13 @@ impl EmetteurCertificat for MiddlewareDbPki {
             Ok(_) => Ok(()),
             Err(e) => Err(format!("Erreur emettre_certificat: {:?}", e)),
         }
+    }
+
+    async fn repondre_certificat<S, T>(&self, reply_q: S, correlation_id: T)
+        -> Result<(), String>
+        where S: AsRef<str> + Send, T: AsRef<str> + Send
+    {
+        repondre_certificat(self, reply_q, correlation_id).await
     }
 }
 
