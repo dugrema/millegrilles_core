@@ -45,12 +45,12 @@ pub fn generer_challenge_auth(url_site: &str, credentials: Vec<Credential>) -> R
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Credential {
     #[serde(rename="credId")]
-    cred_id: String,
-    counter: Option<usize>,
+    pub cred_id: String,
+    pub counter: Option<usize>,
     #[serde(rename="publicKeyPem")]
-    public_key_pem: Option<String>,
+    pub public_key_pem: Option<String>,
     #[serde(rename = "type")]
-    key_type: String,
+    pub key_type: String,
 }
 impl Credential {
     pub fn new<S>(cred_id: S, key_type: S, counter: Option<usize>, public_key_pem: Option<String>) -> Self
@@ -273,20 +273,20 @@ fn convertir_creds_compte(doc_compte: Document) -> Result<Vec<webauthn_rs::proto
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClientAssertionResponse {
-    id64: String,
-    response: ClientAssertResponseContent
+    pub id64: String,
+    pub response: ClientAssertResponseContent
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct ClientAssertResponseContent {
+pub struct ClientAssertResponseContent {
     #[serde(rename="authenticatorData")]
-    authenticator_data: String,
+    pub authenticator_data: String,
     #[serde(rename="clientDataJSON")]
-    client_data_json: String,
+    pub client_data_json: String,
     #[serde(rename="signature")]
-    signature: String,
+    pub signature: String,
     #[serde(rename="userHandle")]
-    user_handle: Option<String>,
+    pub user_handle: Option<String>,
 }
 
 impl TryInto<PublicKeyCredential> for ClientAssertionResponse {

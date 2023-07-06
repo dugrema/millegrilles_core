@@ -4,7 +4,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
-use millegrilles_common_rust::base64_url;
+use millegrilles_common_rust::{base64_url, chrono};
 use millegrilles_common_rust::hex;
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::{Bson, bson, doc};
@@ -23,7 +23,7 @@ use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageM
 use millegrilles_common_rust::middleware::{sauvegarder_transaction, thread_emettre_presence_domaine, Middleware, sauvegarder_traiter_transaction};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
-use millegrilles_common_rust::mongodb::options::FindOneAndUpdateOptions;
+use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions};
 use millegrilles_common_rust::multibase;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage, valider_message};
@@ -43,10 +43,11 @@ use serde::{Deserialize, Serialize};
 use webauthn_rs::base64_data::Base64UrlSafeData;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
-use crate::webauthn::{ClientAssertionResponse, CompteCredential, multibase_to_safe, valider_commande};
+use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, multibase_to_safe, valider_commande};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::multibase::Base::Base64Url;
+use webauthn_rs::proto::PublicKeyCredential;
 use crate::core_pki::COLLECTION_CERTIFICAT_NOM;
 
 // Constantes
@@ -64,6 +65,7 @@ const REQUETE_LISTE_USAGERS: &str = "getListeUsagers";
 const REQUETE_USERID_PAR_NOMUSAGER: &str = "getUserIdParNomUsager";
 const REQUETE_GET_CSR_RECOVERY_PARCODE: &str = "getCsrRecoveryParcode";
 const REQUETE_LISTE_PROPRIETAIRES: &str = "getListeProprietaires";
+const REQUETE_GET_TOKEN_SESSION: &str = "getTokenSession";
 
 // const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
 const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
@@ -194,6 +196,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let requetes_privees_protegees: Vec<&str> = vec![
         REQUETE_CHARGER_USAGER,
         REQUETE_GET_CSR_RECOVERY_PARCODE,
+        REQUETE_GET_TOKEN_SESSION,
     ];
     for req in requetes_privees_protegees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
@@ -439,6 +442,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 REQUETE_USERID_PAR_NOMUSAGER => get_userid_par_nomusager(middleware, message).await,
                 REQUETE_GET_CSR_RECOVERY_PARCODE => get_csr_recovery_parcode(middleware, message).await,
                 REQUETE_LISTE_PROPRIETAIRES => get_liste_proprietaires(middleware, message).await,
+                REQUETE_GET_TOKEN_SESSION => get_token_session(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
                     Ok(None)
@@ -671,6 +675,110 @@ struct RequeteUsager {
     user_id: Option<String>,
     #[serde(rename="nomUsager")]
     nom_usager: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct GetTokenSession {
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+    #[serde(rename="userId")]
+    user_id: String,
+    challenge: String,
+    webauthn: ClientAssertionResponse,
+}
+
+#[derive(Deserialize)]
+struct DocUserWebAuthn {
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+    #[serde(rename="userId")]
+    user_id: String,
+    webauthn: Option<Vec<Credential>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct MessageAuthentificationClient {
+
+}
+
+async fn get_token_session<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("get_token_session : {:?}", &message.message);
+    let requete: GetTokenSession = message.message.get_msg().map_contenu()?;
+
+    // let nom_usager = requete.nom_usager;
+    let user_id = requete.user_id.as_str();
+    let challenge_str = requete.challenge.as_str();
+
+    let doc_user: DocUserWebAuthn = {
+        // let mut filtre = doc! { CHAMP_USAGER_NOM: &nom_usager };
+        let mut filtre = doc! { CHAMP_USER_ID: user_id };
+        let projection = doc! {
+            CHAMP_USAGER_NOM: true,
+            CHAMP_USER_ID: true,
+            CHAMP_WEBAUTHN: true,
+        };
+        let ops = FindOneOptions::builder().projection(Some(projection)).build();
+        let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+        match collection.find_one(filtre, ops).await? {
+            Some(inner) => convertir_bson_deserializable(inner)?,
+            None => {
+                error!("get_token_session nom_usager absent (3)");
+                return Ok(acces_refuse(middleware, 3)?);
+            }
+        }
+    };
+
+    let user_id = doc_user.user_id;
+    let cred_id = requete.webauthn.id64.as_str();
+    let credential: webauthn_rs::proto::Credential = match doc_user.webauthn {
+        Some(webauthn_vec) => {
+            let mut credentials: Vec<Credential> = webauthn_vec
+                .into_iter()
+                .filter(|w| w.cred_id.as_str() == cred_id)
+                .collect();
+
+            match credentials.pop() {
+                Some(inner) => match inner.try_into() {
+                    Ok(inner) => inner,
+                    Err(e) => {
+                        error!("get_token_session credential DB mauvais format (6)");
+                        return Ok(acces_refuse(middleware, 6)?);
+                    }
+                },
+                None => {
+                    error!("get_token_session credential inconnu pour webauthn (5)");
+                    return Ok(acces_refuse(middleware, 5)?);
+                }
+            }
+        },
+        None => {
+            error!("get_token_session aucun credentials webauthn (4)");
+            return Ok(acces_refuse(middleware, 4)?);
+        }
+    };
+
+    debug!("get_token_session Valider signature avec credential : {:?}", credential);
+    let public_key_credential: PublicKeyCredential = requete.webauthn.try_into()?;
+
+    let hostname = "https://thinkcentre1.maple.maceroc.com";
+    // let challenge = "mAhLcH6qPs4lx5wqU1zWvoGclhf38iGYOG05gQs1Mz+p932tUk55Xa+TNeFpFLdmen1KT1EMKMn1bvL4Zmp8bKqhYlqHag7BZwHlgFe7tYFxQ00yfnLowLvIr7k+b36GMEeLukuP3JRANY2AVfZsz/e1BjFEoFk7uxjlZzIy7ac0";
+    let config_challenge = ConfigChallenge::try_new(hostname, challenge_str)?;
+
+    // Verifier webauthn - lance une exception si erreur.
+    let resultat_verification = match authenticate_complete(vec![credential], config_challenge, public_key_credential) {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!("get_token_session echec de la verification webauthn (7)");
+            return Ok(acces_refuse(middleware, 7)?);
+        }
+    };
+    debug!("get_token_session Resultat verification webauthn OK. Counter : {}", resultat_verification);
+
+    let token = generer_token_compte(middleware, user_id.as_str())?;
+
+    Ok(Some(token))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1091,7 +1199,13 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     // Verifier si un certificat autre que celui de l'usager (ou delegation globale) est
     // utilise. On refuse de signer si le compte est protege par webauthn et qu'une attestation
     // webauthn est absente.
-    let challenge_webauthn_present = commande.client_assertion_response.is_some();
+    let challenge_webauthn_present = match commande.client_assertion_response {
+        Some(inner) => {
+            // todo!("Verifier signature commande");
+            true
+        },
+        None => false
+    };
     if webauthn_present && init_only && !challenge_webauthn_present {
         // Acces refuse, le compte peut uniquement signe si aucun token webauthn n'est present
         let err = json!({"ok": false, "code": 7, "err": format!("Signature refusee sur compte : {}", user_id)});
@@ -1422,7 +1536,8 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
 {
     debug!("Consommer ajouter_cle : {:?}", &message.message);
 
-    // Verifier autorisation
+    // Verifier autorisation du message
+    // Doit provenir d'un maitre des comptes sur exchange 2.prive
     if ! message.verifier(
         Some(vec!(Securite::L2Prive)),
         Some(vec!(RolesCertificats::MaitreComptes)),
@@ -1437,60 +1552,154 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
 
     let commande: CommandeAjouterCle = message.message.get_msg().map_contenu()?;
 
-    let nom_usager = commande.nom_usager.as_str();
+    // Valider la signature du message client.
+    let reponse_client_serialise = {
+        let mut reponse_client_serialise = MessageSerialise::from_parsed(commande.reponse_client)?;
+        if let Err(e) = valider_message(middleware, &mut reponse_client_serialise).await {
+            let err = json!({"ok": false, "code": 3, "err": format!{"Permission refusee, reponseClient invalide : {:?}", e}});
+            debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+            match middleware.formatter_reponse(&err, None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
+            }
+        }
+        reponse_client_serialise
+    };
+
+    // Verifier si on fait une association en utilisant un nouveau certificat active de maniere
+    // externe (e.g. par le proprietaire dans Coup D'Oeil ou code QR). Utiliser fingperprint
+    // de la cle publique du message signe par l'usager.
+    let (user_id, fingerprint_pk) = match reponse_client_serialise.certificat.as_ref() {
+        Some(inner) => {
+            let user_id = match inner.get_user_id()? {
+                Some(inner) => inner.as_str(),
+                None => {
+                    let err = json!({"ok": false, "code": 8, "err": "Permission refusee, certificat client sans user_id"});
+                    debug!("ajouter_cle autorisation acces refuse certificat client sans user_id (8): {:?}", err);
+                    match middleware.formatter_reponse(&err,None) {
+                        Ok(m) => return Ok(Some(m)),
+                        Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
+                    }
+                }
+            };
+
+            (user_id, inner.fingerprint.as_str())
+        },
+        None => {
+            let err = json!({"ok": false, "code": 6, "err": "Permission refusee, certificat client absent"});
+            debug!("ajouter_cle autorisation acces refuse certificat client absent (6): {:?}", err);
+            match middleware.formatter_reponse(&err,None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
+            }
+        }
+    };
 
     // Validation - s'assurer que le compte usager existe
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    let compte_usager = match charger_compte_usager(middleware, nom_usager).await? {
-        Some(c) => c,
+    let (compte_usager, associe) = match charger_compte_user_id(middleware, user_id).await? {
+        Some(c) => {
+            debug!("ajouter_cle Verifier si le fingerprintPk utilise a ete active");
+            let associe = match c.activations_par_fingerprint_pk.as_ref() {
+                Some(inner) => {
+                    match inner.get(fingerprint_pk) {
+                        Some(info_cle) => {
+                            match info_cle.associe {
+                                Some(inner) => inner,
+                                None => false  // Ok, la cle n'est pas associee
+                            }
+                        },
+                        None => true  // Aucune activation pour la cle demandee, considerer comme deja active
+                    }
+                },
+                None => true  // Aucunes activations pour la cle compte, considerer comme deja active
+            };
+
+            (c, associe)
+        },
         None => {
-            let err = json!({"ok": false, "code": 2, "err": format!("Usager inconnu : {}", nom_usager)});
+            let err = json!({"ok": false, "code": 2, "err": format!("Usager inconnu pour userId : {}", user_id)});
             debug!("ajouter_cle usager inconnu : {:?}", err);
             match middleware.formatter_reponse(&err,None) {
                 Ok(m) => return Ok(Some(m)),
-                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+                Err(e) => Err(format!("core_maitredescomptes.ajouter_cle Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
             }
         }
     };
 
     // Verifier autorisation client - le certificat doit correspondre au user_id du compte
-    let reponse_client = &commande.reponse_client;
-    let mut reponse_client_serialise = MessageSerialise::from_parsed(reponse_client.to_owned())?;
-    match valider_message(middleware, &mut reponse_client_serialise).await {
-        Ok(()) => {
-            // S'assurer que le contenu du message est coherent - credId == response.id (doit convertir en bytes)
-            let rep_challenge: ReponseClientAjouterCle = reponse_client.map_contenu()?;
-            let id_client = rep_challenge.reponse_challenge.id;
-            debug!("id client : {:?}, commande a decoder : {:?}", id_client, commande.cle);
-            let (_, cred_id): (_, Vec<u8>) = multibase::decode(commande.cle.cred_id)?;
-            if id_client.0 != cred_id {
-                debug!("Difference entre id_client et cred_id dans message ajouter cle\n{:?}\n{:?}", id_client, cred_id);
-                let err = json!({"ok": false, "code": 5, "err": format!{"Permission refusee, reponseClient mismatch credId"}});
-                debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-                match middleware.formatter_reponse(&err, None) {
-                    Ok(m) => return Ok(Some(m)),
-                    Err(e) => Err(format!("ajouter_cle: Erreur verification credId avec reponseClient : {:?}", e))?
-                }
-            }
-        },
-        Err(e) => {
-            let err = json!({"ok": false, "code": 3, "err": format!{"Permission refusee, reponseClient invalide : {:?}", e}});
+    {
+        // S'assurer que le contenu du message est coherent - credId == response.id (doit convertir en bytes)
+        let rep_challenge: ReponseClientAjouterCle = reponse_client_serialise.parsed.map_contenu()?;
+        let id_client = rep_challenge.reponse_challenge.id;
+        debug!("id client : {:?}, commande a decoder : {:?}", id_client, commande.cle);
+        let (_, cred_id): (_, Vec<u8>) = multibase::decode(commande.cle.cred_id)?;
+        if id_client.0 != cred_id {
+            debug!("Difference entre id_client et cred_id dans message ajouter cle\n{:?}\n{:?}", id_client, cred_id);
+            let err = json!({"ok": false, "code": 5, "err": format!{"Permission refusee, reponseClient mismatch credId"}});
             debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-            match middleware.formatter_reponse(&err,None) {
+            match middleware.formatter_reponse(&err, None) {
                 Ok(m) => return Ok(Some(m)),
-                Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+                Err(e) => Err(format!("core_maitredescomptes.ajouter_cle: Erreur verification credId avec reponseClient : {:?}", e))?
             }
-        }
-    };
-
-    if ! reponse_client_serialise.verifier_usager(compte_usager.user_id) {
-        let err = json!({"ok": false, "code": 4, "err": "Permission refusee, certificat non autorise"});
-        debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err,None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
         }
     }
+
+    if associe == true {
+        debug!("Cle deja associee, verifier autorisation");
+        let token_autorisation = match commande.token_autorisation {
+            Some(inner) => {
+                let mut token_autorisation = MessageSerialise::from_parsed(inner)?;
+
+                if let Err(e) = valider_message(middleware, &mut token_autorisation).await {
+                    let err = json!({"ok": false, "code": 9, "err": format!{"Permission refusee, reponseClient invalide : {:?}", e}});
+                    debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+                    match middleware.formatter_reponse(&err, None) {
+                        Ok(m) => return Ok(Some(m)),
+                        Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse commande_ajouter_cle (9) : {:?}", e))?
+                    }
+                }
+
+                token_autorisation
+            },
+            None => {
+                let err = json!({"ok": false, "code": 9, "err": "Permission refusee, token d'autorisation manquant"});
+                debug!("ajouter_cle autorisation acces refuse, token d'autorisation manquant (8): {:?}", err);
+                match middleware.formatter_reponse(&err,None) {
+                    Ok(m) => return Ok(Some(m)),
+                    Err(e) => Err(format!("core_maitredescomptes.ajouter_cle Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
+                }
+            }
+        };
+
+        // Le message est valide. Verifier qu'il provient d'un module core (securite 4.secure, role core).
+        let certificat = match token_autorisation.certificat.as_ref() {
+            Some(inner) => inner.as_ref(),
+            None => Err(format!("core_maitredescomptes.ajouter_cle Erreur preparation reponse commande_ajouter_cle, certificat token_autorisation absent"))?
+        };
+
+        if ! certificat.verifier_exchanges(vec![Securite::L4Secure]) ||
+              ! certificat.verifier_roles(vec![RolesCertificats::Core]) ||
+              ! certificat.verifier_domaines(vec![DOMAINE_NOM_MAITREDESCOMPTES.to_string()]) {
+            let err = json!({"ok": false, "code": 10, "err": "Permission refusee, token d'autorisation invalide"});
+            debug!("ajouter_cle autorisation acces refuse, token d'autorisation invalide (10): {:?}", err);
+            match middleware.formatter_reponse(&err,None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("core_maitredescomptes.ajouter_cle Erreur reponse token autorisation invalide : {:?}", e))?
+            }
+        }
+
+        let token_contenu: TokenUsager = token_autorisation.parsed.map_contenu()?;
+        let now_utc = Utc::now().timestamp();
+        if token_contenu.user_id.as_str() != user_id || now_utc > token_contenu.date_expiration {
+            let err = json!({"ok": false, "code": 11, "err": "Permission refusee, token d'autorisation invalide ou expire"});
+            debug!("ajouter_cle autorisation acces refuse, token d'autorisation invalide ou expire (11): {:?}", err);
+            match middleware.formatter_reponse(&err,None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("core_maitredescomptes.ajouter_cle Erreur preparation reponse commande_ajouter_cle (11) : {:?}", e))?
+            }
+        }
+    }  // Fin associe == true
 
     // Sauvegarder la transaction, marquer complete et repondre
     let uuid_transaction = message.message.parsed.id.clone();
@@ -1656,7 +1865,6 @@ struct InfoAssociation {
     /// Contenu du message autre que les elements structurels.
     #[serde(flatten)]
     pub contenu: Map<String, Value>,
-
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1669,6 +1877,7 @@ struct CommandeAjouterCle {
     reponse_client: MessageMilleGrille,
     reset_cles: Option<bool>,
     hostname: Option<String>,
+    token_autorisation: Option<MessageMilleGrille>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2187,6 +2396,31 @@ fn lire_date_valbson(date: Option<&Value>) -> Result<Option<DateTime<Utc>>, Box<
         },
         None => Ok(None)
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TokenUsager {
+    user_id: String,
+    date_expiration: i64,
+    autorisation_register_token: bool,
+}
+
+/// Genere un message signe avec user_id et une date d'expiration.
+fn generer_token_compte<M,S>(middleware: &M, user_id: S) -> Result<MessageMilleGrille, Box<dyn Error>>
+    where M: GenerateurMessages, S: Into<String>
+{
+    let date_expiration = Utc::now() + chrono::Duration::days(1);
+    let token = TokenUsager {
+        user_id: user_id.into(),
+        date_expiration: date_expiration.timestamp(),
+        autorisation_register_token: true,
+    };
+    let mut token_signe = middleware.formatter_reponse(token, None)?;
+
+    // Retirer certificat
+    // token_signe.certificat = None;
+
+    Ok(token_signe)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
