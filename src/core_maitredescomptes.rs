@@ -40,14 +40,13 @@ use millegrilles_common_rust::{reqwest, reqwest::Url};
 use millegrilles_common_rust::common_messages::MessageConfirmation;
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
-use webauthn_rs::base64_data::Base64UrlSafeData;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, multibase_to_safe, valider_commande};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::multibase::Base::Base64Url;
-use webauthn_rs::proto::PublicKeyCredential;
+use webauthn_rs::prelude::Base64UrlSafeData;
 use crate::core_pki::COLLECTION_CERTIFICAT_NOM;
 
 // Constantes
@@ -732,53 +731,55 @@ async fn get_token_session<M>(middleware: &M, message: MessageValideAction) -> R
 
     let user_id = doc_user.user_id;
     let cred_id = requete.webauthn.id64.as_str();
-    let credential: webauthn_rs::proto::Credential = match doc_user.webauthn {
-        Some(webauthn_vec) => {
-            let mut credentials: Vec<Credential> = webauthn_vec
-                .into_iter()
-                .filter(|w| w.cred_id.as_str() == cred_id)
-                .collect();
 
-            match credentials.pop() {
-                Some(inner) => match inner.try_into() {
-                    Ok(inner) => inner,
-                    Err(e) => {
-                        error!("get_token_session credential DB mauvais format (6)");
-                        return Ok(acces_refuse(middleware, 6)?);
-                    }
-                },
-                None => {
-                    error!("get_token_session credential inconnu pour webauthn (5)");
-                    return Ok(acces_refuse(middleware, 5)?);
-                }
-            }
-        },
-        None => {
-            error!("get_token_session aucun credentials webauthn (4)");
-            return Ok(acces_refuse(middleware, 4)?);
-        }
-    };
-
-    debug!("get_token_session Valider signature avec credential : {:?}", credential);
-    let public_key_credential: PublicKeyCredential = requete.webauthn.try_into()?;
-
-    let hostname = "https://thinkcentre1.maple.maceroc.com";
-    // let challenge = "mAhLcH6qPs4lx5wqU1zWvoGclhf38iGYOG05gQs1Mz+p932tUk55Xa+TNeFpFLdmen1KT1EMKMn1bvL4Zmp8bKqhYlqHag7BZwHlgFe7tYFxQ00yfnLowLvIr7k+b36GMEeLukuP3JRANY2AVfZsz/e1BjFEoFk7uxjlZzIy7ac0";
-    let config_challenge = ConfigChallenge::try_new(hostname, challenge_str)?;
-
-    // Verifier webauthn - lance une exception si erreur.
-    let resultat_verification = match authenticate_complete(vec![credential], config_challenge, public_key_credential) {
-        Ok(inner) => inner,
-        Err(e) => {
-            error!("get_token_session echec de la verification webauthn (7)");
-            return Ok(acces_refuse(middleware, 7)?);
-        }
-    };
-    debug!("get_token_session Resultat verification webauthn OK. Counter : {}", resultat_verification);
-
-    let token = generer_token_compte(middleware, user_id.as_str())?;
-
-    Ok(Some(token))
+    todo!("fix me");
+    // let credential: webauthn_rs::proto::Credential = match doc_user.webauthn {
+    //     Some(webauthn_vec) => {
+    //         let mut credentials: Vec<Credential> = webauthn_vec
+    //             .into_iter()
+    //             .filter(|w| w.cred_id.as_str() == cred_id)
+    //             .collect();
+    //
+    //         match credentials.pop() {
+    //             Some(inner) => match inner.try_into() {
+    //                 Ok(inner) => inner,
+    //                 Err(e) => {
+    //                     error!("get_token_session credential DB mauvais format (6)");
+    //                     return Ok(acces_refuse(middleware, 6)?);
+    //                 }
+    //             },
+    //             None => {
+    //                 error!("get_token_session credential inconnu pour webauthn (5)");
+    //                 return Ok(acces_refuse(middleware, 5)?);
+    //             }
+    //         }
+    //     },
+    //     None => {
+    //         error!("get_token_session aucun credentials webauthn (4)");
+    //         return Ok(acces_refuse(middleware, 4)?);
+    //     }
+    // };
+    //
+    // debug!("get_token_session Valider signature avec credential : {:?}", credential);
+    // let public_key_credential: PublicKeyCredential = requete.webauthn.try_into()?;
+    //
+    // let hostname = "https://thinkcentre1.maple.maceroc.com";
+    // // let challenge = "mAhLcH6qPs4lx5wqU1zWvoGclhf38iGYOG05gQs1Mz+p932tUk55Xa+TNeFpFLdmen1KT1EMKMn1bvL4Zmp8bKqhYlqHag7BZwHlgFe7tYFxQ00yfnLowLvIr7k+b36GMEeLukuP3JRANY2AVfZsz/e1BjFEoFk7uxjlZzIy7ac0";
+    // let config_challenge = ConfigChallenge::try_new(hostname, challenge_str)?;
+    //
+    // // Verifier webauthn - lance une exception si erreur.
+    // let resultat_verification = match authenticate_complete(vec![credential], config_challenge, public_key_credential) {
+    //     Ok(inner) => inner,
+    //     Err(e) => {
+    //         error!("get_token_session echec de la verification webauthn (7)");
+    //         return Ok(acces_refuse(middleware, 7)?);
+    //     }
+    // };
+    // debug!("get_token_session Resultat verification webauthn OK. Counter : {}", resultat_verification);
+    //
+    // let token = generer_token_compte(middleware, user_id.as_str())?;
+    //
+    // Ok(Some(token))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1687,12 +1688,14 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction) -
                 Ok(m) => return Ok(Some(m)),
                 Err(e) => Err(format!("core_maitredescomptes.ajouter_cle Erreur reponse token autorisation invalide : {:?}", e))?
             }
+        } else {
+            debug!("core_maitredescomptes.ajouter_cle Verification token session usager OK");
         }
 
         let token_contenu: TokenUsager = token_autorisation.parsed.map_contenu()?;
         let now_utc = Utc::now().timestamp();
         if token_contenu.user_id.as_str() != user_id || now_utc > token_contenu.date_expiration {
-            let err = json!({"ok": false, "code": 11, "err": "Permission refusee, token d'autorisation invalide ou expire"});
+            let err = json!({"ok": false, "code": 11, "err": "Permission refusee, token d'autorisation mauvais usager ou expire"});
             debug!("ajouter_cle autorisation acces refuse, token d'autorisation invalide ou expire (11): {:?}", err);
             match middleware.formatter_reponse(&err,None) {
                 Ok(m) => return Ok(Some(m)),
@@ -1720,11 +1723,13 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion en CommandeAjouterCle : {:?}", e))?
     };
+
     let nom_usager = commande.nom_usager.as_str();
     let fingerprint_pk = commande.fingerprint_pk.as_ref();
     let hostname = commande.hostname.as_ref();
 
     let filtre = doc! {CHAMP_USAGER_NOM: nom_usager};
+    // let filtre = doc! { CHAMP_USER_ID: user_id_client, CHAMP_USAGER_NOM: nom_usager };
 
     let commande_bson = match convertir_to_bson(commande.cle) {
         Ok(c) => c,
