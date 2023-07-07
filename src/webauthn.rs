@@ -18,6 +18,7 @@ use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
 use millegrilles_common_rust::hachages::verifier_hachage_serializable;
 use webauthn_rs::prelude::{Base64UrlSafeData, PublicKeyCredential};
+use millegrilles_common_rust::uuid;
 
 pub fn generer_challenge_auth(url_site: &str, credentials: Vec<Credential>) -> Result<Challenge, Box<dyn Error>> {
 
@@ -354,11 +355,14 @@ pub fn valider_commande<M, S>(hostname: S, challenge: S, message: &M) -> Result<
 
 #[cfg(test)]
 mod webauthn_test {
+    use millegrilles_common_rust::bson::Uuid;
+    use millegrilles_common_rust::multibase::Base;
     use millegrilles_common_rust::reqwest::Url;
     use crate::test_setup::setup;
 
     use super::*;
     use millegrilles_common_rust::serde_json::Value;
+    use webauthn_rs::prelude::PasskeyRegistration;
     use webauthn_rs::WebauthnBuilder;
 
     const COMMANDE_SIGNER_CERTIFICAT: &str = r#"
@@ -396,8 +400,8 @@ mod webauthn_test {
 
     #[test]
     fn generer_challenge_registration_1() {
-        let rp_id = "example.com";
-        let rp_origin = Url::parse("https://idm.example.com")
+        let rp_id = "millegrilles.com";
+        let rp_origin = Url::parse("https://www.millegrilles.com")
             .expect("Invalid URL");
         let mut builder = WebauthnBuilder::new(rp_id, &rp_origin)
             .expect("Invalid configuration");
@@ -405,6 +409,31 @@ mod webauthn_test {
             .expect("Invalid configuration");
 
         debug!("generer_challenge_registration_1 Challenge genere : {:?}", webauthn);
+
+        let user_id = "z2i3Xjx5WkuTSzZnd7wXLP2qfCMZ8mXpVS4u74v6WuaHM2jmWNL";
+        let user_name = "proprietaire";
+        let (_, user_id_bytes): (Base, Vec<u8>) = multibase::decode(user_id).expect("multibase::decode");
+        let user_id_uuid = uuid::Uuid::new_v4();
+
+        let (challenge, passkey_registration) =
+            webauthn.start_passkey_registration(
+                user_id_uuid,
+                user_name, user_name, None)
+                .expect("start_passkey_registration");
+
+        debug!("challenge : {:?}", challenge);
+        debug!("registration : {:?}", passkey_registration);
+
+        let challenge_json = serde_json::to_string(&challenge).expect("challenge_json");
+        debug!("challenge JSON pour le navigateur :\n{}", challenge_json);
+
+        // Serialiser passkey registration
+        let passkey_json = serde_json::to_string(&passkey_registration).expect("passkey_json");
+        debug!("registration JSON :\n{}", passkey_json);
+
+        // De-serialiser passkey registration (simuler chargement DB)
+        let passkey_deserialized: PasskeyRegistration = serde_json::from_str(passkey_json.as_str()).expect("passkey deserialized");
+        debug!("registration de-serialized : {:?}", passkey_deserialized);
     }
 
     #[test]
