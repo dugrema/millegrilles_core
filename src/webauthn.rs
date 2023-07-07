@@ -10,15 +10,76 @@ use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::{json, Value, Map};
 use millegrilles_common_rust::bson::{doc, Document, Array, Bson};
-use webauthn_rs::{Webauthn};
+use webauthn_rs::{Webauthn, WebauthnBuilder};
 use millegrilles_common_rust::openssl;
 use std::convert::TryInto;
 use millegrilles_common_rust::openssl::bn::{BigNumRef, BigNum};
 use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
 use millegrilles_common_rust::hachages::verifier_hachage_serializable;
-use webauthn_rs::prelude::{Base64UrlSafeData, PublicKeyCredential};
+use millegrilles_common_rust::reqwest::Url;
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, CredentialID, PasskeyRegistration, PublicKeyCredential};
 use millegrilles_common_rust::uuid;
+
+/// Genere un nouveau challenge webauthn
+pub fn generer_challenge_registration<I,S,T,U,V,W,X>(
+    rp_id: S, rp_origin: T, user_name: U, user_uuid: V, idmg: I, existing_credentials: Option<X>
+)
+    -> Result<(CreationChallengeResponse, PasskeyRegistration), Box<dyn Error>>
+    where I: AsRef<str>, S: AsRef<str>, T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: AsRef<str>, X: AsRef<Vec<W>>
+{
+    let rp_id = rp_id.as_ref();
+    let rp_origin_str = rp_origin.as_ref();
+    let idmg = idmg.as_ref();
+    debug!("generer_challenge_registration builder webauthn avec instance_id : {}, rp_origin: {}", rp_id, rp_origin_str);
+    let rp_origin = Url::parse(rp_origin_str)?;
+    debug!("generer_challenge_registration builder webauthn rp_origin parsed: {}", rp_origin);
+    let mut builder = WebauthnBuilder::new(rp_id, &rp_origin)?
+        .rp_name(idmg);
+    let webauthn = builder.build()?;
+
+    debug!("generer_challenge_registration Challenge genere : {:?}", webauthn);
+
+    let user_uuid = uuid::Uuid::parse_str(user_uuid.as_ref())?;
+    let user_name = user_name.as_ref();
+
+    // Convertir existing credentials (si applicable)
+    let credentials = match existing_credentials {
+        Some(inner) => {
+            let creds_str: Vec<&str> = inner.as_ref().into_iter().map(|c| (*c).as_ref()).collect();
+            let mut creds = Vec::new();
+            for c in creds_str.into_iter() {
+                let cred_uuid = match CredentialID::try_from(c) {
+                    Ok(inner) => inner,
+                    Err(e) => {
+                        info!("Erreur parsing credential existing (SKIP) : {:?}", e);
+                        continue;
+                    }
+                };
+                creds.push(cred_uuid);
+            }
+            Some(creds)
+        },
+        None => None
+    };
+
+    let (challenge, passkey_registration) =
+        webauthn.start_passkey_registration(
+            user_uuid,
+            user_name, user_name, credentials)?;
+
+    debug!("challenge : {:?}", challenge);
+    debug!("registration : {:?}", passkey_registration);
+
+    // let challenge_json = serde_json::to_string(&challenge).expect("challenge_json");
+    // debug!("challenge JSON pour le navigateur :\n{}", challenge_json);
+
+    // Serialiser passkey registration
+    // let passkey_json = serde_json::to_string(&passkey_registration).expect("passkey_json");
+    // debug!("registration JSON :\n{}", passkey_json);
+
+    Ok((challenge, passkey_registration))
+}
 
 pub fn generer_challenge_auth(url_site: &str, credentials: Vec<Credential>) -> Result<Challenge, Box<dyn Error>> {
 
@@ -400,26 +461,17 @@ mod webauthn_test {
 
     #[test]
     fn generer_challenge_registration_1() {
+        // let rp_id = "millegrilles.com";
         let rp_id = "millegrilles.com";
         let rp_origin = Url::parse("https://www.millegrilles.com")
             .expect("Invalid URL");
-        let mut builder = WebauthnBuilder::new(rp_id, &rp_origin)
-            .expect("Invalid configuration");
-        let webauthn = builder.build()
-            .expect("Invalid configuration");
-
-        debug!("generer_challenge_registration_1 Challenge genere : {:?}", webauthn);
-
-        let user_id = "z2i3Xjx5WkuTSzZnd7wXLP2qfCMZ8mXpVS4u74v6WuaHM2jmWNL";
+        let idmg = "zeYncRqEqZ6eTEmUZ8whJFuHG796eSvCTWE4M432izXrp22bAtwGm7Jf";
         let user_name = "proprietaire";
-        let (_, user_id_bytes): (Base, Vec<u8>) = multibase::decode(user_id).expect("multibase::decode");
-        let user_id_uuid = uuid::Uuid::new_v4();
-
-        let (challenge, passkey_registration) =
-            webauthn.start_passkey_registration(
-                user_id_uuid,
-                user_name, user_name, None)
-                .expect("start_passkey_registration");
+        let user_id_uuid = uuid::Uuid::new_v4().to_string();
+        let (challenge, passkey_registration) = generer_challenge_registration(
+            rp_id, rp_origin, user_name, user_id_uuid, idmg, None::<&Vec<&str>>
+        )
+            .expect("start_passkey_registration");
 
         debug!("challenge : {:?}", challenge);
         debug!("registration : {:?}", passkey_registration);
