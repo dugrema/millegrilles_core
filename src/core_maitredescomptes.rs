@@ -1942,8 +1942,9 @@ pub struct CrendentialWebauthn {
     pub user_id: String,
     pub hostname: String,
     pub passkey: Passkey,
-    #[serde(rename="_mg-creation")]
-    pub date_creation: DateTimeBson,
+    #[serde(rename="_mg-creation", skip_serializing_if = "Option::is_none")]
+    pub date_creation: Option<DateTimeBson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub derniere_utilisation: Option<DateTimeBson>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reset_cles: Option<bool>,
@@ -1961,17 +1962,21 @@ async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, 
 
     // Inserer credential
     let cred = {
-        let cred = CrendentialWebauthn {
+        let mut cred = CrendentialWebauthn {
             user_id,
             hostname,
             passkey: passkey_credential,
-            date_creation: DateTimeBson::now(),
+            date_creation: Some(DateTimeBson::now()),
             derniere_utilisation: None,
             reset_cles: None,
         };
         let collection_credentials = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
         let cred_doc = convertir_to_bson(&cred)?;
         collection_credentials.insert_one(cred_doc, None).await?;
+
+        // Retirer champs qui ne sont pas utiles pour une transaction
+        cred.date_creation = None;
+
         cred
     };
 
