@@ -43,11 +43,11 @@ use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
-use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_registration};
+use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_registration};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::multibase::Base::Base64Url;
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyRegistration, RegisterPublicKeyCredential, RequestChallengeResponse};
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, RegisterPublicKeyCredential, RequestChallengeResponse};
 use crate::core_pki::COLLECTION_CERTIFICAT_NOM;
 
 // Constantes
@@ -56,6 +56,7 @@ pub const NOM_COLLECTION_USAGERS: &str = "CoreMaitreDesComptes/usagers";
 pub const NOM_COLLECTION_RECOVERY: &str = "CoreMaitreDesComptes/recovery";
 pub const NOM_COLLECTION_ACTIVATIONS: &str = "CoreMaitreDesComptes/activations";
 pub const NOM_COLLECTION_WEBAUTHN_CHALLENGES: &str = "CoreMaitreDesComptes/webauthnChallenges";
+pub const NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION: &str = "CoreMaitreDesComptes/webauthnAuthentification";
 pub const NOM_COLLECTION_WEBAUTHN_CREDENTIALS: &str = "CoreMaitreDesComptes/webauthnCredentials";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
@@ -435,6 +436,22 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_webauthncreds)
     ).await?;
 
+    let options_unique_webauthn_auth = IndexOptions {
+        nom_index: Some(String::from(INDEX_WEBAUTHN_UNIQUE)),
+        unique: true
+    };
+    let champs_index_webauthn_auth = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
+        ChampIndex {nom_champ: String::from("hostname"), direction: 1},
+        ChampIndex {nom_champ: String::from("passkey_authentication.ast.challenge"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION,
+        champs_index_webauthn_auth,
+        Some(options_unique_webauthn_auth)
+    ).await?;
+
     Ok(())
 }
 
@@ -685,6 +702,16 @@ impl DocRegistrationWebauthn {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocAuthentificationWebauthn {
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub hostname: String,
+    #[serde(rename="_mg-creation")]
+    pub date_creation: DateTimeBson,
+    pub passkey_authentication: PasskeyAuthentication,
+}
+
 async fn preparer_registration_webauthn<M,S>(middleware: &M, compte: &CompteUsager, hostname: S)
     -> Result<DocRegistrationWebauthn, Box<dyn Error>>
     where M: MongoDao + ValidateurX509, S: AsRef<str>
@@ -719,6 +746,56 @@ async fn preparer_registration_webauthn<M,S>(middleware: &M, compte: &CompteUsag
     };
 
     Ok(doc_registration)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct DocPasskeyAuthentication {
+    #[serde(rename="userId")]
+    user_id: String,
+    hostname: String,
+    passkey_authentication: PasskeyAuthentication,
+    #[serde(rename="_mg-creation")]
+    pub date_creation: DateTimeBson,
+}
+
+async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &CompteUsager, hostname: S)
+    -> Result<Option<RequestChallengeResponse>, Box<dyn Error>>
+    where M: MongoDao + ValidateurX509, S: AsRef<str>
+{
+    let hostname = hostname.as_ref();
+    let user_id = compte.user_id.as_str();
+    let idmg = middleware.idmg();
+
+    // Charger credentials existants
+    let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+    let filtre = doc! { CHAMP_USER_ID: user_id, "hostname": hostname };
+    let mut credentials = Vec::new();
+    let mut curseur = collection.find(filtre, None).await?;
+    while let Some(r) = curseur.next().await {
+        let cred: CredentialWebauthn = convertir_bson_deserializable(r?)?;
+        credentials.push(cred);
+    }
+
+    if credentials.len() == 0 {
+        debug!("preparer_authentification_webauthn Aucuns credentials webauthn pour {}/{}", user_id, hostname);
+        return Ok(None);
+    }
+
+    let (challenge, passkey_authentication) = generer_challenge_authentification(
+        hostname, idmg, credentials)?;
+
+    // Sauvegarder passkey authentication
+    let doc_passkey_authentication = DocPasskeyAuthentication {
+        user_id: user_id.to_string(),
+        hostname: hostname.to_string(),
+        passkey_authentication,
+        date_creation: DateTimeBson::now(),
+    };
+    let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION)?;
+    let doc_passkey = convertir_to_bson(doc_passkey_authentication)?;
+    collection.insert_one(doc_passkey, None).await?;
+
+    Ok(Some(challenge))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -863,13 +940,13 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
         if let Some(host_url) = requete.host_url.as_ref() {
             debug!("charger_usager host_url {}", host_url);
             let hostname = host_url;
-            // let url = Url::parse(host_url.as_str())?;
-            // let hostname = match url.host_str() {
-            //     Some(inner) => inner,
-            //     None => Err(format!("charger_usager host_url mauvais format (hostname manquant) : {}", host_url))?
-            // };
+
+            // todo: Ajouter verification de securite pour fournir challenge au serveur prive
             let registration_webauthn = preparer_registration_webauthn(middleware, compte, hostname).await?;
             reponse_charger_usager.registration_challenge = Some(registration_webauthn.challenge);
+
+            let challenge = preparer_authentification_webauthn(middleware, compte, hostname).await?;
+            reponse_charger_usager.authentication_challenge = challenge;
         } else {
             Err(format!("charger_usager host_url n'est pas fourni dans la requete usager"))?;
         }
@@ -1810,29 +1887,6 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
         reponse_client_serialise
     };
 
-    // let certificat = match reponse_client_serialise.certificat {
-    //     Some(inner) => inner,
-    //     None => {
-    //         let err = json!({"ok": false, "code": 12, "err": format!{"Permission refusee, transaction sans certificat"}});
-    //         debug!("ajouter_cle Permission refusee, transaction sans certificat");
-    //         match middleware.formatter_reponse(&err, None) {
-    //             Ok(m) => return Ok(Some(m)),
-    //             Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse commande_ajouter_cle (12) : {:?}", e))?
-    //         }
-    //     }
-    // };
-    // let user_id = match certificat.get_user_id()? {
-    //     Some(inner) => inner.as_str(),
-    //     None => {
-    //         let err = json!({"ok": false, "code": 13, "err": format!{"Permission refusee, certificat client sans user_id"}});
-    //         debug!("ajouter_cle certificat client sans user_id");
-    //         match middleware.formatter_reponse(&err, None) {
-    //             Ok(m) => return Ok(Some(m)),
-    //             Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse commande_ajouter_cle (13) : {:?}", e))?
-    //         }
-    //     }
-    // };
-
     let transaction_ajouter_cle_contenu: TransactionAjouterCle = reponse_client_serialise.parsed.map_contenu()?;
     let hostname = match transaction_ajouter_cle_contenu.hostname.as_ref() {
         Some(inner) => inner.as_str(),
@@ -1907,6 +1961,13 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
     let mut credential_interne = sauvegarder_credential(
         middleware, user_id_certificat, hostname, webauthn_credential, true).await?;
 
+    {
+        // Supprimer activation pour le certificat (si present)
+        let collection = middleware.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
+        let filtre = doc! { CHAMP_USER_ID: user_id_certificat, "fingerprint_pk": fingerprint_pk };
+        collection.delete_one(filtre, None).await?;
+    }
+
     // Transferer le flag reset_cles vers la transaction au besoin
     if let Some(true) = transaction_ajouter_cle_contenu.reset_cles {
         credential_interne.reset_cles = Some(true)
@@ -1922,36 +1983,15 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
     let uuid_transaction = reponse_client_serialise.parsed.id.clone();
     let mut mva = MessageValideAction::from_message_millegrille(
         transaction_credential, TypeMessageOut::Transaction)?;
+
     // Inserer le certificat local
     mva.message.certificat = Some(middleware.get_enveloppe_signature().enveloppe.clone());
 
     Ok(sauvegarder_traiter_transaction(middleware, mva, gestionnaire).await?)
-
-    // sauvegarder_traiter_transaction_serializable(middleware, reponse_client_serialise)
-    // sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
-    // let transaction: TransactionImpl = message.try_into()?;
-    // let reponse = transaction_ajouter_cle(middleware, reponse_client_serialise).await?;
-    // marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
-    //
-    // Ok(reponse)
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CrendentialWebauthn {
-    #[serde(rename="userId")]
-    pub user_id: String,
-    pub hostname: String,
-    pub passkey: Passkey,
-    #[serde(rename="_mg-creation", skip_serializing_if = "Option::is_none")]
-    pub date_creation: Option<DateTimeBson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub derniere_utilisation: Option<DateTimeBson>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reset_cles: Option<bool>,
 }
 
 async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, passkey_credential: Passkey, supprimer_registration: bool)
-    -> Result<CrendentialWebauthn, Box<dyn Error>>
+    -> Result<CredentialWebauthn, Box<dyn Error>>
     where M: MongoDao, S: Into<String>, T: Into<String>
 {
     let user_id = user_id.into();
@@ -1962,7 +2002,7 @@ async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, 
 
     // Inserer credential
     let cred = {
-        let mut cred = CrendentialWebauthn {
+        let mut cred = CredentialWebauthn {
             user_id,
             hostname,
             passkey: passkey_credential,
@@ -2005,7 +2045,7 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
         Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur exchanges/domaines/roles non autorise - SKIP"))?
     }
 
-    let transaction_contenu: CrendentialWebauthn = match transaction.convertir() {
+    let transaction_contenu: CredentialWebauthn = match transaction.convertir() {
         Ok(t) => t,
         Err(e) => Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur conversion en TransactionAjouterCle : {:?}", e))?
     };

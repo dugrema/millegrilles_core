@@ -9,7 +9,7 @@ use millegrilles_common_rust::rand::Rng;
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::{json, Value, Map};
-use millegrilles_common_rust::bson::{doc, Document, Array, Bson};
+use millegrilles_common_rust::bson::{doc, Document, Array, Bson, DateTime as DateTimeBson};
 use webauthn_rs::{Webauthn, WebauthnBuilder};
 use millegrilles_common_rust::openssl;
 use std::convert::TryInto;
@@ -18,9 +18,35 @@ use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
 use millegrilles_common_rust::hachages::verifier_hachage_serializable;
 use millegrilles_common_rust::reqwest::Url;
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential};
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use millegrilles_common_rust::uuid;
 use crate::core_maitredescomptes::{DocRegistrationWebauthn, TransactionAjouterCle};
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CredentialWebauthn {
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub hostname: String,
+    pub passkey: Passkey,
+    #[serde(rename="_mg-creation", skip_serializing_if = "Option::is_none")]
+    pub date_creation: Option<DateTimeBson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub derniere_utilisation: Option<DateTimeBson>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_cles: Option<bool>,
+}
+
+fn build_webauthn<H,S>(hostname: H, idmg: S) -> Result<Webauthn, Box<dyn Error>> where H: AsRef<str>, S: AsRef<str> {
+    let idmg = idmg.as_ref();
+    let rp_id = hostname.as_ref();
+    let rp_origin = Url::parse(format!("https://{}/", rp_id).as_str())?;
+    debug!("generer_challenge_registration builder webauthn rp_origin parsed: {}", rp_origin);
+    let mut builder = WebauthnBuilder::new(rp_id, &rp_origin)?
+        .rp_name(idmg);
+
+    let webauthn = builder.build()?;
+    Ok(webauthn)
+}
 
 /// Genere un nouveau challenge webauthn
 pub fn generer_challenge_registration<I,T,U,V,W,X>(
@@ -104,6 +130,20 @@ pub fn verifier_challenge_registration<S>(idmg: S, doc_registration: &DocRegistr
 
     debug!("Resultat verification registration : {:?}", passkey_credential);
     Ok(passkey_credential)
+}
+
+pub fn generer_challenge_authentification<H,S>(hostname: H, idmg: S, creds: Vec<CredentialWebauthn>)
+    -> Result<(RequestChallengeResponse, PasskeyAuthentication), Box<dyn Error>>
+    where H: AsRef<str>, S: AsRef<str>
+{
+    let idmg = idmg.as_ref();
+    let hostname = hostname.as_ref();
+    let webauthn = build_webauthn(hostname, idmg)?;
+
+    let passkeys: Vec<Passkey> = creds.into_iter().map(|p| p.passkey).collect();
+
+    let resultat = webauthn.start_passkey_authentication(&passkeys[..])?;
+    Ok(resultat)
 }
 
 pub fn generer_challenge_auth(url_site: &str, credentials: Vec<Credential>) -> Result<Challenge, Box<dyn Error>> {
@@ -486,7 +526,6 @@ mod webauthn_test {
 
     #[test]
     fn generer_challenge_registration_1() {
-        // let rp_id = "millegrilles.com";
         // let rp_id = "millegrilles.com";
         let rp_origin = Url::parse("https://www.millegrilles.com")
             .expect("Invalid URL");
