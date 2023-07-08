@@ -419,6 +419,22 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_webauthn)
     ).await?;
 
+    let options_unique_webauthncreds = IndexOptions {
+        nom_index: Some(String::from(INDEX_WEBAUTHN_UNIQUE)),
+        unique: true
+    };
+    let champs_index_webauthncreds = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
+        ChampIndex {nom_champ: String::from("hostname"), direction: 1},
+        ChampIndex {nom_champ: String::from("passkey.cred.cred_id"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_WEBAUTHN_CREDENTIALS,
+        champs_index_webauthncreds,
+        Some(options_unique_webauthncreds)
+    ).await?;
+
     Ok(())
 }
 
