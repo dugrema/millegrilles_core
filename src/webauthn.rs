@@ -18,21 +18,25 @@ use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
 use millegrilles_common_rust::hachages::verifier_hachage_serializable;
 use millegrilles_common_rust::reqwest::Url;
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, CredentialID, PasskeyRegistration, PublicKeyCredential};
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential};
 use millegrilles_common_rust::uuid;
+use crate::core_maitredescomptes::{DocRegistrationWebauthn, TransactionAjouterCle};
 
 /// Genere un nouveau challenge webauthn
-pub fn generer_challenge_registration<I,S,T,U,V,W,X>(
-    rp_id: S, rp_origin: T, user_name: U, user_uuid: V, idmg: I, existing_credentials: Option<X>
+pub fn generer_challenge_registration<I,T,U,V,W,X>(
+    rp_origin: T, user_name: U, user_uuid: V, idmg: I, existing_credentials: Option<X>
 )
     -> Result<(CreationChallengeResponse, PasskeyRegistration), Box<dyn Error>>
-    where I: AsRef<str>, S: AsRef<str>, T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: AsRef<str>, X: AsRef<Vec<W>>
+    where I: AsRef<str>, T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: AsRef<str>, X: AsRef<Vec<W>>
 {
-    let rp_id = rp_id.as_ref();
     let rp_origin_str = rp_origin.as_ref();
     let idmg = idmg.as_ref();
-    debug!("generer_challenge_registration builder webauthn avec instance_id : {}, rp_origin: {}", rp_id, rp_origin_str);
+    debug!("generer_challenge_registration builder webauthn avec rp_origin: {}", rp_origin_str);
     let rp_origin = Url::parse(rp_origin_str)?;
+    let rp_id = match rp_origin.host_str() {
+        Some(inner) => inner,
+        None => Err(format!("webauthn generer_challenge_registration Format url rp invalide : {}", rp_origin_str))?
+    };
     debug!("generer_challenge_registration builder webauthn rp_origin parsed: {}", rp_origin);
     let mut builder = WebauthnBuilder::new(rp_id, &rp_origin)?
         .rp_name(idmg);
@@ -79,6 +83,27 @@ pub fn generer_challenge_registration<I,S,T,U,V,W,X>(
     // debug!("registration JSON :\n{}", passkey_json);
 
     Ok((challenge, passkey_registration))
+}
+
+pub fn verifier_challenge_registration<S>(idmg: S, doc_registration: &DocRegistrationWebauthn, transaction_ajouter_cle: &TransactionAjouterCle)
+    -> Result<Passkey, Box<dyn Error>>
+    where S: AsRef<str>
+{
+    let public_key_credentials: RegisterPublicKeyCredential = transaction_ajouter_cle.reponse_client.clone().try_into()?;
+    let registration = &doc_registration.registration;
+
+    let idmg = idmg.as_ref();
+    let rp_id = doc_registration.hostname.as_str();
+    let rp_origin = Url::parse(format!("https://{}/", rp_id).as_str())?;
+    debug!("generer_challenge_registration builder webauthn rp_origin parsed: {}", rp_origin);
+    let mut builder = WebauthnBuilder::new(rp_id, &rp_origin)?
+        .rp_name(idmg);
+    let webauthn = builder.build()?;
+
+    let passkey_credential = webauthn.finish_passkey_registration(&public_key_credentials, &doc_registration.registration)?;
+
+    debug!("Resultat verification registration : {:?}", passkey_credential);
+    Ok(passkey_credential)
 }
 
 pub fn generer_challenge_auth(url_site: &str, credentials: Vec<Credential>) -> Result<Challenge, Box<dyn Error>> {
@@ -462,14 +487,14 @@ mod webauthn_test {
     #[test]
     fn generer_challenge_registration_1() {
         // let rp_id = "millegrilles.com";
-        let rp_id = "millegrilles.com";
+        // let rp_id = "millegrilles.com";
         let rp_origin = Url::parse("https://www.millegrilles.com")
             .expect("Invalid URL");
         let idmg = "zeYncRqEqZ6eTEmUZ8whJFuHG796eSvCTWE4M432izXrp22bAtwGm7Jf";
         let user_name = "proprietaire";
         let user_id_uuid = uuid::Uuid::new_v4().to_string();
         let (challenge, passkey_registration) = generer_challenge_registration(
-            rp_id, rp_origin, user_name, user_id_uuid, idmg, None::<&Vec<&str>>
+            rp_origin, user_name, user_id_uuid, idmg, None::<&Vec<&str>>
         )
             .expect("start_passkey_registration");
 
