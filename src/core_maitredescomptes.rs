@@ -11,7 +11,7 @@ use millegrilles_common_rust::bson::{Bson, bson, DateTime as DateTimeBson, doc};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{calculer_fingerprint_pk, csr_calculer_fingerprintpk, ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::chrono::{DateTime, NaiveDateTime, Utc};
+use millegrilles_common_rust::chrono::{DateTime, NaiveDateTime, Timelike, Utc};
 use millegrilles_common_rust::configuration::{ConfigMessages, IsConfigNoeud};
 use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
 use millegrilles_common_rust::constantes::*;
@@ -457,6 +457,38 @@ where M: MongoDao + ConfigMessages
     Ok(())
 }
 
+/// Supprime les state de registration ou authentication expires
+async fn supprimer_webauthn_expire<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+    where M: MongoDao
+{
+    // Supprimer registration expires
+    {
+        let date_expiration_registration = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::minutes(60));
+        let collection_registration_state = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CHALLENGES)?;
+        let filtre = doc! {
+            CHAMP_CREATION: {"$lt": date_expiration_registration},
+            "type_challenge": "registration"
+        };
+        debug!("Suppression challenges registration expires depuis {:?}", filtre);
+        if let Err(e) = collection_registration_state.delete_many(filtre, None).await {
+            error!("Erreur suppression challenges registration expires : {:?}", e);
+        }
+    }
+
+    // Supprimer passkey authentication expires
+    {
+        let date_expiration_auth = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::minutes(5));
+        let collection_authentication = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION)?;
+        let filtre = doc! { CHAMP_CREATION: {"$lt": date_expiration_auth} };
+        debug!("Suppression challenges auth expires depuis {:?}", filtre);
+        if let Err(e) = collection_authentication.delete_many(filtre, None).await {
+            error!("Erreur suppression challenges auth expires : {:?}", e);
+        }
+    }
+
+    Ok(())
+}
+
 async fn entretien<M>(_middleware: Arc<M>)
     where M: Middleware + 'static
 {
@@ -484,6 +516,13 @@ where M: MongoDao + GenerateurMessages {
         match nettoyer_comptes_usagers(middleware).await {
             Ok(()) => (),
             Err(e) => error!("core_maitredescomptes.traiter_cedule Erreur nettoyer comptes usagers : {:?}", e)
+        }
+    }
+
+    let date = trigger.get_date();
+    if date.get_datetime().minute() % 3 == 2 {
+        if let Err(e) = supprimer_webauthn_expire(middleware).await {
+            error!("Erreur entretien webauthn challenges : {:?}", e);
         }
     }
 
