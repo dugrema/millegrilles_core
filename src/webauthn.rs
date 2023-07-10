@@ -18,7 +18,7 @@ use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
 use millegrilles_common_rust::hachages::verifier_hachage_serializable;
 use millegrilles_common_rust::reqwest::Url;
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
+use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use millegrilles_common_rust::uuid;
 use crate::core_maitredescomptes::{DocRegistrationWebauthn, TransactionAjouterCle};
 
@@ -144,6 +144,16 @@ pub fn generer_challenge_authentification<H,S>(hostname: H, idmg: S, creds: Vec<
 
     let resultat = webauthn.start_passkey_authentication(&passkeys[..])?;
     Ok(resultat)
+}
+
+pub fn verifier_challenge_authentification<H,S>(hostname: H, idmg: S, reg: PublicKeyCredential, state: PasskeyAuthentication)
+    -> Result<AuthenticationResult, Box<dyn Error>>
+    where H: AsRef<str>, S: AsRef<str>
+{
+    let idmg = idmg.as_ref();
+    let hostname = hostname.as_ref();
+    let webauthn = build_webauthn(hostname, idmg)?;
+    Ok(webauthn.finish_passkey_authentication(&reg, &state)?)
 }
 
 pub fn generer_challenge_auth(url_site: &str, credentials: Vec<Credential>) -> Result<Challenge, Box<dyn Error>> {

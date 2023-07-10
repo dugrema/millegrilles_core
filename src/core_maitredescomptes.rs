@@ -43,11 +43,11 @@ use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
-use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_registration};
+use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::multibase::Base::Base64Url;
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, RegisterPublicKeyCredential, RequestChallengeResponse};
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use crate::core_pki::COLLECTION_CERTIFICAT_NOM;
 
 // Constantes
@@ -75,6 +75,7 @@ const REQUETE_LISTE_PROPRIETAIRES: &str = "getListeProprietaires";
 const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
 // const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
 const COMMANDE_AJOUTER_CSR_RECOVERY: &str = "ajouterCsrRecovery";
+const COMMANDE_AUTHENTIFIER_WEBAUTHN: &str = "authentifierWebauthn";
 
 const TRANSACTION_INSCRIRE_USAGER: &str = "inscrireUsager";
 const TRANSACTION_AJOUTER_CLE: &str = "ajouterCle";
@@ -243,6 +244,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_SUPPRIMER_CLES,
 
         // Commandes
+        COMMANDE_AUTHENTIFIER_WEBAUTHN,
         COMMANDE_SIGNER_COMPTEUSAGER,
         // COMMANDE_ACTIVATION_TIERCE,
         COMMANDE_AJOUTER_CSR_RECOVERY,
@@ -540,6 +542,8 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
+
+            COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m).await,
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
             COMMANDE_AJOUTER_CSR_RECOVERY => commande_ajouter_csr_recovery(middleware, m).await,
 
@@ -759,7 +763,7 @@ struct DocPasskeyAuthentication {
 }
 
 async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &CompteUsager, hostname: S)
-    -> Result<Option<RequestChallengeResponse>, Box<dyn Error>>
+    -> Result<Option<(RequestChallengeResponse, PasskeyAuthentication)>, Box<dyn Error>>
     where M: MongoDao + ValidateurX509, S: AsRef<str>
 {
     let hostname = hostname.as_ref();
@@ -788,14 +792,14 @@ async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &Compte
     let doc_passkey_authentication = DocPasskeyAuthentication {
         user_id: user_id.to_string(),
         hostname: hostname.to_string(),
-        passkey_authentication,
+        passkey_authentication: passkey_authentication.clone(),
         date_creation: DateTimeBson::now(),
     };
     let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION)?;
     let doc_passkey = convertir_to_bson(doc_passkey_authentication)?;
     collection.insert_one(doc_passkey, None).await?;
 
-    Ok(Some(challenge))
+    Ok(Some((challenge, passkey_authentication)))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -806,6 +810,7 @@ struct ReponseChargerUsager {
     activations: Option<HashMap<String, DocActivationFingerprintPkUsager>>,
     registration_challenge: Option<CreationChallengeResponse>,
     authentication_challenge: Option<RequestChallengeResponse>,
+    passkey_authentication: Option<PasskeyAuthentication>,
 }
 
 impl From<CompteUsager> for ReponseChargerUsager {
@@ -817,6 +822,7 @@ impl From<CompteUsager> for ReponseChargerUsager {
             activations: None,
             registration_challenge: None,
             authentication_challenge: None,
+            passkey_authentication: None,
         }
     }
 }
@@ -832,6 +838,7 @@ impl ReponseChargerUsager {
             activations: None,
             registration_challenge: None,
             authentication_challenge: None,
+            passkey_authentication: None,
         }
     }
 
@@ -855,6 +862,7 @@ impl ReponseChargerUsager {
             activations: None,
             registration_challenge: None,
             authentication_challenge: None,
+            passkey_authentication: None,
         }
     }
 }
@@ -945,8 +953,14 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
             let registration_webauthn = preparer_registration_webauthn(middleware, compte, hostname).await?;
             reponse_charger_usager.registration_challenge = Some(registration_webauthn.challenge);
 
-            let challenge = preparer_authentification_webauthn(middleware, compte, hostname).await?;
+            let (challenge, passkey_authentication) = match preparer_authentification_webauthn(middleware, compte, hostname).await? {
+                Some((challenge, passkey_authentication)) => {
+                    (Some(challenge), Some(passkey_authentication))
+                },
+                None => (None, None)
+            };
             reponse_charger_usager.authentication_challenge = challenge;
+            reponse_charger_usager.passkey_authentication = passkey_authentication;
         } else {
             Err(format!("charger_usager host_url n'est pas fourni dans la requete usager"))?;
         }
@@ -1462,13 +1476,106 @@ struct TransactionInscrireUsager {
     csr: Option<String>,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ResponseChallengeAuthenticationWebauthn {
+    #[serde(rename = "authenticatorData")]
+    authenticator_data: Base64UrlSafeData,
+    #[serde(rename = "clientDataJSON")]
+    client_data_json: Base64UrlSafeData,
+    signature: Base64UrlSafeData,
+    #[serde(rename = "userHandle")]
+    user_handle: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ClientAuthentificationWebauthn {
+    id64: Base64UrlSafeData,
+    response: ResponseChallengeAuthenticationWebauthn,
+    #[serde(rename = "type")]
+    type_: Option<String>,
+}
+
+impl TryInto<PublicKeyCredential> for ClientAuthentificationWebauthn {
+    type Error = serde_json::Error;
+
+    fn try_into(self) -> Result<PublicKeyCredential, Self::Error> {
+        let id = self.id64;
+
+        let pk_json = json!({
+            "id": &id,
+            "rawId": id,
+            "response": self.response,
+            "extensions": {},
+            "type": self.type_,
+        });
+
+        Ok(serde_json::from_value(pk_json)?)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandeClientAuthentificationWebauthn {
+    #[serde(rename = "demandeCertificat")]
+    demande_certificat: Option<String>,
+    webauthn: ClientAuthentificationWebauthn,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandeAuthentificationUsager {
+    #[serde(rename="userId")]
+    user_id: String,
+    hostname: String,
+    challenge: String,
+    #[serde(rename="reponseWebauthn")]
+    commande_webauthn: CommandeClientAuthentificationWebauthn,
+}
+
+async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
+{
+    debug!("commande_authentifier_usager : {:?}", message);
+
+    let idmg = middleware.idmg();
+    let commande: CommandeAuthentificationUsager = message.message.get_msg().map_contenu()?;
+
+    // Charger challenge correspondant
+    let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION)?;
+    let filtre = doc! {
+        CHAMP_USER_ID: &commande.user_id,
+        "hostname": &commande.hostname,
+        "passkey_authentication.ast.challenge": &commande.challenge,
+    };
+    let doc_webauth_state: DocPasskeyAuthentication = match collection.find_one(filtre.clone(), None).await? {
+        Some(inner) => convertir_bson_deserializable(inner)?,
+        None => {
+            error!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn inconnu ou expire");
+            let reponse_ok = json!({"ok": false, "err": "Challenge inconnu ou expire", "code": 1});
+            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+        }
+    };
+    let passkey_authentication = doc_webauth_state.passkey_authentication;
+
+    // Verifier authentification
+    let reg = commande.commande_webauthn.webauthn.try_into()?;
+    let resultat = verifier_challenge_authentification(commande.hostname, idmg, reg, passkey_authentication)?;
+    debug!("commande_authentifier_webauthn Resultat webauth OK : {:?}", resultat);
+
+    // Supprimer challenge pour eviter reutilisation
+    collection.delete_one(filtre, None).await?;
+
+    let reponse_ok = json!({
+        "ok": true,
+        "counter": resultat.counter(),
+        "userVerification": resultat.user_verified(),
+    });
+    Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+}
+
 /// Verifie une demande de signature de certificat pour un compte usager
 /// Emet une commande autorisant la signature lorsque c'est approprie
 async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
-    debug!("signer_compte_usager : {:?}", message);
-
     // Valider information de reponse
     let (reply_to, correlation_id) = message.get_reply_info()?;
 
