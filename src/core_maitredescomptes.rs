@@ -37,7 +37,7 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
 use millegrilles_common_rust::verificateur::{ValidationOptions, VerificateurMessage, verifier_message, verifier_signature_serialize, verifier_signature_str};
 use millegrilles_common_rust::{reqwest, reqwest::Url};
-use millegrilles_common_rust::common_messages::MessageConfirmation;
+use millegrilles_common_rust::common_messages::{MessageConfirmation, ReponseSignatureCertificat};
 use millegrilles_common_rust::constantes::MessageKind::Reponse;
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
@@ -1665,18 +1665,23 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     };
 
     let mut passkey_authentication = doc_webauth_state.passkey_authentication;
-    if let Some(demande) = commande.commande_webauthn.demande_certificat {
-        debug!("commande_authentifier_usager Demande certificat recue : {:?}", demande);
-        let hachage = demande.valider()?;
-        debug!("commande_authentifier_usager Hachage calcule pour demande de certificat : {:?}", hachage);
-        let mut challenge = &mut passkey_authentication.ast.challenge;
-        debug!("commande_authentifier_usager Challenge existant : {:?} / {}", challenge, challenge.to_string());
-        let mut vec_challenge_acjuste = Vec::new();
-        vec_challenge_acjuste.extend_from_slice(&challenge.0[..]);
-        vec_challenge_acjuste.extend(hachage);
-        debug!("commande_authentifier_usager Hachage ajuste pour demande de certificat : {:?}", vec_challenge_acjuste);
-        passkey_authentication.ast.challenge = Base64UrlSafeData::from(vec_challenge_acjuste);
-    }
+    let flag_generer_nouveau_certificat = commande.commande_webauthn.demande_certificat.is_some();
+    let demande_certificat = match commande.commande_webauthn.demande_certificat {
+        Some(demande) => {
+            debug!("commande_authentifier_usager Demande certificat recue : {:?}", demande);
+            let hachage = demande.valider()?;
+            debug!("commande_authentifier_usager Hachage calcule pour demande de certificat : {:?}", hachage);
+            let mut challenge = &mut passkey_authentication.ast.challenge;
+            debug!("commande_authentifier_usager Challenge existant : {:?} / {}", challenge, challenge.to_string());
+            let mut vec_challenge_acjuste = Vec::new();
+            vec_challenge_acjuste.extend_from_slice(&challenge.0[..]);
+            vec_challenge_acjuste.extend(hachage);
+            debug!("commande_authentifier_usager Hachage ajuste pour demande de certificat : {:?}", vec_challenge_acjuste);
+            passkey_authentication.ast.challenge = Base64UrlSafeData::from(vec_challenge_acjuste);
+            Some(demande)
+        },
+        None => None
+    };
 
     // Verifier authentification
     let reg = commande.commande_webauthn.webauthn.try_into()?;
@@ -1695,11 +1700,47 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     // Supprimer challenge pour eviter reutilisation
     collection.delete_one(filtre, None).await?;
 
-    let reponse_ok = json!({
+    let mut reponse_ok = json!({
         "ok": true,
         "counter": resultat.counter(),
         "userVerification": resultat.user_verified(),
     });
+
+    if let Some(demande_certificat) = demande_certificat {
+        debug!("Generer le nouveau certificat pour l'usager et le retourner");
+        let user_id = &commande.user_id;
+        let csr = demande_certificat.csr;
+        let compte_usager = match charger_compte_user_id(middleware, &commande.user_id).await {
+            Ok(inner) => match inner {
+                Some(inner) => inner,
+                None => {
+                    error!("core_maitredescomptes.commande_authentifier_webauthn Compte usager inconnu pour generer certificat");
+                    let reponse_ok = json!({"ok": false, "err": "Compte usager inconnu pour generer nouveau certificat", "code": 3});
+                    return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+                }
+            },
+            Err(e) => {
+                error!("core_maitredescomptes.commande_authentifier_webauthn Erreur chargement compte usager pour generer certificat : {:?}", e);
+                let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 4});
+                return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+            }
+        };
+        let nom_usager = &compte_usager.nom_usager;
+        // let securite = SECURITE_1_PUBLIC;
+        let reponse_commande = signer_certificat_usager(
+            middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
+        let mut reponse_serialisee = MessageSerialise::from_parsed(reponse_commande)?;
+        valider_message(middleware, &mut reponse_serialisee).await?;
+        let info_certificat: ReponseSignatureCertificat = reponse_serialisee.parsed.map_contenu()?;
+        if let Some(certificat) = info_certificat.certificat {
+            // Inserer le certificat dans la reponse
+            reponse_ok.as_object_mut().expect("as_object_mut")
+                .insert("certificat".to_string(), certificat.into());
+        }
+    }
+
+    debug!("Reponse authentification : {:?}", reponse_ok);
+
     Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
 }
 
