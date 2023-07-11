@@ -45,8 +45,11 @@ use serde::{Deserialize, Serialize};
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
+use millegrilles_common_rust::hachages::hacher_bytes_vu8;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
+use millegrilles_common_rust::multibase::Base;
 use millegrilles_common_rust::multibase::Base::Base64Url;
+use millegrilles_common_rust::multihash::Code;
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use crate::core_pki::COLLECTION_CERTIFICAT_NOM;
 
@@ -792,11 +795,43 @@ async fn preparer_registration_webauthn<M,S>(middleware: &M, compte: &CompteUsag
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct PasskeyAuthenticationStateAjuste {
+    pub credentials: Value,
+    pub policy: Value,
+    pub challenge: Base64UrlSafeData,
+    pub appid: Option<String>,
+    pub allow_backup_eligible_upgrade: bool
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PasskeyAuthenticationAjuste {
+    ast: PasskeyAuthenticationStateAjuste,
+}
+
+impl TryInto<PasskeyAuthentication> for PasskeyAuthenticationAjuste {
+    type Error = Box<dyn Error>;
+
+    fn try_into(self) -> Result<PasskeyAuthentication, Self::Error> {
+        let value = serde_json::to_value(self)?;
+        Ok(serde_json::from_value(value)?)
+    }
+}
+
+impl TryFrom<PasskeyAuthentication> for PasskeyAuthenticationAjuste {
+    type Error = Box<dyn Error>;
+
+    fn try_from(value: PasskeyAuthentication) -> Result<Self, Self::Error> {
+        let value_conv = serde_json::to_value(value)?;
+        Ok(serde_json::from_value(value_conv)?)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct DocPasskeyAuthentication {
     #[serde(rename="userId")]
     user_id: String,
     hostname: String,
-    passkey_authentication: PasskeyAuthentication,
+    passkey_authentication: PasskeyAuthenticationAjuste,
     #[serde(rename="_mg-creation")]
     pub date_creation: DateTimeBson,
 }
@@ -831,7 +866,7 @@ async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &Compte
     let doc_passkey_authentication = DocPasskeyAuthentication {
         user_id: user_id.to_string(),
         hostname: hostname.to_string(),
-        passkey_authentication: passkey_authentication.clone(),
+        passkey_authentication: passkey_authentication.clone().try_into()?,
         date_creation: DateTimeBson::now(),
     };
     let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION)?;
@@ -1023,7 +1058,8 @@ struct RequeteUsager {
     #[serde(rename="nomUsager")]
     nom_usager: Option<String>,
 
-    /// Url du serveur qui fait la demande (du point de vue usager). Requis pour webauthn.
+    /// Url du serveur qui fait la demande (du point de vue usager).
+    /// Requis pour webauthn, agit comme flag pour generer un nouveau challenge d'authentification.
     #[serde(rename="hostUrl")]
     host_url: Option<String>,
 }
@@ -1553,9 +1589,43 @@ impl TryInto<PublicKeyCredential> for ClientAuthentificationWebauthn {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct DemandeSignatureCertificatWebauthn {
+    csr: String,
+    date: DateEpochSeconds,
+    #[serde(rename = "nomUsager")]
+    nom_usager: String,
+}
+
+impl DemandeSignatureCertificatWebauthn {
+    /// Valide le message et retourne un hachage du contenu.
+    fn valider(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+
+        // Le message recu est valide pour 5 minutes
+        // (aussi 1 minute dans l'autre sens si clock mal ajustee)
+        let date_now = Utc::now();
+        let date_message = self.date.get_datetime();
+        if date_now - chrono::Duration::minutes(5) > *date_message ||
+            date_now + chrono::Duration::minutes(1) < *date_message {
+            Err(format!("core_maitredescomptes.DemandeSignatureCertificatWebauthn Date expire/invalide"))?
+        }
+
+        // Calculer le hachage du message
+        self.hacher()
+    }
+
+    fn hacher(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+        let map = serde_json::to_value(&self)?.as_object().expect("value map").to_owned();
+        let value_ordered = preparer_btree_recursif(map)?;
+        let value_serialisee = serde_json::to_string(&value_ordered)?;
+        let value_bytes = value_serialisee.as_bytes();
+        Ok(hacher_bytes_vu8(value_bytes, Some(Code::Blake2s256)))
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct CommandeClientAuthentificationWebauthn {
     #[serde(rename = "demandeCertificat")]
-    demande_certificat: Option<String>,
+    demande_certificat: Option<DemandeSignatureCertificatWebauthn>,
     webauthn: ClientAuthentificationWebauthn,
 }
 
@@ -1584,6 +1654,7 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
         "hostname": &commande.hostname,
         "passkey_authentication.ast.challenge": &commande.challenge,
     };
+    debug!("Charger challenge webauthn {:?}", filtre);
     let doc_webauth_state: DocPasskeyAuthentication = match collection.find_one(filtre.clone(), None).await? {
         Some(inner) => convertir_bson_deserializable(inner)?,
         None => {
@@ -1592,11 +1663,33 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
             return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
         }
     };
-    let passkey_authentication = doc_webauth_state.passkey_authentication;
+
+    let mut passkey_authentication = doc_webauth_state.passkey_authentication;
+    if let Some(demande) = commande.commande_webauthn.demande_certificat {
+        debug!("commande_authentifier_usager Demande certificat recue : {:?}", demande);
+        let hachage = demande.valider()?;
+        debug!("commande_authentifier_usager Hachage calcule pour demande de certificat : {:?}", hachage);
+        let mut challenge = &mut passkey_authentication.ast.challenge;
+        debug!("commande_authentifier_usager Challenge existant : {:?} / {}", challenge, challenge.to_string());
+        let mut vec_challenge_acjuste = Vec::new();
+        vec_challenge_acjuste.extend_from_slice(&challenge.0[..]);
+        vec_challenge_acjuste.extend(hachage);
+        debug!("commande_authentifier_usager Hachage ajuste pour demande de certificat : {:?}", vec_challenge_acjuste);
+        passkey_authentication.ast.challenge = Base64UrlSafeData::from(vec_challenge_acjuste);
+    }
 
     // Verifier authentification
     let reg = commande.commande_webauthn.webauthn.try_into()?;
-    let resultat = verifier_challenge_authentification(commande.hostname, idmg, reg, passkey_authentication)?;
+    let resultat = match verifier_challenge_authentification(
+        commande.hostname, idmg, reg, passkey_authentication.try_into()?
+    ) {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!("core_maitredescomptes.commande_authentifier_webauthn Erreur verification challenge webauthn : {:?}", e);
+            let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 2});
+            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+        }
+    };
     debug!("commande_authentifier_webauthn Resultat webauth OK : {:?}", resultat);
 
     // Supprimer challenge pour eviter reutilisation
