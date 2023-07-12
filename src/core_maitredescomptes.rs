@@ -2531,6 +2531,19 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     // Valider contenu
     let commande: CommandeAjouterDelegationSignee = message.message.parsed.map_contenu()?;
     let mut message_confirmation = commande.confirmation;
+    let user_id = commande.user_id.as_str();
+
+    // S'assurer que la signature est recente (moins de 2 minutes, ajustement 10 secondes futur max)
+    let date_signature = message_confirmation.estampille.get_datetime();
+    let now = Utc::now();
+    if now - chrono::Duration::minutes(2) > *date_signature || now + chrono::Duration::seconds(10) < *date_signature {
+        warn!("ajouter_delegation_signee Commande delegation expiree - on rejette (2)");
+        let err = json!({"ok": false, "code": 2, "err": "Permission refusee, estampille invalide"});
+        match middleware.formatter_reponse(&err, None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("commande_ajouter_delegation_signee Erreur preparation reponse (2) : {:?}", e))?
+        }
+    }
 
     // Valider la signature de la cle de millegrille
     let (signature, hachage) = message_confirmation.verifier_contenu()?;
@@ -2542,6 +2555,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
             Err(e) => Err(format!("Erreur preparation reponse (2) ajouter_delegation_signee : {:?}", e))?
         }
     }
+    debug!("ajouter_delegation_signee Signature message delegation (confirmation) OK");
 
     // Valider la pubkey, elle doit correspondre au certificat de la MilleGrille.
     let public_key_millegrille = middleware.ca_cert().public_key()?.raw_public_key()?;
@@ -2553,6 +2567,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
             Err(e) => Err(format!("Erreur preparation reponse (3) ajouter_delegation_signee : {:?}", e))?
         }
     }
+    debug!("ajouter_delegation_signee Correspondance cle publique millegrille OK");
 
     // Valider le format du contenu (parse)
     let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = message_confirmation.map_contenu()?;
@@ -2743,7 +2758,7 @@ struct ConfirmationSigneeDelegationGlobale {
     #[serde(rename="activerDelegation")]
     activer_delegation: Option<bool>,
     data: Option<String>,
-    date: usize,
+    //date: usize,
     #[serde(rename="nomUsager")]
     nom_usager: String,
 }
