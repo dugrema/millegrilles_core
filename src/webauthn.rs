@@ -20,7 +20,7 @@ use millegrilles_common_rust::hachages::verifier_hachage_serializable;
 use millegrilles_common_rust::reqwest::Url;
 use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use millegrilles_common_rust::uuid;
-use crate::core_maitredescomptes::{DocRegistrationWebauthn, TransactionAjouterCle};
+use crate::core_maitredescomptes::{DocChallenge, TransactionAjouterCle};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CredentialWebauthn {
@@ -111,12 +111,15 @@ pub fn generer_challenge_registration<I,T,U,V,W,X>(
     Ok((challenge, passkey_registration))
 }
 
-pub fn verifier_challenge_registration<S>(idmg: S, doc_registration: &DocRegistrationWebauthn, transaction_ajouter_cle: &TransactionAjouterCle)
+pub fn verifier_challenge_registration<S>(idmg: S, doc_registration: &DocChallenge, transaction_ajouter_cle: &TransactionAjouterCle)
     -> Result<Passkey, Box<dyn Error>>
     where S: AsRef<str>
 {
     let public_key_credentials: RegisterPublicKeyCredential = transaction_ajouter_cle.reponse_client.clone().try_into()?;
-    let registration = &doc_registration.registration;
+    let registration = match doc_registration.webauthn_registration.as_ref() {
+        Some(inner) => &inner.resistration_state,
+        None => Err(format!("webauthn.verifier_challenge_registration Mauvais type de challenge (webauthn_registration:None"))?
+    };
 
     let idmg = idmg.as_ref();
     let rp_id = doc_registration.hostname.as_str();
@@ -126,7 +129,7 @@ pub fn verifier_challenge_registration<S>(idmg: S, doc_registration: &DocRegistr
         .rp_name(idmg);
     let webauthn = builder.build()?;
 
-    let passkey_credential = webauthn.finish_passkey_registration(&public_key_credentials, &doc_registration.registration)?;
+    let passkey_credential = webauthn.finish_passkey_registration(&public_key_credentials, registration)?;
 
     debug!("Resultat verification registration : {:?}", passkey_credential);
     Ok(passkey_credential)

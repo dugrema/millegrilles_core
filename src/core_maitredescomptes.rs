@@ -58,7 +58,7 @@ pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
 pub const NOM_COLLECTION_USAGERS: &str = "CoreMaitreDesComptes/usagers";
 pub const NOM_COLLECTION_RECOVERY: &str = "CoreMaitreDesComptes/recovery";
 pub const NOM_COLLECTION_ACTIVATIONS: &str = "CoreMaitreDesComptes/activations";
-pub const NOM_COLLECTION_WEBAUTHN_CHALLENGES: &str = "CoreMaitreDesComptes/webauthnChallenges";
+pub const NOM_COLLECTION_CHALLENGES: &str = "CoreMaitreDesComptes/challenges";
 pub const NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION: &str = "CoreMaitreDesComptes/webauthnAuthentification";
 pub const NOM_COLLECTION_WEBAUTHN_CREDENTIALS: &str = "CoreMaitreDesComptes/webauthnCredentials";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
@@ -94,6 +94,7 @@ const EVENEMENT_EVICT_USAGER: &str = "evictUsager";
 const INDEX_ID_USAGER: &str = "idusager_unique";
 const INDEX_NOM_USAGER: &str = "nomusager_unique";
 const INDEX_RECOVERY_UNIQUE: &str = "recovery_code_unique";
+const INDEX_CHALLENGES_UNIQUE: &str = "challenges_unique";
 const INDEX_WEBAUTHN_UNIQUE: &str = "webauthn_unique";
 
 const CHAMP_USER_ID: &str = "userId";
@@ -410,17 +411,18 @@ where M: MongoDao + ConfigMessages
 
     // webauthn
     let options_unique_webauthn = IndexOptions {
-        nom_index: Some(String::from(INDEX_WEBAUTHN_UNIQUE)),
+        nom_index: Some(String::from(INDEX_CHALLENGES_UNIQUE)),
         unique: true
     };
     let champs_index_webauthn = vec!(
         ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
         ChampIndex {nom_champ: String::from("type_challenge"), direction: 1},
         ChampIndex {nom_champ: String::from("hostname"), direction: 1},
+        ChampIndex {nom_champ: String::from("challenge"), direction: 1},
     );
     middleware.create_index(
         middleware,
-        NOM_COLLECTION_WEBAUTHN_CHALLENGES,
+        NOM_COLLECTION_CHALLENGES,
         champs_index_webauthn,
         Some(options_unique_webauthn)
     ).await?;
@@ -466,11 +468,19 @@ async fn supprimer_webauthn_expire<M>(middleware: &M) -> Result<(), Box<dyn Erro
 {
     // Supprimer registration expires
     {
+        let date_expiration_challenges = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::minutes(5));
         let date_expiration_registration = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::minutes(60));
-        let collection_registration_state = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CHALLENGES)?;
+        let collection_registration_state = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
         let filtre = doc! {
-            CHAMP_CREATION: {"$lt": date_expiration_registration},
-            "type_challenge": "registration"
+            "$or": [
+                {
+                    CHAMP_CREATION: {"$lt": date_expiration_registration},
+                    "type_challenge": "registration"
+                },{
+                    CHAMP_CREATION: {"$lt": date_expiration_challenges},
+                    "type_challenge": {"$in": ["authentication", "delegation"]}
+                }
+            ]
         };
         debug!("Suppression challenges registration expires depuis {:?}", filtre);
         if let Err(e) = collection_registration_state.delete_many(filtre, None).await {
@@ -720,46 +730,97 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DocRegistrationWebauthn {
-    #[serde(rename="userId")]
-    pub user_id: String,
+pub struct ChallengeRegistrationWebauthn {
     pub user_uuid: String,
-    pub type_challenge: String,
-    pub hostname: String,
-    #[serde(rename="_mg-creation")]
-    pub date_creation: DateTimeBson,
-    pub challenge: CreationChallengeResponse,
-    pub registration: PasskeyRegistration,
+    pub registration_challenge: CreationChallengeResponse,
+    pub resistration_state: PasskeyRegistration,
 }
 
-impl DocRegistrationWebauthn {
-    fn new_challenge<T,U,V>(user_id: U, user_uuid: T, hostname: V, challenge: CreationChallengeResponse, registration: PasskeyRegistration) -> Self
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChallengeAuthenticationWebauthn {
+    authentication_challenge: RequestChallengeResponse,
+    passkey_authentication: PasskeyAuthentication,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DocChallenge {
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub type_challenge: String,
+    pub hostname: String,
+    pub challenge: String,
+
+    #[serde(rename="_mg-creation")]
+    pub date_creation: DateTimeBson,
+
+    // Les elements suivants sont exlusifs (max 1 a la fois)
+
+    /// Pour une registration webauthn
+    pub webauthn_registration: Option<ChallengeRegistrationWebauthn>,
+
+    /// Pour une authentification webauthn
+    pub webauthn_authentication: Option<ChallengeAuthenticationWebauthn>,
+}
+
+impl DocChallenge {
+    fn new_challenge_resgistration<T,U,V>(
+        user_id: U, user_uuid: T, hostname: V, challenge: CreationChallengeResponse, registration: PasskeyRegistration
+    ) -> Self
         where T: Into<String>, U: Into<String>, V: Into<String>
     {
+        let webauthn_registration = ChallengeRegistrationWebauthn {
+            user_uuid: user_uuid.into(),
+            registration_challenge: challenge,
+            resistration_state: registration,
+        };
+
+        let challenge = webauthn_registration.registration_challenge.public_key.challenge.to_string();
+
         Self {
             user_id: user_id.into(),
-            user_uuid: user_uuid.into(),
             type_challenge: "registration".to_string(),
             hostname: hostname.into(),
-            date_creation: DateTimeBson::now(),
             challenge,
-            registration,
+            date_creation: DateTimeBson::now(),
+            webauthn_registration: Some(webauthn_registration),
+            webauthn_authentication: None,
+        }
+    }
+
+    fn new_challenge_authentication<U,V>(
+        user_id: U, hostname: V, authentication_challenge: RequestChallengeResponse, passkey_authentication: PasskeyAuthentication
+    ) -> Self
+        where U: Into<String>, V: Into<String>
+    {
+        let challenge = authentication_challenge.public_key.challenge.to_string();
+
+        let webauthn_authentication = ChallengeAuthenticationWebauthn {
+            authentication_challenge, passkey_authentication };
+
+        Self {
+            user_id: user_id.into(),
+            type_challenge: "authentication".to_string(),
+            hostname: hostname.into(),
+            challenge,
+            date_creation: DateTimeBson::now(),
+            webauthn_registration: None,
+            webauthn_authentication: Some(webauthn_authentication),
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct DocAuthentificationWebauthn {
-    #[serde(rename="userId")]
-    pub user_id: String,
-    pub hostname: String,
-    #[serde(rename="_mg-creation")]
-    pub date_creation: DateTimeBson,
-    pub passkey_authentication: PasskeyAuthentication,
-}
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// pub struct DocAuthentificationWebauthn {
+//     #[serde(rename="userId")]
+//     pub user_id: String,
+//     pub hostname: String,
+//     #[serde(rename="_mg-creation")]
+//     pub date_creation: DateTimeBson,
+//     pub passkey_authentication: PasskeyAuthentication,
+// }
 
 async fn preparer_registration_webauthn<M,S>(middleware: &M, compte: &CompteUsager, hostname: S)
-    -> Result<DocRegistrationWebauthn, Box<dyn Error>>
+    -> Result<DocChallenge, Box<dyn Error>>
     where M: MongoDao + ValidateurX509, S: AsRef<str>
 {
     let hostname = hostname.as_ref();
@@ -773,14 +834,14 @@ async fn preparer_registration_webauthn<M,S>(middleware: &M, compte: &CompteUsag
         CHAMP_TYPE_CHALLENGE_WEBAUTHN: "registration",
         "hostname": &hostname,
     };
-    let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CHALLENGES)?;
-    let doc_registration: DocRegistrationWebauthn = match collection.find_one(filtre, None).await? {
+    let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+    let doc_registration: DocChallenge = match collection.find_one(filtre, None).await? {
         Some(inner) => convertir_bson_deserializable(inner)?,
         None => {
             let (challenge, registration) = generer_challenge_registration(
                 rp_origin.as_str(), nom_usager, &user_uuid, idmg, None::<&Vec<&str>>, // existing_credentials
             )?;
-            let doc_registration = DocRegistrationWebauthn::new_challenge(
+            let doc_registration = DocChallenge::new_challenge_resgistration(
                 user_id, user_uuid, hostname, challenge, registration);
 
             // Sauvegarder dans la base de donnees
@@ -837,7 +898,7 @@ struct DocPasskeyAuthentication {
 }
 
 async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &CompteUsager, hostname: S)
-    -> Result<Option<(RequestChallengeResponse, PasskeyAuthentication)>, Box<dyn Error>>
+    -> Result<Option<DocChallenge>, Box<dyn Error>>
     where M: MongoDao + ValidateurX509, S: AsRef<str>
 {
     let hostname = hostname.as_ref();
@@ -862,18 +923,14 @@ async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &Compte
     let (challenge, passkey_authentication) = generer_challenge_authentification(
         hostname, idmg, credentials)?;
 
-    // Sauvegarder passkey authentication
-    let doc_passkey_authentication = DocPasskeyAuthentication {
-        user_id: user_id.to_string(),
-        hostname: hostname.to_string(),
-        passkey_authentication: passkey_authentication.clone().try_into()?,
-        date_creation: DateTimeBson::now(),
-    };
-    let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION)?;
-    let doc_passkey = convertir_to_bson(doc_passkey_authentication)?;
+    // Sauvegarder challenge
+    let doc_challenge = DocChallenge::new_challenge_authentication(
+        user_id, hostname, challenge, passkey_authentication);
+    let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+    let doc_passkey = convertir_to_bson(&doc_challenge)?;
     collection.insert_one(doc_passkey, None).await?;
 
-    Ok(Some((challenge, passkey_authentication)))
+    Ok(Some(doc_challenge))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1025,11 +1082,19 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
 
             // todo: Ajouter verification de securite pour fournir challenge au serveur prive
             let registration_webauthn = preparer_registration_webauthn(middleware, compte, hostname).await?;
-            reponse_charger_usager.registration_challenge = Some(registration_webauthn.challenge);
+            reponse_charger_usager.registration_challenge = match registration_webauthn.webauthn_registration {
+                Some(inner) => Some(inner.registration_challenge),
+                None => Err(format!("core_maitredescomptes.charger_usager Mauvais format de challenge (registration_challenge=None"))?
+            };
 
             let (challenge, passkey_authentication) = match preparer_authentification_webauthn(middleware, compte, hostname).await? {
-                Some((challenge, passkey_authentication)) => {
-                    (Some(challenge), Some(passkey_authentication))
+                Some(doc_challenge) => {
+                    match doc_challenge.webauthn_authentication {
+                        Some(inner) => {
+                            (Some(inner.authentication_challenge), Some(inner.passkey_authentication))
+                        },
+                        None => (None, None)
+                    }
                 },
                 None => (None, None)
             };
@@ -1648,14 +1713,15 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     let commande: CommandeAuthentificationUsager = message.message.get_msg().map_contenu()?;
 
     // Charger challenge correspondant
-    let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION)?;
+    let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
     let filtre = doc! {
         CHAMP_USER_ID: &commande.user_id,
         "hostname": &commande.hostname,
-        "passkey_authentication.ast.challenge": &commande.challenge,
+        "type_challenge": "authentication",
+        "challenge": &commande.challenge,
     };
     debug!("Charger challenge webauthn {:?}", filtre);
-    let doc_webauth_state: DocPasskeyAuthentication = match collection.find_one(filtre.clone(), None).await? {
+    let doc_challenge: DocChallenge = match collection.find_one(filtre.clone(), None).await? {
         Some(inner) => convertir_bson_deserializable(inner)?,
         None => {
             error!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn inconnu ou expire");
@@ -1664,14 +1730,23 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
         }
     };
 
-    let mut passkey_authentication = doc_webauth_state.passkey_authentication;
+    let doc_webauth_state = match doc_challenge.webauthn_authentication {
+        Some(inner) => inner,
+        None => {
+            error!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn absent (None)");
+            let reponse_ok = json!({"ok": false, "err": "Challenge webauthn absent (None)", "code": 5});
+            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+        }
+    };
+
+    let mut passkey_authentication: PasskeyAuthenticationAjuste = doc_webauth_state.passkey_authentication.try_into()?;
     let flag_generer_nouveau_certificat = commande.commande_webauthn.demande_certificat.is_some();
     let demande_certificat = match commande.commande_webauthn.demande_certificat {
         Some(demande) => {
             debug!("commande_authentifier_usager Demande certificat recue : {:?}", demande);
             let hachage = demande.valider()?;
             debug!("commande_authentifier_usager Hachage calcule pour demande de certificat : {:?}", hachage);
-            let mut challenge = &mut passkey_authentication.ast.challenge;
+            let challenge = &passkey_authentication.ast.challenge;
             debug!("commande_authentifier_usager Challenge existant : {:?} / {}", challenge, challenge.to_string());
             let mut vec_challenge_acjuste = Vec::new();
             vec_challenge_acjuste.extend_from_slice(&challenge.0[..]);
@@ -2210,9 +2285,9 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
     };
 
     // Validation - s'assurer que le compte usager existe
-    let collection_webauthn = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CHALLENGES)?;
+    let collection_webauthn = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
     let filtre_webauthn = doc! { CHAMP_USER_ID: user_id_certificat, "hostname": hostname, "type_challenge": "registration" };
-    let doc_registration: DocRegistrationWebauthn = match collection_webauthn.find_one(filtre_webauthn, None).await? {
+    let doc_registration: DocChallenge = match collection_webauthn.find_one(filtre_webauthn, None).await? {
         Some(inner) => convertir_bson_deserializable(inner)?,
         None => {
             let err = json!({"ok": false, "code": 14, "err": format!("Permission refusee, registration webauthn absent pour userId : {}", user_id_certificat)});
@@ -2302,7 +2377,7 @@ async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, 
 
     if supprimer_registration {
         // Supprimer registration challenge
-        let collection_challenges = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CHALLENGES)?;
+        let collection_challenges = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
         collection_challenges.delete_one(filtre_delete, None).await?;
     }
 
