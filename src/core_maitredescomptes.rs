@@ -47,6 +47,7 @@ use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCred
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::hachages::hacher_bytes_vu8;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
+use millegrilles_common_rust::mongodb::Collection;
 use millegrilles_common_rust::multibase::Base;
 use millegrilles_common_rust::multibase::Base::Base64Url;
 use millegrilles_common_rust::multihash::Code;
@@ -1691,6 +1692,8 @@ impl TryInto<PublicKeyCredential> for ClientAuthentificationWebauthn {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DemandeSignatureCertificatWebauthn {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    activationTierce: Option<bool>,
     csr: String,
     date: DateEpochSeconds,
     #[serde(rename = "nomUsager")]
@@ -1748,29 +1751,13 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     let idmg = middleware.idmg();
     let commande: CommandeAuthentificationUsager = message.message.get_msg().map_contenu()?;
 
-    // Charger challenge correspondant
-    let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
-    let filtre = doc! {
-        CHAMP_USER_ID: &commande.user_id,
-        "hostname": &commande.hostname,
-        "type_challenge": "authentication",
-        "challenge": &commande.challenge,
-    };
-    debug!("Charger challenge webauthn {:?}", filtre);
-    let doc_challenge: DocChallenge = match collection.find_one(filtre.clone(), None).await? {
-        Some(inner) => convertir_bson_deserializable(inner)?,
-        None => {
-            error!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn inconnu ou expire");
+    let doc_webauth_state= match charger_challenge_authentification(
+        middleware, &commande.user_id, &commande.hostname, &commande.challenge).await
+    {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn inconnu ou expire : {:?}", e);
             let reponse_ok = json!({"ok": false, "err": "Challenge inconnu ou expire", "code": 1});
-            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
-        }
-    };
-
-    let doc_webauth_state = match doc_challenge.webauthn_authentication {
-        Some(inner) => inner,
-        None => {
-            error!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn absent (None)");
-            let reponse_ok = json!({"ok": false, "err": "Challenge webauthn absent (None)", "code": 5});
             return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
         }
     };
@@ -1797,7 +1784,7 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     // Verifier authentification
     let reg = commande.commande_webauthn.webauthn.try_into()?;
     let resultat = match verifier_challenge_authentification(
-        commande.hostname, idmg, reg, passkey_authentication.try_into()?
+        &commande.hostname, idmg, reg, passkey_authentication.try_into()?
     ) {
         Ok(inner) => inner,
         Err(e) => {
@@ -1809,6 +1796,13 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     debug!("commande_authentifier_webauthn Resultat webauth OK : {:?}", resultat);
 
     // Supprimer challenge pour eviter reutilisation
+    let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+    let filtre = doc! {
+        CHAMP_USER_ID: &commande.user_id,
+        "hostname": &commande.hostname,
+        "type_challenge": "authentication",
+        "challenge": &commande.challenge,
+    };
     collection.delete_one(filtre, None).await?;
 
     let mut reponse_ok = json!({
@@ -1855,6 +1849,33 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
 }
 
+async fn charger_challenge_authentification<M,U,H,C>(middleware: &M, user_id: U, hostname: H, challenge: C)
+    -> Result<ChallengeAuthenticationWebauthn, Box<dyn Error>>
+    where M: MongoDao, U: AsRef<str>, H: AsRef<str>, C: AsRef<str>
+{
+    // Charger challenge correspondant
+    let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+    let filtre = doc! {
+        CHAMP_USER_ID: user_id.as_ref(),
+        "hostname": hostname.as_ref(),
+        "type_challenge": "authentication",
+        "challenge": challenge.as_ref(),
+    };
+
+    debug!("Charger challenge webauthn {:?}", filtre);
+    let doc_challenge: DocChallenge = match collection.find_one(filtre.clone(), None).await? {
+        Some(inner) => convertir_bson_deserializable(inner)?,
+        None => Err(format!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn inconnu ou expire"))?
+    };
+
+    let doc_webauth_state = match doc_challenge.webauthn_authentication {
+        Some(inner) => inner,
+        None => Err(format!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn absent (None)"))?
+    };
+
+    Ok(doc_webauth_state)
+}
+
 /// Verifie une demande de signature de certificat pour un compte usager
 /// Emet une commande autorisant la signature lorsque c'est approprie
 async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -1869,187 +1890,171 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
     let est_delegation_proprietaire = message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
     let est_maitre_comptes = message.verifier(
         Some(vec!(Securite::L2Prive)),
-        Some(vec!(RolesCertificats::NoeudPrive, RolesCertificats::MaitreComptes)),
+        Some(vec!(RolesCertificats::MaitreComptes)),
     );
+
+    let user_id = match message.message.get_user_id() {
+        Some(inner) => inner,
+        None => {
+            error!("commande_signer_compte_usager Doit etre signe par un certificat usager qui inclus le user_id");
+            let reponse_ok = json!({"ok": false, "err": "Certificat invalide, doit inclure user_id", "code": 1});
+            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+        }
+    };
 
     let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu()?;
     debug!("commande_signer_compte_usager CommandeSignerCertificat : {:?}", commande);
 
     // Determiner la source du user_id. Pour delegation globale, on supporte un champ userId dans la commande.
-    let (user_id_option, init_only) = match commande.user_id {
-        Some(inner_u) => {
-            if est_delegation_proprietaire {
-                (Some(inner_u), false)
-            } else if est_maitre_comptes {
-                (Some(inner_u), true)  // Autorisation de signer, mais uniquement pour un nouveau compte (sans webauthn)
-            } else {
-                // Ignorer le user_id fourni, l'usager n'a pas la permission de le fournir.
-                (message.get_user_id(), false)
-            }
-        },
-        None => (message.get_user_id(), false)
-    };
+    // let (user_id_option, init_only) = match commande.user_id {
+    //     Some(inner_u) => {
+    //         if est_delegation_proprietaire {
+    //             (Some(inner_u), false)
+    //         } else if est_maitre_comptes {
+    //             (Some(inner_u), true)  // Autorisation de signer, mais uniquement pour un nouveau compte (sans webauthn)
+    //         } else {
+    //             // Ignorer le user_id fourni, l'usager n'a pas la permission de le fournir.
+    //             (message.get_user_id(), false)
+    //         }
+    //     },
+    //     None => (message.get_user_id(), false)
+    // };
 
-    let user_id = match user_id_option {
-        Some(um) => um,
-        None => {
-            let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-            debug!("signer_compte_usager autorisation acces refuse : {:?}", err);
-            match middleware.formatter_reponse(&err,None) {
-                Ok(m) => return Ok(Some(m)),
-                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-            }
-        }
-    };
+    // let user_id = match user_id_option {
+    //     Some(um) => um,
+    //     None => {
+    //         let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+    //         debug!("signer_compte_usager autorisation acces refuse : {:?}", err);
+    //         match middleware.formatter_reponse(&err,None) {
+    //             Ok(m) => return Ok(Some(m)),
+    //             Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+    //         }
+    //     }
+    // };
 
     // Charger le compte usager
-    let filtre = doc! {CHAMP_USER_ID: &user_id};
-    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    let doc_usager = match collection.find_one(filtre, None).await? {
-        Some(d) => d,
+    let compte_usager = match charger_compte_user_id(middleware, &user_id).await? {
+        Some(inner) => inner,
         None => {
             let err = json!({"ok": false, "code": 3, "err": format!("Usager inconnu : {}", user_id)});
             debug!("signer_compte_usager usager inconnu : {:?}", err);
             match middleware.formatter_reponse(&err,None) {
                 Ok(m) => return Ok(Some(m)),
-                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+                Err(e) => Err(format!("core_maitredescomptes.commande_signer_compte_usager Erreur preparation reponse : {:?}", e))?
             }
         }
     };
 
-    // Verifier si l'usager a deja des creds WebAuthn (doit signer sa demande) ou non
-    let compte_usager: CompteUsager = convertir_bson_deserializable(doc_usager.clone())?;
-    todo!("fix me");
-    // let webauthn_present = match &compte_usager.webauthn {
-    //     Some(vc) => {
-    //         ! vc.is_empty()
-    //     },
-    //     None => false
-    // };
-    //
-    // // Verifier si un certificat autre que celui de l'usager (ou delegation globale) est
-    // // utilise. On refuse de signer si le compte est protege par webauthn et qu'une attestation
-    // // webauthn est absente.
-    // let challenge_webauthn_present = match commande.client_assertion_response {
-    //     Some(inner) => {
-    //         // todo!("Verifier signature commande");
-    //         true
-    //     },
-    //     None => false
-    // };
-    // if webauthn_present && init_only && !challenge_webauthn_present {
-    //     // Acces refuse, le compte peut uniquement signe si aucun token webauthn n'est present
-    //     let err = json!({"ok": false, "code": 7, "err": format!("Signature refusee sur compte : {}", user_id)});
-    //     debug!("signer_compte_usager Acces refuse, le compte peut uniquement signe si aucun token webauthn n'est present : {:?}", err);
-    //     match middleware.formatter_reponse(&err,None) {
-    //         Ok(m) => return Ok(Some(m)),
-    //         Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-    //     }
-    // }
-    //
-    // let (csr, activation_tierce) = if webauthn_present {
-    //     match commande.demande_certificat {
-    //         Some(d) => {
-    //             // Valider signature webauthn
-    //             let origin = match commande.origin {
-    //                 Some(o) => o,
-    //                 None => Err(format!("signer_compte_usager Origin absent"))?
-    //             };
-    //             let challenge = match commande.challenge {
-    //                 Some(c) => c,
-    //                 None => Err(format!("signer_compte_usager challenge absent"))?
-    //             };
-    //             let resultat = valider_commande(origin, challenge, &d)?;
-    //             debug!("Resultat validation commande webauthn : {:?}", resultat);
-    //
-    //             if ! resultat {
-    //                 let err = json!({"ok": false, "code": 6, "err": format!("Erreur validation signature webauthn : {}", user_id)});
-    //                 debug!("signer_compte_usager signature webauthn pour commande ajouter cle est invalide : {:?}", err);
-    //                 match middleware.formatter_reponse(&err,None) {
-    //                     Ok(m) => return Ok(Some(m)),
-    //                     Err(e) => Err(format!("Erreur preparation reponse (6) signer_compte_usager : {:?}", e))?
-    //                 }
-    //             }
-    //
-    //             (d.csr, d.activation_tierce)
-    //         },
-    //         None => {
-    //             let csr = match commande.csr {
-    //                 Some(c) => c,
-    //                 None => Err(format!("commande_signer_compte_usager (8) CSR manquant"))?
-    //             };
-    //
-    //             if est_delegation_proprietaire {
-    //                 debug!("Autorisation de signature du compte {} via delegation proprietaire", user_id);
-    //                 (csr, Some(true))
-    //             } else {
-    //                 // Pas autorise
-    //                 let err = json!({"ok": false, "code": 4, "err": format!("Compte existant, demandeCertificat/permission sont vides (erreur) : {}", user_id)});
-    //                 debug!("signer_compte_usager demandeCertificat vide : {:?}", err);
-    //                 match middleware.formatter_reponse(&err, None) {
-    //                     Ok(m) => return Ok(Some(m)),
-    //                     Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-    //                 }
-    //             }
+    // let filtre = doc! {CHAMP_USER_ID: &user_id};
+    // let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    // let doc_usager = match collection.find_one(filtre, None).await? {
+    //     Some(d) => d,
+    //     None => {
+    //         let err = json!({"ok": false, "code": 3, "err": format!("Usager inconnu : {}", user_id)});
+    //         debug!("signer_compte_usager usager inconnu : {:?}", err);
+    //         match middleware.formatter_reponse(&err,None) {
+    //             Ok(m) => return Ok(Some(m)),
+    //             Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
     //         }
     //     }
-    // } else {
-    //     debug!("Le compte {} est nouveau (aucun token webauthn), on permet l'enregistrement direct", user_id);
-    //     match commande.csr {
-    //         Some(c) => (c, Some(true)),
-    //         None => Err(format!("CSR absent de la commande de signature"))?
-    //     }
     // };
-    //
-    // let nom_usager = &compte_usager.nom_usager;
-    // let securite = SECURITE_1_PUBLIC;
-    // let reponse_commande = signer_certificat_usager(
-    //     middleware, nom_usager, &user_id, csr, Some(&compte_usager)).await?;
-    //
-    // // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
-    // debug!("commande_signer_compte_usager Activation tierce : {:?}", activation_tierce);
-    // if let Some(true) = activation_tierce {
-    //     // Calculer fingerprint du nouveau certificat
-    //     let reponsecert_obj: ReponseCertificatUsager = reponse_commande.map_contenu()?;
-    //     let pem = reponsecert_obj.certificat;
-    //     let enveloppe_cert = middleware.charger_enveloppe(&pem, None, None).await?;
-    //     let fingerprint_pk = enveloppe_cert.fingerprint_pk()?;
-    //
-    //     // let fingerprint_pk = String::from("FINGERPRINT_DUMMY");
-    //     // Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
-    //     let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    //     let filtre = doc! {CHAMP_USER_ID: &user_id};
-    //     let mut commande_set = doc! {
-    //         format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): false,
-    //         format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_activation"): Utc::now(),
-    //         format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_association"): None::<&str>,
-    //     };
-    //     let ops = doc! {
-    //         "$set": commande_set,
-    //         "$currentDate": {CHAMP_MODIFICATION: true}
-    //     };
-    //     let resultat_update_activations = collection_usagers.update_one(filtre, ops, None).await?;
-    //     debug!("commande_signer_compte_usager Update activations : {:?}", resultat_update_activations);
-    //
-    //     // Emettre evenement de signature de certificat, inclus le nouveau certificat
-    //     let evenement_activation = json!({
-    //         "fingerprint_pk": fingerprint_pk,
-    //         "certificat": &pem,
-    //     });
-    //     // domaine_action = 'evenement.MaitreDesComptes.' + ConstantesMaitreDesComptes.EVENEMENT_ACTIVATION_FINGERPRINTPK
-    //     let routage_evenement = RoutageMessageAction::builder(
-    //         DOMAINE_NOM, "activationFingerprintPk")
-    //         .exchanges(vec![Securite::L2Prive])
-    //         .build();
-    //     middleware.emettre_evenement(routage_evenement, &evenement_activation).await?;
-    //
-    // } else {
-    //   debug!("commande_signer_compte_usager Activation compte {} via meme appareil (pas tierce)", nom_usager);
-    // }
-    //
-    // debug!("commande_signer_compte_usager Reponse commande : {:?}", reponse_commande);
-    //
-    // Ok(Some(reponse_commande))    // Le message de reponse va etre emis par le module de signature de certificat
+
+    // Charger le challenge d'authentification
+    let doc_webauth_state= match charger_challenge_authentification(
+        middleware, &user_id, &commande.hostname, &commande.challenge).await
+    {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!("commande_signer_compte_usager Challenge webauthn inconnu ou expire : {:?}", e);
+            let reponse_ok = json!({"ok": false, "err": "Challenge inconnu ou expire", "code": 1});
+            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+        }
+    };
+
+    let reg = commande.client_assertion_response.try_into()?;
+
+    let (passkey_authentication, demande_certificat) = {
+        let mut passkey_authentication: PasskeyAuthenticationAjuste = doc_webauth_state.passkey_authentication.try_into()?;
+        let demande = commande.demande_certificat;
+
+        debug!("commande_authentifier_usager Demande certificat recue : {:?}", demande);
+        let hachage = demande.valider()?;
+        debug!("commande_authentifier_usager Hachage calcule pour demande de certificat : {:?}", hachage);
+        let challenge = &passkey_authentication.ast.challenge;
+        debug!("commande_authentifier_usager Challenge existant : {:?} / {}", challenge, challenge.to_string());
+        let mut vec_challenge_acjuste = Vec::new();
+        vec_challenge_acjuste.extend_from_slice(&challenge.0[..]);
+        vec_challenge_acjuste.extend(hachage);
+        debug!("commande_authentifier_usager Hachage ajuste pour demande de certificat : {:?}", vec_challenge_acjuste);
+        passkey_authentication.ast.challenge = Base64UrlSafeData::from(vec_challenge_acjuste);
+
+        (passkey_authentication, demande)
+    };
+
+    let idmg = middleware.idmg();
+    let hostname = commande.hostname.as_str();
+    let resultat = match verifier_challenge_authentification(
+        commande.hostname, idmg, reg, passkey_authentication.try_into()?
+    ) {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!("commande_signer_compte_usager Erreur verification challenge webauthn : {:?}", e);
+            let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 2});
+            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+        }
+    };
+    debug!("commande_signer_compte_usager Resultat validation webauthn OK : {:?}", resultat);
+
+    let nom_usager = &compte_usager.nom_usager;
+    let securite = SECURITE_1_PUBLIC;
+    let reponse_commande = signer_certificat_usager(
+        middleware, nom_usager, &user_id, demande_certificat.csr, Some(&compte_usager)).await?;
+
+    // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
+    debug!("commande_signer_compte_usager Activation tierce : {:?}", demande_certificat.activationTierce);
+    if let Some(true) = demande_certificat.activationTierce {
+        // Calculer fingerprint du nouveau certificat
+        let reponsecert_obj: ReponseCertificatUsager = reponse_commande.map_contenu()?;
+        let pem = reponsecert_obj.certificat;
+        let enveloppe_cert = middleware.charger_enveloppe(&pem, None, None).await?;
+        let fingerprint_pk = enveloppe_cert.fingerprint_pk()?;
+
+        todo!("sauvegarder cert");
+        // let fingerprint_pk = String::from("FINGERPRINT_DUMMY");
+        // Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
+        // let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+        // let filtre = doc! {CHAMP_USER_ID: &user_id};
+        // let mut commande_set = doc! {
+        //     format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): false,
+        //     format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_activation"): Utc::now(),
+        //     format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_association"): None::<&str>,
+        // };
+        // let ops = doc! {
+        //     "$set": commande_set,
+        //     "$currentDate": {CHAMP_MODIFICATION: true}
+        // };
+        // let resultat_update_activations = collection_usagers.update_one(filtre, ops, None).await?;
+        // debug!("commande_signer_compte_usager Update activations : {:?}", resultat_update_activations);
+
+        // Emettre evenement de signature de certificat, inclus le nouveau certificat
+        let evenement_activation = json!({
+            "fingerprint_pk": fingerprint_pk,
+            "certificat": &pem,
+        });
+        // domaine_action = 'evenement.MaitreDesComptes.' + ConstantesMaitreDesComptes.EVENEMENT_ACTIVATION_FINGERPRINTPK
+        let routage_evenement = RoutageMessageAction::builder(
+            DOMAINE_NOM, "activationFingerprintPk")
+            .exchanges(vec![Securite::L2Prive])
+            .build();
+        middleware.emettre_evenement(routage_evenement, &evenement_activation).await?;
+
+    } else {
+      debug!("commande_signer_compte_usager Activation compte {} via meme appareil (pas tierce)", nom_usager);
+    }
+
+    debug!("commande_signer_compte_usager Reponse commande : {:?}", reponse_commande);
+
+    Ok(Some(reponse_commande))    // Le message de reponse va etre emis par le module de signature de certificat
 }
 
 /// Ajouter un CSR pour recuperer un compte usager
@@ -2597,23 +2602,27 @@ async fn charger_compte_user_id<M, S>(middleware: &M, user_id: S)
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CommandeSignerCertificat {
-    #[serde(rename="userId")]
-    user_id: Option<String>,
-    #[serde(rename="nomUsager")]
-    nom_usager: Option<String>,
+    // #[serde(rename="userId")]
+    // user_id: String,
 
-    // Demande initiale (inscription usager ou nouvel appareil)
-    csr: Option<String>,  // Present si demande initiale
+    // #[serde(rename="nomUsager")]
+    // nom_usager: Option<String>,
 
-    activation_tierce: Option<bool>,
+    // csr: String,
+
+    // Si true, va emettre un evenement pour indiquer a un listener que le certificat est pret.
+    // activation_tierce: Option<bool>,
+
+    #[serde(rename="demandeCertificat")]
+    demande_certificat: DemandeSignatureCertificatWebauthn,
 
     // Champs pour demande de signature avec preuve webauthn
-    challenge: Option<String>,
-    origin: Option<String>,
-    #[serde(rename="demandeCertificat")]
-    demande_certificat: Option<DemandeCertificat>,
+    challenge: String,
+    hostname: String,
+
+    /// Reponse webauthn
     #[serde(rename="clientAssertionResponse")]
-    client_assertion_response: Option<ClientAssertionResponse>,
+    client_assertion_response: ClientAssertionResponse,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct DemandeCertificat {

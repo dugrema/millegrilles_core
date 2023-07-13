@@ -413,18 +413,18 @@ pub fn authenticate_complete(credentials: u64, challenge: ConfigChallenge, rsp: 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClientAssertionResponse {
-    pub id64: String,
+    pub id64: Base64UrlSafeData,
     pub response: ClientAssertResponseContent
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ClientAssertResponseContent {
     #[serde(rename="authenticatorData")]
-    pub authenticator_data: String,
+    pub authenticator_data: Base64UrlSafeData,
     #[serde(rename="clientDataJSON")]
-    pub client_data_json: String,
+    pub client_data_json: Base64UrlSafeData,
     #[serde(rename="signature")]
-    pub signature: String,
+    pub signature: Base64UrlSafeData,
     #[serde(rename="userHandle")]
     pub user_handle: Option<String>,
 }
@@ -433,16 +433,29 @@ impl TryInto<PublicKeyCredential> for ClientAssertionResponse {
     type Error = Box<dyn Error>;
 
     fn try_into(self) -> Result<PublicKeyCredential, Self::Error> {
-        let id_b64 = multibase_to_b64(self.id64)?;
+        // let id_b64 = multibase_to_b64(self.id64)?;
+        let id_b64 = &self.id64;
         let response = &self.response;
+
+        // let val = json!({
+        //     "id": id_b64,
+        //     "rawId": id_b64,
+        //     "response": {
+        //         "authenticatorData": multibase_to_b64(&response.authenticator_data)?,
+        //         "clientDataJSON": multibase_to_b64(&response.client_data_json)?,
+        //         "signature": multibase_to_b64(&response.signature)?,
+        //         "userHandle": &response.user_handle
+        //     },
+        //     "type": "public-key"
+        // });
 
         let val = json!({
             "id": id_b64,
             "rawId": id_b64,
             "response": {
-                "authenticatorData": multibase_to_b64(&response.authenticator_data)?,
-                "clientDataJSON": multibase_to_b64(&response.client_data_json)?,
-                "signature": multibase_to_b64(&response.signature)?,
+                "authenticatorData": &response.authenticator_data,
+                "clientDataJSON": response.client_data_json,
+                "signature": response.signature,
                 "userHandle": &response.user_handle
             },
             "type": "public-key"
