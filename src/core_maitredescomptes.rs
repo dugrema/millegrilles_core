@@ -4,7 +4,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
-use millegrilles_common_rust::{base64_url, chrono, uuid};
+use millegrilles_common_rust::{base64_url, chrono, openssl, uuid};
 use millegrilles_common_rust::hex;
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::{Bson, bson, DateTime as DateTimeBson, doc};
@@ -59,7 +59,7 @@ pub const NOM_COLLECTION_USAGERS: &str = "CoreMaitreDesComptes/usagers";
 pub const NOM_COLLECTION_RECOVERY: &str = "CoreMaitreDesComptes/recovery";
 pub const NOM_COLLECTION_ACTIVATIONS: &str = "CoreMaitreDesComptes/activations";
 pub const NOM_COLLECTION_CHALLENGES: &str = "CoreMaitreDesComptes/challenges";
-pub const NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION: &str = "CoreMaitreDesComptes/webauthnAuthentification";
+// pub const NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION: &str = "CoreMaitreDesComptes/webauthnAuthentification";
 pub const NOM_COLLECTION_WEBAUTHN_CREDENTIALS: &str = "CoreMaitreDesComptes/webauthnCredentials";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
@@ -79,6 +79,7 @@ const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
 // const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
 const COMMANDE_AJOUTER_CSR_RECOVERY: &str = "ajouterCsrRecovery";
 const COMMANDE_AUTHENTIFIER_WEBAUTHN: &str = "authentifierWebauthn";
+const COMMANDE_GENERER_CHALLENGE: &str = "genererChallenge";
 
 const TRANSACTION_INSCRIRE_USAGER: &str = "inscrireUsager";
 const TRANSACTION_AJOUTER_CLE: &str = "ajouterCle";
@@ -124,10 +125,9 @@ struct CompteUsager {
     nom_usager: String,
     #[serde(rename="userId")]
     user_id: String,
-    // webauthn: Option<Vec<CompteCredential>>,
-    // activations_par_fingerprint_pk: Option<HashMap<String, InfoAssociation>>,
 
     compte_prive: Option<bool>,
+
     delegation_globale: Option<String>,
     delegations_date: Option<DateEpochSeconds>,
     delegations_version: Option<usize>,
@@ -252,6 +252,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         COMMANDE_SIGNER_COMPTEUSAGER,
         // COMMANDE_ACTIVATION_TIERCE,
         COMMANDE_AJOUTER_CSR_RECOVERY,
+        COMMANDE_GENERER_CHALLENGE,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L2Prive});
@@ -409,12 +410,12 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_recovery)
     ).await?;
 
-    // webauthn
-    let options_unique_webauthn = IndexOptions {
+    // challenges (incluant webauthn)
+    let options_unique_challenges = IndexOptions {
         nom_index: Some(String::from(INDEX_CHALLENGES_UNIQUE)),
         unique: true
     };
-    let champs_index_webauthn = vec!(
+    let champs_index_challenges = vec!(
         ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
         ChampIndex {nom_champ: String::from("type_challenge"), direction: 1},
         ChampIndex {nom_champ: String::from("hostname"), direction: 1},
@@ -423,8 +424,8 @@ where M: MongoDao + ConfigMessages
     middleware.create_index(
         middleware,
         NOM_COLLECTION_CHALLENGES,
-        champs_index_webauthn,
-        Some(options_unique_webauthn)
+        champs_index_challenges,
+        Some(options_unique_challenges)
     ).await?;
 
     let options_unique_webauthncreds = IndexOptions {
@@ -443,21 +444,21 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_webauthncreds)
     ).await?;
 
-    let options_unique_webauthn_auth = IndexOptions {
-        nom_index: Some(String::from(INDEX_WEBAUTHN_UNIQUE)),
-        unique: true
-    };
-    let champs_index_webauthn_auth = vec!(
-        ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
-        ChampIndex {nom_champ: String::from("hostname"), direction: 1},
-        ChampIndex {nom_champ: String::from("passkey_authentication.ast.challenge"), direction: 1},
-    );
-    middleware.create_index(
-        middleware,
-        NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION,
-        champs_index_webauthn_auth,
-        Some(options_unique_webauthn_auth)
-    ).await?;
+    // let options_unique_webauthn_auth = IndexOptions {
+    //     nom_index: Some(String::from(INDEX_WEBAUTHN_UNIQUE)),
+    //     unique: true
+    // };
+    // let champs_index_webauthn_auth = vec!(
+    //     ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
+    //     ChampIndex {nom_champ: String::from("hostname"), direction: 1},
+    //     ChampIndex {nom_champ: String::from("passkey_authentication.ast.challenge"), direction: 1},
+    // );
+    // middleware.create_index(
+    //     middleware,
+    //     NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION,
+    //     champs_index_webauthn_auth,
+    //     Some(options_unique_webauthn_auth)
+    // ).await?;
 
     Ok(())
 }
@@ -485,17 +486,6 @@ async fn supprimer_webauthn_expire<M>(middleware: &M) -> Result<(), Box<dyn Erro
         debug!("Suppression challenges registration expires depuis {:?}", filtre);
         if let Err(e) = collection_registration_state.delete_many(filtre, None).await {
             error!("Erreur suppression challenges registration expires : {:?}", e);
-        }
-    }
-
-    // Supprimer passkey authentication expires
-    {
-        let date_expiration_auth = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::minutes(5));
-        let collection_authentication = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION)?;
-        let filtre = doc! { CHAMP_CREATION: {"$lt": date_expiration_auth} };
-        debug!("Suppression challenges auth expires depuis {:?}", filtre);
-        if let Err(e) = collection_authentication.delete_many(filtre, None).await {
-            error!("Erreur suppression challenges auth expires : {:?}", e);
         }
     }
 
@@ -598,6 +588,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m).await,
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_usager(middleware, m).await,
             COMMANDE_AJOUTER_CSR_RECOVERY => commande_ajouter_csr_recovery(middleware, m).await,
+            COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: exchange) : {}, message dropped", DOMAINE_NOM, m.action))?,
@@ -807,6 +798,25 @@ impl DocChallenge {
             webauthn_authentication: Some(webauthn_authentication),
         }
     }
+
+    fn new_challenge_generique<U,V,S>(
+        user_id: U, hostname: V, challenge: Base64UrlSafeData, type_challenge: S
+    ) -> Self
+        where U: Into<String>, V: Into<String>, S: Into<String>
+    {
+        let type_challenge = type_challenge.into();
+        let challenge = challenge.to_string();
+
+        Self {
+            user_id: user_id.into(),
+            type_challenge,
+            hostname: hostname.into(),
+            challenge,
+            date_creation: DateTimeBson::now(),
+            webauthn_registration: None,
+            webauthn_authentication: None,
+        }
+    }
 }
 
 // #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -932,6 +942,32 @@ async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &Compte
 
     Ok(Some(doc_challenge))
 }
+
+async fn preparer_challenge_generique<M,S,C>(middleware: &M, compte: &CompteUsager, hostname: S, type_challenge: C)
+    -> Result<DocChallenge, Box<dyn Error>>
+    where M: MongoDao + ValidateurX509, S: AsRef<str>, C: Into<String>
+{
+    let hostname = hostname.as_ref();
+    let user_id = compte.user_id.as_str();
+    let type_challenge = type_challenge.into();
+
+    // Genrer un challenge de 32 bytes
+    let valeur_challenge =  {
+        let mut buffer_random = [0u8; 32];
+        openssl::rand::rand_bytes(&mut buffer_random).expect("rand");
+        let challenge = buffer_random.to_vec();
+        Base64UrlSafeData::from(challenge)
+    };
+
+    // Sauvegarder challenge
+    let doc_challenge = DocChallenge::new_challenge_generique(user_id, hostname, valeur_challenge, type_challenge);
+    let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+    let doc_passkey = convertir_to_bson(&doc_challenge)?;
+    collection.insert_one(doc_passkey, None).await?;
+
+    Ok(doc_challenge)
+}
+
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ReponseChargerUsager {
@@ -2083,6 +2119,83 @@ struct CommandeAjouterCsrRecovery {
     csr: String,
     #[serde(rename="nomUsager")]
     nom_usager: String,
+}
+
+#[derive(Deserialize)]
+struct CommandeGenererChallenge {
+    #[serde(rename="userId")]
+    user_id: String,
+    hostname: String,
+    delegation: Option<bool>,
+    #[serde(rename="webauthnRegistration")]
+    webauthn_registration: Option<bool>,
+    #[serde(rename="webauthnAuthentication")]
+    webauthn_authentication: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ReponseCommandeGenererChallenge {
+    challenge: Option<String>,
+    registration_challenge: Option<CreationChallengeResponse>,
+    authentication_challenge: Option<RequestChallengeResponse>,
+    passkey_authentication: Option<PasskeyAuthentication>,
+}
+
+async fn commande_generer_challenge<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
+{
+    debug!("commande_generer_challenge : {:?}", message);
+
+    let commande: CommandeGenererChallenge = message.message.get_msg().map_contenu()?;
+    let hostname = commande.hostname.as_str();
+
+    let compte = {
+        let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+        let filtre = doc! { CHAMP_USER_ID: &commande.user_id };
+        let resultat = match collection.find_one(filtre, None).await? {
+            Some(inner) => inner,
+            None => {
+                let reponse = json!({"ok": true, "code": 1, "err": "Usager inconnu"});
+                match middleware.formatter_reponse(&reponse,None) {
+                    Ok(m) => return Ok(Some(m)),
+                    Err(e) => Err(format!("Erreur preparation reponse commande_generer_challenge : {:?}", e))?
+                }
+            }
+        };
+        convertir_bson_deserializable(resultat)?
+    };
+
+    let mut reponse = ReponseCommandeGenererChallenge {
+        challenge: None,
+        registration_challenge: None,
+        authentication_challenge: None,
+        passkey_authentication: None,
+    };
+
+    if let Some(true) = commande.delegation {
+        let doc_challenge = preparer_challenge_generique(middleware, &compte, hostname, "delegation").await?;
+        reponse.challenge = Some(doc_challenge.challenge);
+    }
+
+    if let Some(true) = commande.webauthn_registration {
+        let doc_challenge = preparer_registration_webauthn(middleware, &compte, hostname).await?;
+        reponse.registration_challenge = Some(doc_challenge.webauthn_registration.expect("webauthn_registration").registration_challenge);
+    }
+
+    if let Some(true) = commande.webauthn_authentication {
+        match preparer_authentification_webauthn(middleware, &compte, hostname).await? {
+            Some(inner) => {
+                let challenge = inner.webauthn_authentication.expect("webauthn_authentication");
+                reponse.authentication_challenge = Some(challenge.authentication_challenge);
+                reponse.passkey_authentication = Some(challenge.passkey_authentication);
+            },
+            None => {
+                error!("commande_generer_challenge Aucun credential webauthn pour l'usager");
+            }
+        };
+    }
+
+    Ok(Some(middleware.formatter_reponse(reponse, None)?))
 }
 
 /// Signe un certificat usager sans autre forme de validation. Utilise certissuerInterne/.
