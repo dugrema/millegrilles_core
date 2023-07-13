@@ -2720,6 +2720,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     let commande: CommandeAjouterDelegationSignee = message.message.parsed.map_contenu()?;
     let mut message_confirmation = commande.confirmation;
     let user_id = commande.user_id.as_str();
+    let hostname = commande.hostname.as_str();
 
     // S'assurer que la signature est recente (moins de 2 minutes, ajustement 10 secondes futur max)
     let date_signature = message_confirmation.estampille.get_datetime();
@@ -2736,11 +2737,11 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     // Valider la signature de la cle de millegrille
     let (signature, hachage) = message_confirmation.verifier_contenu()?;
     if signature != true || hachage != true {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, signature/hachage confirmation invalides"});
+        let err = json!({"ok": false, "code": 3, "err": "Permission refusee, signature/hachage confirmation invalides"});
         debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
         match middleware.formatter_reponse(&err, None) {
             Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse (2) ajouter_delegation_signee : {:?}", e))?
+            Err(e) => Err(format!("Erreur preparation reponse (3) ajouter_delegation_signee : {:?}", e))?
         }
     }
     debug!("ajouter_delegation_signee Signature message delegation (confirmation) OK");
@@ -2748,18 +2749,59 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     // Valider la pubkey, elle doit correspondre au certificat de la MilleGrille.
     let public_key_millegrille = middleware.ca_cert().public_key()?.raw_public_key()?;
     if hex::decode(message_confirmation.pubkey.as_str())? != public_key_millegrille {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, pubkey n'est pas la cle de la MilleGrille"});
+        let err = json!({"ok": false, "code": 4, "err": "Permission refusee, pubkey n'est pas la cle de la MilleGrille"});
         debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
         match middleware.formatter_reponse(&err, None) {
             Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse (3) ajouter_delegation_signee : {:?}", e))?
+            Err(e) => Err(format!("Erreur preparation reponse (4) ajouter_delegation_signee : {:?}", e))?
         }
     }
     debug!("ajouter_delegation_signee Correspondance cle publique millegrille OK");
 
     // Valider le format du contenu (parse)
     let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = message_confirmation.map_contenu()?;
+    if commande_ajouter_delegation.user_id.as_str() != user_id {
+        let err = json!({"ok": false, "code": 5, "err": "Permission refusee, user_id signe et session serveur mismatch"});
+        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err, None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse (5) ajouter_delegation_signee : {:?}", e))?
+        }
+    }
+    let challenge_recu = commande_ajouter_delegation.challenge.as_str();
     debug!("commande_ajouter_delegation_signee Commande ajouter delegation verifiee {:?}", commande_ajouter_delegation);
+
+    // Verifier que le challenge est bien associe a cet usager pour une delegation
+    let challenge = {
+        let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+        let filtre = doc! { CHAMP_USER_ID: user_id, "type_challenge": "delegation", "hostname": hostname, "challenge": challenge_recu};
+        let doc_challenge: DocChallenge = match collection.find_one(filtre, None).await? {
+            Some(inner) => convertir_bson_deserializable(inner)?,
+            None => {
+                let err = json!({"ok": false, "code": 6, "err": "Permission refusee, challenge delegation inconnu"});
+                debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+                match middleware.formatter_reponse(&err, None) {
+                    Ok(m) => return Ok(Some(m)),
+                    Err(e) => Err(format!("Erreur preparation reponse (6) ajouter_delegation_signee : {:?}", e))?
+                }
+            }
+        };
+        doc_challenge.challenge
+    };
+
+    if challenge == commande_ajouter_delegation.challenge {
+        // Challenge est OK, supprimer pour eviter replay attacks
+        let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+        let filtre = doc! { CHAMP_USER_ID: user_id, "hostname": hostname, "challenge": challenge_recu};
+        collection.delete_one(filtre, None).await?;
+    } else {
+        let err = json!({"ok": false, "code": 7, "err": "Permission refusee, challenge delegation inconnu"});
+        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err, None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse (7) ajouter_delegation_signee : {:?}", e))?
+        }
+    }
 
     // Signature valide, on sauvegarde et traite la transaction
     let uuid_transaction = message.message.parsed.id.clone();
@@ -2938,17 +2980,17 @@ struct CommandeAjouterDelegationSignee {
     confirmation: MessageMilleGrille,
     #[serde(rename="userId")]
     user_id: String,
+    hostname: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ConfirmationSigneeDelegationGlobale {
-    // #[serde(rename="_signature")]
-    // signature: String,
     #[serde(rename="activerDelegation")]
     activer_delegation: Option<bool>,
-    data: Option<String>,
-    //date: usize,
+    challenge: String,
     #[serde(rename="nomUsager")]
     nom_usager: String,
+    #[serde(rename="userId")]
+    user_id: String,
 }
 
 /// Conserver confirmation d'activation tierce (certificat signe)
