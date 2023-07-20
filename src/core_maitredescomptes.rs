@@ -472,7 +472,7 @@ async fn supprimer_webauthn_expire<M>(middleware: &M) -> Result<(), Box<dyn Erro
 {
     // Supprimer registration expires
     {
-        let date_expiration_challenges = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::minutes(5));
+        let date_expiration_challenges = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::minutes(15));
         let date_expiration_registration = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::minutes(60));
         let collection_registration_state = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
         let filtre = doc! {
@@ -489,6 +489,26 @@ async fn supprimer_webauthn_expire<M>(middleware: &M) -> Result<(), Box<dyn Erro
         debug!("Suppression challenges registration expires depuis {:?}", filtre);
         if let Err(e) = collection_registration_state.delete_many(filtre, None).await {
             error!("Erreur suppression challenges registration expires : {:?}", e);
+        }
+    }
+
+    Ok(())
+}
+
+/// Supprime les state de recovery expires
+async fn supprimer_recovery_expire<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+    where M: MongoDao
+{
+    // Supprimer codes recovery expires
+    {
+        let date_expiration_recovery = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::days(3));
+        let collection_registration_state = middleware.get_collection(NOM_COLLECTION_RECOVERY)?;
+        let filtre = doc! {
+            CHAMP_CREATION: {"$lt": date_expiration_recovery}
+        };
+        debug!("Suppression codes recovery expires depuis {:?}", filtre);
+        if let Err(e) = collection_registration_state.delete_many(filtre, None).await {
+            error!("Erreur suppression codes recovery expires : {:?}", e);
         }
     }
 
@@ -519,9 +539,15 @@ where M: MongoDao + GenerateurMessages {
     }
 
     let date = trigger.get_date();
-    if date.get_datetime().minute() % 3 == 2 {
+    if date.get_datetime().minute() % 10 == 7 {
         if let Err(e) = supprimer_webauthn_expire(middleware).await {
             error!("Erreur entretien webauthn challenges : {:?}", e);
+        }
+    }
+
+    if trigger.flag_heure {
+        if let Err(e) = supprimer_recovery_expire(middleware).await {
+            error!("Erreur entretien codes recovery expires : {:?}", e);
         }
     }
 
