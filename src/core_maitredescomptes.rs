@@ -502,13 +502,32 @@ async fn supprimer_recovery_expire<M>(middleware: &M) -> Result<(), Box<dyn Erro
     // Supprimer codes recovery expires
     {
         let date_expiration_recovery = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::days(3));
-        let collection_registration_state = middleware.get_collection(NOM_COLLECTION_RECOVERY)?;
+        let collection = middleware.get_collection(NOM_COLLECTION_RECOVERY)?;
         let filtre = doc! {
             CHAMP_CREATION: {"$lt": date_expiration_recovery}
         };
         debug!("Suppression codes recovery expires depuis {:?}", filtre);
-        if let Err(e) = collection_registration_state.delete_many(filtre, None).await {
+        if let Err(e) = collection.delete_many(filtre, None).await {
             error!("Erreur suppression codes recovery expires : {:?}", e);
+        }
+    }
+
+    Ok(())
+}
+
+async fn supprimer_activations_expirees<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+    where M: MongoDao
+{
+    // Supprimer codes recovery expires
+    {
+        let date_expiration_activations = DateTimeBson::from_chrono(Utc::now() - chrono::Duration::days(14));
+        let collection = middleware.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
+        let filtre = doc! {
+            CHAMP_CREATION: {"$lt": date_expiration_activations}
+        };
+        debug!("Suppression codes activations expires depuis {:?}", filtre);
+        if let Err(e) = collection.delete_many(filtre, None).await {
+            error!("Erreur suppression codes activations expires : {:?}", e);
         }
     }
 
@@ -548,6 +567,10 @@ where M: MongoDao + GenerateurMessages {
     if trigger.flag_heure {
         if let Err(e) = supprimer_recovery_expire(middleware).await {
             error!("Erreur entretien codes recovery expires : {:?}", e);
+        }
+
+        if let Err(e) = supprimer_activations_expirees(middleware).await {
+            error!("Erreur entretien codes activations expires : {:?}", e);
         }
     }
 
