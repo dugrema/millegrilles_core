@@ -2019,22 +2019,19 @@ async fn commande_signer_compte_usager<M>(middleware: &M, message: MessageValide
         let enveloppe_cert = middleware.charger_enveloppe(&pem, None, None).await?;
         let fingerprint_pk = enveloppe_cert.fingerprint_pk()?;
 
-        todo!("sauvegarder cert");
-        // let fingerprint_pk = String::from("FINGERPRINT_DUMMY");
         // Donne le droit a l'usager de faire un login initial et enregistrer son appareil.
-        // let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-        // let filtre = doc! {CHAMP_USER_ID: &user_id};
-        // let mut commande_set = doc! {
-        //     format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "associe"): false,
-        //     format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_activation"): Utc::now(),
-        //     format!("{}.{}.{}", CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, fingerprint_pk, "date_association"): None::<&str>,
-        // };
-        // let ops = doc! {
-        //     "$set": commande_set,
-        //     "$currentDate": {CHAMP_MODIFICATION: true}
-        // };
-        // let resultat_update_activations = collection_usagers.update_one(filtre, ops, None).await?;
-        // debug!("commande_signer_compte_usager Update activations : {:?}", resultat_update_activations);
+        let collection_activations = middleware.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
+        let filtre = doc! { CHAMP_USER_ID: &user_id, CHAMP_FINGERPRINT_PK: &fingerprint_pk };
+        let commande_set = doc! { "certificat": &pem };
+        let commande_set_on_insert = doc! { CHAMP_USER_ID: &user_id, CHAMP_FINGERPRINT_PK: &fingerprint_pk, CHAMP_CREATION: Utc::now() };
+        let ops = doc! {
+            "$set": commande_set,
+            "$setOnInsert": commande_set_on_insert,
+            "$currentDate": { CHAMP_MODIFICATION: true }
+        };
+        let options = UpdateOptions::builder().upsert(true).build();
+        let resultat_update_activations = collection_activations.update_one(filtre, ops, options).await?;
+        debug!("commande_signer_compte_usager Update activations : {:?}", resultat_update_activations);
 
         // Emettre evenement de signature de certificat, inclus le nouveau certificat
         let evenement_activation = json!({
