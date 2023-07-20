@@ -1050,7 +1050,7 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
 
     // Le filtre utilise le user_id du certificat de preference (et ignore les parametres).
     // Pour un certificat 2.prive, 3.protege ou 4.public, va utiliser les parametres.
-    if message.verifier_exchanges(vec![L2Prive, L3Protege, L4Secure]) {
+    if message.verifier_exchanges(vec![L2Prive, L3Protege, L4Secure]) || est_delegation_globale {
         if let Some(nom_usager) = requete.nom_usager.as_ref() {
             filtre.insert(CHAMP_USAGER_NOM, nom_usager);
         }
