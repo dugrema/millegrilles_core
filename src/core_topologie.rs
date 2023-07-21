@@ -264,7 +264,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     }
 
     // Presence de domaines se fait sur l'evenement du domaine specifique (*)
-    rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.*.{}", EVENEMENT_PRESENCE_DOMAINE), exchange: Securite::L4Secure });
+    rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.*.{}", EVENEMENT_PRESENCE_DOMAINE), exchange: Securite::L3Protege });
     rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_FICHIERS, EVENEMENT_PRESENCE_FICHIERS), exchange: Securite::L2Prive });
 
     let mut queues = Vec::new();
@@ -743,11 +743,11 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
     let event: PresenceDomaine = m.message.get_msg().map_contenu()?;
     debug!("Presence domaine : {:?}", event);
 
-    let mut set_ops = m.message.get_msg().map_to_bson()?;
-    filtrer_doc_id(&mut set_ops);
-
-    // Retirer champ cle
-    set_ops.remove("domaine");
+    // let mut set_ops = m.message.get_msg().map_to_bson()?;
+    // filtrer_doc_id(&mut set_ops);
+    //
+    // // Retirer champ cle
+    // set_ops.remove("domaine");
 
     let domaine = match event.domaine.as_ref() {
         Some(d) => d,
@@ -756,9 +756,24 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
             return Ok(None)
         }
     };
+
+    let certificat = match m.message.certificat {
+        Some(inner) => inner,
+        None => Err(format!("core_topologie.traiter_presence_domaine Erreur reception domaine, certificat absent/invalide"))?
+    };
+
+    if ! certificat.verifier_domaines(vec![domaine.to_owned()]) {
+        Err(format!("core_topologie.traiter_presence_domaine Erreur domaine message ({}) mismatch certificat ", domaine))?
+    }
+
+    let instance_id = certificat.get_common_name()?;
+
     let filtre = doc! {"domaine": domaine};
     let ops = doc! {
-        "$set": set_ops,
+        "$set": {
+            // "domaine": domaine,
+            "instance_id": instance_id,
+        },
         "$setOnInsert": {"domaine": domaine, CHAMP_CREATION: Utc::now(), "dirty": true},
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
