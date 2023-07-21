@@ -216,6 +216,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     // RK 2.prive
     let requetes_privees = vec![
+        REQUETE_LISTE_DOMAINES,
         REQUETE_APPLICATIONS_DEPLOYEES,
         // REQUETE_INFO_NOEUD,
         REQUETE_RESOLVE_IDMG,
@@ -555,6 +556,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 match message.domaine.as_str() {
                     DOMAINE_NOM => {
                         match message_action.as_str() {
+                            REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
                             REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
                             REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
                             REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
@@ -1733,8 +1735,8 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_domaines");
-    if !message.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
-        if !message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if !message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+        if message.get_user_id().is_some() && !message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
             let refus = json!({"ok": false, "err": "Acces refuse"});
             let reponse = match middleware.formatter_reponse(&refus, None) {
                 Ok(m) => m,
@@ -1774,7 +1776,7 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
     }
 
     debug!("Domaines : {:?}", domaines);
-    let liste = json!({"resultats": domaines});
+    let liste = json!({"ok": true, "resultats": domaines});
     let reponse = match middleware.formatter_reponse(&liste, None) {
         Ok(m) => m,
         Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse domaines : {:?}", e))?
