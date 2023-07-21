@@ -768,13 +768,18 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
 
     let instance_id = certificat.get_common_name()?;
 
-    let filtre = doc! {"domaine": domaine};
+    let filtre = doc! {"domaine": domaine, "instance_id": &instance_id};
     let ops = doc! {
-        "$set": {
-            // "domaine": domaine,
+        // "$set": {
+        //     // "domaine": domaine,
+        //     // "instance_id": instance_id,
+        // },
+        "$setOnInsert": {
+            "domaine": domaine,
             "instance_id": instance_id,
+            CHAMP_CREATION: Utc::now(),
+            "dirty": true
         },
-        "$setOnInsert": {"domaine": domaine, CHAMP_CREATION: Utc::now(), "dirty": true},
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
 
@@ -786,40 +791,40 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
         Ok(r) => r,
         Err(e) => Err(format!("Erreur find document sur transaction domaine : {:?}", e))?
     };
-    let creer_transaction = match result {
-        Some(d) => d.get_bool("dirty")?,
-        None => true,
-    };
+    // let creer_transaction = match result {
+    //     Some(d) => d.get_bool("dirty")?,
+    //     None => true,
+    // };
 
-    if creer_transaction {
-        debug!("Creer transaction topologie pour domaine {}", domaine);
-
-        let tval = json!({
-            "domaine": event.domaine,
-            "instance_id": event.instance_id,
-        });
-
-        let transaction = middleware.formatter_message(
-            MessageKind::Transaction,
-            &tval,
-            Some(DOMAINE_NOM),
-            Some(TRANSACTION_DOMAINE),
-            None,
-            None,
-            false
-        )?;
-
-        // Sauvegarder la transation
-        let msg = MessageSerialise::from_parsed(transaction)?;
-        let msg_action = MessageValideAction::new(msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
-        // sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
-        sauvegarder_traiter_transaction(middleware, msg_action, gestionnaire).await?;
-
-        // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
-        let filtre = doc! {"domaine": &event.domaine};
-        let ops = doc! {"$set": {"dirty": false}};
-        let _ = collection.update_one(filtre, ops, None).await?;
-    }
+    // if creer_transaction {
+    //     debug!("Creer transaction topologie pour domaine {}", domaine);
+    //
+    //     let tval = json!({
+    //         "domaine": event.domaine,
+    //         "instance_id": event.instance_id,
+    //     });
+    //
+    //     let transaction = middleware.formatter_message(
+    //         MessageKind::Transaction,
+    //         &tval,
+    //         Some(DOMAINE_NOM),
+    //         Some(TRANSACTION_DOMAINE),
+    //         None,
+    //         None,
+    //         false
+    //     )?;
+    //
+    //     // Sauvegarder la transation
+    //     let msg = MessageSerialise::from_parsed(transaction)?;
+    //     let msg_action = MessageValideAction::new(msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
+    //     // sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
+    //     sauvegarder_traiter_transaction(middleware, msg_action, gestionnaire).await?;
+    //
+    //     // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
+    //     let filtre = doc! {"domaine": &event.domaine};
+    //     let ops = doc! {"$set": {"dirty": false}};
+    //     let _ = collection.update_one(filtre, ops, None).await?;
+    // }
 
     Ok(None)
 }
