@@ -1085,6 +1085,7 @@ struct DocActivationFingerprintPkUsager {
     #[serde(rename="userId")]
     user_id: String,
     fingerprint_pk: String,
+    certificat: Option<Vec<String>>,
 }
 
 async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
