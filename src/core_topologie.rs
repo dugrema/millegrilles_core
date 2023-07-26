@@ -967,24 +967,10 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
 
     let mut unset_ops = doc! {};
     let mut set_ops = doc! {
-        // "type_store": event.type_store,
-        "fichiers_nombre": event.fichiers_nombre,
-        "archives_nombre": event.archives_nombre,
-        "orphelins_nombre": event.orphelins_nombre,
-        "fichiers_taille": event.fichiers_taille,
-        "archives_taille": event.archives_taille,
-        "orphelins_taille": event.orphelins_taille,
+        "local": event.local,
+        "archives": event.archives,
+        "orphelins": event.orphelins,
     };
-    // if event.url_download.is_some() && Some(String::from("")) != event.url_download {
-    //     set_ops.insert("url_download", event.url_download);
-    // } else {
-    //     unset_ops.insert("url_download", true);
-    // }
-    // if event.consignation_url.is_some() && Some(String::from("")) != event.consignation_url {
-    //     set_ops.insert("consignation_url", event.consignation_url);
-    // } else {
-    //     unset_ops.insert("consignation_url", true);
-    // }
 
     let mut ops = doc! {
         "$setOnInsert": {
@@ -1494,17 +1480,26 @@ struct PresenceMonitor {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct PresenceFichiersRepertoire { taille: i64, nombre: i64 }
+
+impl Into<Bson> for PresenceFichiersRepertoire {
+    fn into(self) -> Bson {
+        bson!({
+            "taille": self.taille,
+            "nombre": self.nombre,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceFichiers {
     type_store: String,
     url_download: Option<String>,
     url_archives: Option<String>,
     consignation_url: Option<String>,
-    fichiers_nombre: Option<i64>,
-    archives_nombre: Option<i64>,
-    orphelins_nombre: Option<i64>,
-    fichiers_taille: Option<i64>,
-    archives_taille: Option<i64>,
-    orphelins_taille: Option<i64>,
+    local: Option<PresenceFichiersRepertoire>,
+    archives: Option<PresenceFichiersRepertoire>,
+    orphelins: Option<PresenceFichiersRepertoire>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
