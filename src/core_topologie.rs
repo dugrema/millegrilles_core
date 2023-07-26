@@ -9,7 +9,7 @@ use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{Datelike, Timelike, Utc};
-use millegrilles_common_rust::common_messages::{DataChiffre, MessageReponse, ReponseInformationConsignationFichiers, RequeteConsignationFichiers, RequeteDechiffrage};
+use millegrilles_common_rust::common_messages::{DataChiffre, MessageReponse, PresenceFichiersRepertoire, ReponseInformationConsignationFichiers, RequeteConsignationFichiers, RequeteDechiffrage};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
@@ -1480,18 +1480,6 @@ struct PresenceMonitor {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct PresenceFichiersRepertoire { taille: i64, nombre: i64 }
-
-impl Into<Bson> for PresenceFichiersRepertoire {
-    fn into(self) -> Bson {
-        bson!({
-            "taille": self.taille,
-            "nombre": self.nombre,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceFichiers {
     type_store: String,
     url_download: Option<String>,
@@ -2604,13 +2592,9 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
 
     if let Some(true) = requete.stats {
         // Inclure information des fichiers et espace
-        projection.insert("fichiers_taille", 1);
-        projection.insert("fichiers_nombre", 1);
-        projection.insert("archives_taille", 1);
-        projection.insert("archives_nombre", 1);
-        projection.insert("orphelins_taille", 1);
-        projection.insert("orphelins_nombre", 1);
-        projection.insert("espace_disponible", 1);
+        projection.insert("local", 1);
+        projection.insert("archives", 1);
+        projection.insert("orphelins", 1);
     }
 
     let options = FindOneOptions::builder()
@@ -2803,17 +2787,12 @@ pub struct ReponseConsignationSatellite {
     pub key_type_sftp_backup: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fichiers_taille: Option<usize>,
+    pub local: Option<PresenceFichiersRepertoire>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fichiers_nombre: Option<usize>,
+    pub archives: Option<PresenceFichiersRepertoire>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub archives_taille: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub archives_nombre: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub orphelins_taille: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub orphelins_nombre: Option<usize>,
+    pub orphelins: Option<PresenceFichiersRepertoire>,
+
     #[serde(skip_serializing_if = "Option::is_none")]
     pub espace_disponible: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
