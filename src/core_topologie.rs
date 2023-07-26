@@ -772,10 +772,9 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
 
     let filtre = doc! {"domaine": domaine, "instance_id": &instance_id};
     let ops = doc! {
-        // "$set": {
-        //     // "domaine": domaine,
-        //     // "instance_id": instance_id,
-        // },
+        "$set": {
+            "reclame_fuuids": match event.reclame_fuuids { Some(inner) => inner, None => false },
+        },
         "$setOnInsert": {
             "domaine": domaine,
             "instance_id": instance_id,
@@ -1458,6 +1457,7 @@ async fn traiter_transaction_supprimer_instance<M, T>(middleware: &M, transactio
 struct PresenceDomaine {
     domaine: Option<String>,
     instance_id: Option<String>,
+    reclame_fuuids: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1725,11 +1725,16 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
     Ok(Some(reponse))
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteListeDomaines {
+    reclame_fuuids: Option<bool>,
+}
+
 async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
                            -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    debug!("liste_domaines");
+    debug!("liste_domaines {:?}", message);
     if !message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         if message.get_user_id().is_some() && !message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
             let refus = json!({"ok": false, "err": "Acces refuse"});
@@ -1741,11 +1746,19 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
         }
     }
 
+    let requete: RequeteListeDomaines = message.message.parsed.map_contenu()?;
+
     let mut curseur = {
         let projection = doc! {"instance_id": true, "domaine": true, CHAMP_MODIFICATION: true};
         let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
         let ops = FindOptions::builder().projection(Some(projection)).build();
-        match collection.find(doc! {}, Some(ops)).await {
+
+        let mut filtre = doc!{};
+        if let Some(reclame_fuuids) = requete.reclame_fuuids {
+            filtre.insert("reclame_fuuids", reclame_fuuids);
+        }
+
+        match collection.find(filtre, Some(ops)).await {
             Ok(c) => c,
             Err(e) => Err(format!("core_topologie.liste_domaines Erreur chargement domaines : {:?}", e))?
         }
