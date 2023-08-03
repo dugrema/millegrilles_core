@@ -62,6 +62,7 @@ pub const NOM_COLLECTION_ACTIVATIONS: &str = "CoreMaitreDesComptes/activations";
 pub const NOM_COLLECTION_CHALLENGES: &str = "CoreMaitreDesComptes/challenges";
 // pub const NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION: &str = "CoreMaitreDesComptes/webauthnAuthentification";
 pub const NOM_COLLECTION_WEBAUTHN_CREDENTIALS: &str = "CoreMaitreDesComptes/webauthnCredentials";
+pub const NOM_COLLECTION_COOKIES: &str = "CoreMaitreDesComptes/cookies";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
 const NOM_Q_TRANSACTIONS: &str = "CoreMaitreDesComptes/transactions";
@@ -73,6 +74,7 @@ const REQUETE_LISTE_USAGERS: &str = "getListeUsagers";
 const REQUETE_USERID_PAR_NOMUSAGER: &str = "getUserIdParNomUsager";
 const REQUETE_GET_CSR_RECOVERY_PARCODE: &str = "getCsrRecoveryParcode";
 const REQUETE_LISTE_PROPRIETAIRES: &str = "getListeProprietaires";
+const REQUETE_COOKIE_USAGER: &str = "getCookieUsager";
 // const REQUETE_GET_TOKEN_SESSION: &str = "getTokenSession";
 
 // const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
@@ -99,6 +101,7 @@ const INDEX_NOM_USAGER: &str = "nomusager_unique";
 const INDEX_RECOVERY_UNIQUE: &str = "recovery_code_unique";
 const INDEX_CHALLENGES_UNIQUE: &str = "challenges_unique";
 const INDEX_WEBAUTHN_UNIQUE: &str = "webauthn_unique";
+const INDEX_COOKIE_UNIQUE: &str = "cookie_unique";
 
 const CHAMP_USER_ID: &str = "userId";
 const CHAMP_USAGER_NOM: &str = "nomUsager";
@@ -224,6 +227,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let requetes_privees_protegees: Vec<&str> = vec![
         REQUETE_CHARGER_USAGER,
         REQUETE_GET_CSR_RECOVERY_PARCODE,
+        REQUETE_COOKIE_USAGER,
         // REQUETE_GET_TOKEN_SESSION,
     ];
     for req in requetes_privees_protegees {
@@ -447,21 +451,21 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_webauthncreds)
     ).await?;
 
-    // let options_unique_webauthn_auth = IndexOptions {
-    //     nom_index: Some(String::from(INDEX_WEBAUTHN_UNIQUE)),
-    //     unique: true
-    // };
-    // let champs_index_webauthn_auth = vec!(
-    //     ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
-    //     ChampIndex {nom_champ: String::from("hostname"), direction: 1},
-    //     ChampIndex {nom_champ: String::from("passkey_authentication.ast.challenge"), direction: 1},
-    // );
-    // middleware.create_index(
-    //     middleware,
-    //     NOM_COLLECTION_WEBAUTHN_AUTHENTIFICATION,
-    //     champs_index_webauthn_auth,
-    //     Some(options_unique_webauthn_auth)
-    // ).await?;
+    let options_unique_cookie = IndexOptions {
+        nom_index: Some(String::from(INDEX_COOKIE_UNIQUE)),
+        unique: true
+    };
+    let champs_index_cookie = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_USER_ID), direction: 1},
+        ChampIndex {nom_champ: String::from("hostname"), direction: 1},
+        ChampIndex {nom_champ: String::from("challenge"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_COOKIES,
+        champs_index_cookie,
+        Some(options_unique_cookie)
+    ).await?;
 
     Ok(())
 }
@@ -534,6 +538,25 @@ async fn supprimer_activations_expirees<M>(middleware: &M) -> Result<(), Box<dyn
     Ok(())
 }
 
+async fn supprimer_cookies_expires<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+    where M: MongoDao
+{
+    // Supprimer codes recovery expires
+    {
+        let date_expiration_cookies = Utc::now().timestamp();
+        let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
+        let filtre = doc! {
+            "expiration": {"$lt": date_expiration_cookies}
+        };
+        debug!("supprimer_cookies_expires Suppression cookies expires depuis {:?}", filtre);
+        if let Err(e) = collection.delete_many(filtre, None).await {
+            error!("supprimer_cookies_expires Erreur suppression cookies expires : {:?}", e);
+        }
+    }
+
+    Ok(())
+}
+
 async fn entretien<M>(_middleware: Arc<M>)
     where M: Middleware + 'static
 {
@@ -572,6 +595,10 @@ where M: MongoDao + GenerateurMessages {
         if let Err(e) = supprimer_activations_expirees(middleware).await {
             error!("Erreur entretien codes activations expires : {:?}", e);
         }
+
+        if let Err(e) = supprimer_cookies_expires(middleware).await {
+            error!("Erreur entretien cookies expires : {:?}", e);
+        }
     }
 
     Ok(())
@@ -601,6 +628,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 REQUETE_USERID_PAR_NOMUSAGER => get_userid_par_nomusager(middleware, message).await,
                 REQUETE_GET_CSR_RECOVERY_PARCODE => get_csr_recovery_parcode(middleware, message).await,
                 REQUETE_LISTE_PROPRIETAIRES => get_liste_proprietaires(middleware, message).await,
+                REQUETE_COOKIE_USAGER => get_cookie_usager(middleware, message).await,
                 // REQUETE_GET_TOKEN_SESSION => get_token_session(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
@@ -1324,6 +1352,56 @@ async fn get_liste_proprietaires<M>(middleware: &M, message: MessageValideAction
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct RequeteGetCookieUsager {
+    user_id: String,
+    hostname: String,
+    challenge: String,
+}
+
+async fn get_cookie_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("get_userid_par_nomusager : {:?}", &message.message);
+
+    if ! message.verifier_exchanges(vec![Securite::L2Prive]) ||
+        ! message.verifier_roles(vec![RolesCertificats::MaitreComptes]) {
+        info!("get_cookie_usager Mauvais certificat (doit avoir securite L2Prive, role MaitreComptes");
+        let reponse = json!({"ok": false, "err": "Mauvais certificat pour requete"});
+        match middleware.formatter_reponse(&reponse,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
+        }
+    }
+
+    let requete: RequeteGetCookieUsager = message.message.get_msg().map_contenu()?;
+
+    let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
+    let filtre = doc! {
+        CHAMP_USER_ID: requete.user_id,
+        "hostname": requete.hostname,
+        "challenge": requete.challenge,
+    };
+
+    match collection.find_one(filtre, None).await? {
+        Some(inner) => {
+            let cookie: CookieSession = convertir_bson_deserializable(inner)?;
+            let reponse = json!({"ok": true, "cookie": cookie});
+            match middleware.formatter_reponse(&reponse,None) {
+                Ok(m) => Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
+            }
+        },
+        None => {
+            let reponse = json!({"ok": false, "err": "Cookie inconnu"});
+            match middleware.formatter_reponse(&reponse,None) {
+                Ok(m) => Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
+            }
+        }
+    }
+}
+
 async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -1693,6 +1771,8 @@ impl DemandeSignatureCertificatWebauthn {
 struct CommandeClientAuthentificationWebauthn {
     #[serde(rename = "demandeCertificat")]
     demande_certificat: Option<DemandeSignatureCertificatWebauthn>,
+    #[serde(rename = "dureeSession", skip_serializing_if = "Option::is_none")]
+    duree_session: Option<i64>,
     webauthn: ClientAuthentificationWebauthn,
 }
 
@@ -1807,9 +1887,67 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
         }
     }
 
+    if let Some(duree_session) = commande.commande_webauthn.duree_session {
+        debug!("Creer cookie de session");
+        match creer_session_cookie(middleware, &commande.user_id, &commande.hostname, duree_session).await {
+            Ok(inner) => {
+                reponse_ok.as_object_mut().expect("as_object_mut")
+                    .insert("cookie".to_string(), inner.into());
+            },
+            Err(e) => {
+                error!("Erreur creation cookie session : {:?}", e);
+            }
+        }
+    }
+
     debug!("Reponse authentification : {:?}", reponse_ok);
 
     Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CookieSession {
+    user_id: String,
+    hostname: String,
+    challenge: String,
+    expiration: DateEpochSeconds,
+}
+
+impl Into<Value> for CookieSession {
+    fn into(self) -> Value {
+        serde_json::to_value(self).expect("value")
+    }
+}
+
+impl CookieSession {
+    fn new<U,H>(user_id: U, hostname: H, duree_session: i64) -> Self
+        where U: Into<String>, H: Into<String>
+    {
+        let date_expiration = Utc::now() + chrono::Duration::seconds(duree_session);
+        let date_epoch = DateEpochSeconds::from(date_expiration);
+
+        let mut buffer_challenge = [0u8; 32];
+        openssl::rand::rand_bytes(&mut buffer_challenge).expect("openssl::random::rand_bytes");
+        let challenge = base64_url::encode(&buffer_challenge[..]);
+
+        Self {
+            user_id: user_id.into(),
+            hostname: hostname.into(),
+            challenge,
+            expiration: date_epoch,
+        }
+    }
+}
+
+async fn creer_session_cookie<M,U,H>(middleware: &M, user_id: U, hostname: H, duree_session: i64)
+    -> Result<CookieSession, Box<dyn Error>>
+    where M: MongoDao, U: AsRef<str>, H: AsRef<str>
+{
+    let cookie = CookieSession::new(user_id.as_ref(), hostname.as_ref(), duree_session);
+    let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
+    let cookie_bson = convertir_to_bson(cookie.clone())?;
+    collection.insert_one(cookie_bson, None).await?;
+    Ok(cookie)
 }
 
 async fn charger_challenge_authentification<M,U,H,C>(middleware: &M, user_id: U, hostname: H, challenge: C)
