@@ -1359,10 +1359,16 @@ struct RequeteGetCookieUsager {
     challenge: String,
 }
 
+#[derive(Deserialize)]
+struct RowNomUsager {
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+}
+
 async fn get_cookie_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("get_userid_par_nomusager : {:?}", &message.message);
+    debug!("get_cookie_usager Requete : {:?}", &message.message);
 
     if ! message.verifier_exchanges(vec![Securite::L2Prive]) ||
         ! message.verifier_roles(vec![RolesCertificats::MaitreComptes]) {
@@ -1378,25 +1384,46 @@ async fn get_cookie_usager<M>(middleware: &M, message: MessageValideAction) -> R
 
     let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
     let filtre = doc! {
-        CHAMP_USER_ID: requete.user_id,
+        "user_id": requete.user_id,
         "hostname": requete.hostname,
         "challenge": requete.challenge,
     };
+    debug!("get_cookie_usager Charger cookie {:?}", filtre);
 
     match collection.find_one(filtre, None).await? {
         Some(inner) => {
             let cookie: CookieSession = convertir_bson_deserializable(inner)?;
-            let reponse = json!({"ok": true, "cookie": cookie});
+
+            // Charger username
+            let filtre_user = doc! {CHAMP_USER_ID: &cookie.user_id};
+            let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+            let projection = doc!{"nomUsager": 1};
+            let options = FindOneOptions::builder().projection(projection).build();
+            let nom_usager = match collection.find_one(filtre_user, options).await? {
+                Some(inner) => {
+                    let row_nom_usager: RowNomUsager = convertir_bson_deserializable(inner)?;
+                    row_nom_usager.nom_usager
+                },
+                None => {
+                    let reponse = json!({"ok": false, "err": "Usager inconnu"});
+                    match middleware.formatter_reponse(&reponse,None) {
+                        Ok(m) => return Ok(Some(m)),
+                        Err(e) => Err(format!("get_cookie_usager Erreur preparation reponse match usager : {:?}", e))?
+                    }
+                }
+            };
+
+            let reponse = json!({"ok": true, "nomUsager": nom_usager, "cookie": cookie});
             match middleware.formatter_reponse(&reponse,None) {
                 Ok(m) => Ok(Some(m)),
-                Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
+                Err(e) => Err(format!("get_cookie_usager Erreur preparation reponse ok:true : {:?}", e))?
             }
         },
         None => {
             let reponse = json!({"ok": false, "err": "Cookie inconnu"});
             match middleware.formatter_reponse(&reponse,None) {
                 Ok(m) => Ok(Some(m)),
-                Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
+                Err(e) => Err(format!("get_cookie_usager Erreur preparation reponse cookie inconnu : {:?}", e))?
             }
         }
     }
