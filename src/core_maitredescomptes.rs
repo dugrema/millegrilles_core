@@ -84,6 +84,7 @@ const COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE: &str = "signerCompteParProprietai
 const COMMANDE_AJOUTER_CSR_RECOVERY: &str = "ajouterCsrRecovery";
 const COMMANDE_AUTHENTIFIER_WEBAUTHN: &str = "authentifierWebauthn";
 const COMMANDE_GENERER_CHALLENGE: &str = "genererChallenge";
+const COMMANDE_SUPPRIMER_COOKIE: &str = "supprimerCookieSession";
 
 const TRANSACTION_INSCRIRE_USAGER: &str = "inscrireUsager";
 const TRANSACTION_AJOUTER_CLE: &str = "ajouterCle";
@@ -260,6 +261,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         // COMMANDE_ACTIVATION_TIERCE,
         COMMANDE_AJOUTER_CSR_RECOVERY,
         COMMANDE_GENERER_CHALLENGE,
+        COMMANDE_SUPPRIMER_COOKIE,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L2Prive});
@@ -662,6 +664,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m).await,
             COMMANDE_AJOUTER_CSR_RECOVERY => commande_ajouter_csr_recovery(middleware, m).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m).await,
+            COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: exchange) : {}, message dropped", DOMAINE_NOM, m.action))?,
@@ -2319,6 +2322,23 @@ async fn commande_generer_challenge<M>(middleware: &M, message: MessageValideAct
     }
 
     Ok(Some(middleware.formatter_reponse(reponse, None)?))
+}
+
+async fn supprimer_cookie<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
+{
+    debug!("supprimer_cookie : {:?}", message);
+
+    let commande: RequeteGetCookieUsager = message.message.get_msg().map_contenu()?;
+    let filtre = doc!{
+        "user_id": commande.user_id,
+        "hostname": commande.hostname,
+        "challenge": commande.challenge,
+    };
+    let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
+    collection.delete_one(filtre, None).await?;
+
+    Ok(middleware.reponse_ok()?)
 }
 
 /// Signe un certificat usager sans autre forme de validation. Utilise certissuerInterne/.
