@@ -966,9 +966,10 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
 
     let mut unset_ops = doc! {};
     let mut set_ops = doc! {
-        "local": event.local,
-        "archives": event.archives,
-        "orphelins": event.orphelins,
+        "principal": event.principal,
+        "archive": event.archive,
+        "orphelin": event.orphelin,
+        "manquant": event.manquant,
     };
 
     let mut ops = doc! {
@@ -1485,9 +1486,10 @@ struct PresenceFichiers {
     url_download: Option<String>,
     url_archives: Option<String>,
     consignation_url: Option<String>,
-    local: Option<PresenceFichiersRepertoire>,
-    archives: Option<PresenceFichiersRepertoire>,
-    orphelins: Option<PresenceFichiersRepertoire>,
+    principal: Option<PresenceFichiersRepertoire>,
+    archive: Option<PresenceFichiersRepertoire>,
+    orphelin: Option<PresenceFichiersRepertoire>,
+    manquant: Option<PresenceFichiersRepertoire>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2592,9 +2594,10 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
 
     if let Some(true) = requete.stats {
         // Inclure information des fichiers et espace
-        projection.insert("local", 1);
-        projection.insert("archives", 1);
-        projection.insert("orphelins", 1);
+        projection.insert("principal", 1);
+        projection.insert("archive", 1);
+        projection.insert("orphelin", 1);
+        projection.insert("manquant", 1);
     }
 
     let options = FindOneOptions::builder()
@@ -2645,6 +2648,7 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
         Some(f) => {
             let mut fiche_reponse: ReponseInformationConsignationFichiers = convertir_bson_deserializable(f)?;
             fiche_reponse.ok = Some(true);
+            debug!("requete_consignation_fichiers Row consignation : {:?}", fiche_reponse);
 
             // Recuperer info instance pour domaine et onion
             let filtre = doc! {"instance_id": &fiche_reponse.instance_id};
@@ -2787,11 +2791,13 @@ pub struct ReponseConsignationSatellite {
     pub key_type_sftp_backup: Option<String>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub local: Option<PresenceFichiersRepertoire>,
+    pub principal: Option<PresenceFichiersRepertoire>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub archives: Option<PresenceFichiersRepertoire>,
+    pub archive: Option<PresenceFichiersRepertoire>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub orphelins: Option<PresenceFichiersRepertoire>,
+    pub orphelin: Option<PresenceFichiersRepertoire>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub manquant: Option<PresenceFichiersRepertoire>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub espace_disponible: Option<usize>,
