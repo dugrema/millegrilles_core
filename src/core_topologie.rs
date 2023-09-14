@@ -79,6 +79,7 @@ const TRANSACTION_MONITOR: &str = TRANSACTION_INSTANCE;
 const TRANSACTION_SUPPRIMER_INSTANCE: &str = "supprimerInstance";
 const TRANSACTION_SET_FICHIERS_PRIMAIRE: &str = "setFichiersPrimaire";
 const TRANSACTION_CONFIGURER_CONSIGNATION: &str = "configurerConsignation";
+const TRANSACTION_SET_CONSIGNATION_INSTANCE: &str = "setConsignationInstance";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
@@ -98,6 +99,7 @@ const CHAMP_INSTANCE_ID: &str = "instance_id";
 const CHAMP_NOEUD_ID: &str = CHAMP_INSTANCE_ID;
 const CHAMP_ADRESSE: &str = "adresse";
 const CHAMP_ADRESSES: &str = "adresses";
+const CHAMP_CONSIGNATION_ID: &str = "consignation_id";
 
 const ADRESSE_PREFERENCE_PRIMAIRE: u8 = 1;
 const ADRESSE_PREFERENCE_SECONDAIRE: u8 = 2;
@@ -245,6 +247,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_SUPPRIMER_INSTANCE,
         TRANSACTION_CONFIGURER_CONSIGNATION,
         TRANSACTION_SET_FICHIERS_PRIMAIRE,
+        TRANSACTION_SET_CONSIGNATION_INSTANCE,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
@@ -286,6 +289,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_SUPPRIMER_INSTANCE,
         TRANSACTION_SET_FICHIERS_PRIMAIRE,
         TRANSACTION_CONFIGURER_CONSIGNATION,
+        TRANSACTION_SET_CONSIGNATION_INSTANCE,
     ];
     let mut rk_transactions = Vec::new();
     for t in transactions_liste {
@@ -629,6 +633,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionna
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire).await,
+        TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
         //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
         //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
         //
@@ -657,7 +662,8 @@ async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, m
 
     match m.action.as_str() {
         TRANSACTION_DOMAINE | TRANSACTION_MONITOR | TRANSACTION_SUPPRIMER_INSTANCE |
-        TRANSACTION_SET_FICHIERS_PRIMAIRE | TRANSACTION_CONFIGURER_CONSIGNATION => {
+        TRANSACTION_SET_FICHIERS_PRIMAIRE | TRANSACTION_CONFIGURER_CONSIGNATION |
+        TRANSACTION_SET_CONSIGNATION_INSTANCE => {
             // sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             // Ok(None)
             Ok(sauvegarder_traiter_transaction(middleware, m, gestionnaire).await?)
@@ -734,6 +740,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
+        TRANSACTION_SET_CONSIGNATION_INSTANCE => transaction_set_consignation_instance(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), action)),
     }
 }
@@ -1184,6 +1191,37 @@ async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: Mess
     Ok(reponse)
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TransactionSetConsignationInstance {
+    instance_id: String,
+    consignation_id: Option<String>,
+}
+
+async fn traiter_commande_set_consignation_instance<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+{
+    debug!("traiter_commande_set_consignation_instance : {:?}", &message.message);
+
+    // Verifier autorisation
+    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("traiter_commande_set_consignation_instance autorisation acces refuse : {:?}", err);
+        match middleware.formatter_reponse(&err,None) {
+            Ok(m) => return Ok(Some(m)),
+            Err(e) => Err(format!("core_topologie.traiter_commande_set_fichiers_primaire Erreur preparation reponse  : {:?}", e))?
+        }
+    }
+
+    // Valider commande
+    if let Err(e) = message.message.get_msg().map_contenu::<TransactionSetConsignationInstance>() {
+        Err(format!("traiter_commande_set_consignation_instance Erreur convertir {:?}", e))?;
+    };
+
+    // Sauvegarder la transaction, marquer complete et repondre
+    let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
+    Ok(reponse)
+}
+
 async fn transaction_set_fichiers_primaire<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -1351,6 +1389,33 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
 
     // Transmettre commande non-blocking
     middleware.transmettre_commande(routage, &configuration, false).await?;
+
+    middleware.reponse_ok()
+}
+
+async fn transaction_set_consignation_instance<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+    where
+        M: ValidateurX509 + GenerateurMessages + MongoDao,
+        T: Transaction
+{
+    let transaction = match transaction.convertir::<TransactionSetConsignationInstance>() {
+        Ok(t) => t,
+        Err(e) => Err(format!("transaction_set_consignation_instance Erreur convertir {:?}", e))?
+    };
+    debug!("transaction_set_consignation_instance Params : {:?}", transaction);
+
+    let filtre = doc! { CHAMP_INSTANCE_ID: &transaction.instance_id };
+    let set_ops = doc! {
+        CHAMP_CONSIGNATION_ID: transaction.consignation_id.as_ref()
+    };
+    let ops = doc! {
+        "$set": set_ops,
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+    let collection = middleware.get_collection(NOM_COLLECTION_INSTANCES)?;
+    if let Err(e) = collection.update_one(filtre, ops, None).await {
+        Err(format!("core_topologie.transaction_set_consignation_instance Erreur sauvegarde consignation_id : {:?}", e))?
+    }
 
     middleware.reponse_ok()
 }
@@ -2626,22 +2691,55 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
                 if let Some(true) = requete.primaire {
                     doc! { "primaire": true, }
                 } else {
-                    // On ne veut pas le primaire si secondaire local est disponible
-                    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
-                    let filtre = doc! { "instance_id": &instance_id };
-                    let compte_doc = collection.count_documents(filtre.clone(), None).await?;
-                    if compte_doc > 0 {
-                        debug!("requete_consignation_fichiers Utilisation instance_id local {}", instance_id);
-                        filtre
-                    } else {
-                        // L'instance n'a pas de fichiers localement, on utilise le primaire
-                        doc! { "primaire": true }
+                    // Determiner la consignation a utiliser
+                    // Charger instance et lire consignation_id. Si None, comportement par defaut.
+                    let filtre_instance = doc! { CHAMP_INSTANCE_ID: &instance_id };
+                    let collection_instance = middleware.get_collection_typed::<TransactionSetConsignationInstance>(
+                        NOM_COLLECTION_INSTANCES)?;
+                    match collection_instance.find_one(filtre_instance.clone(), None).await? {
+                        Some(instance_info) => {
+                            match instance_info.consignation_id {
+                                Some(consignation_id) => {
+                                    debug!("requete_consignation_fichiers Utilisation consignation_id {} pour instance_id {}", consignation_id, instance_id);
+                                    doc! { CHAMP_INSTANCE_ID: consignation_id }
+                                },
+                                None => {
+                                    // Determiner si l'instance possede un serveur de consignation de fichiers
+                                    let collection_fichiers = middleware.get_collection_typed::<TransactionConfigurerConsignation>(
+                                        NOM_COLLECTION_FICHIERS)?;
+                                    match collection_fichiers.find_one(filtre_instance.clone(), None).await? {
+                                        Some(inner) => filtre_instance,
+                                        None => {
+                                            // L'instance n'a pas de serveur de consignation de fichiers, utiliser primaire
+                                            doc! { "primaire": true }
+                                        }
+                                    }
+                                }
+                            }
+                        },
+                        None => {
+                            // L'instance est inconnue (anormal...), on selectionne le primaire
+                            doc! { "primaire": true }
+                        }
                     }
+
+                    // // On ne veut pas le primaire si secondaire local est disponible
+                    // let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+                    // let filtre = doc! { "instance_id": &instance_id };
+                    // let compte_doc = collection.count_documents(filtre.clone(), None).await?;
+                    // if compte_doc > 0 {
+                    //     debug!("requete_consignation_fichiers Utilisation instance_id local {}", instance_id);
+                    //     filtre
+                    // } else {
+                    //     // L'instance n'a pas de fichiers localement, on utilise le primaire
+                    //     doc! { "primaire": true }
+                    // }
                 }
             }
         }
     };
 
+    debug!("requete_consignation_fichiers Filtre {:?}", filtre);
     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
     let fiche_consignation = collection.find_one(filtre, Some(options)).await?;
     let reponse = match fiche_consignation {
