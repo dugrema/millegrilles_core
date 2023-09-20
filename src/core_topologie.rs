@@ -110,6 +110,8 @@ const ADRESSE_NATURE_IP4: &str = "ip4";
 const ADRESSE_NATURE_IP6: &str = "ip6";
 const ADRESSE_NATURE_ONION: &str = "onion";
 
+const DEFAULT_CONSIGNATION_URL: &str = "https://fichiers:1443";
+
 // permissionDechiffrage
 // listerNoeudsAWSS3
 
@@ -985,7 +987,7 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
             "instance_id": &instance_id, CHAMP_CREATION: Utc::now(),
             // Defaut pour nouvelle instance
             "type_store": "millegrille",
-            "consignation_url": "https://fichiers:443",
+            "consignation_url": DEFAULT_CONSIGNATION_URL,
             "sync_actif": true,
         },
         "$set": set_ops,
@@ -1323,7 +1325,7 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
     // Defaults
     let consignation_url = match transaction.consignation_url.as_ref() {
         Some(inner) => inner.as_str(),
-        None => "https://fichiers:443"
+        None => DEFAULT_CONSIGNATION_URL
     };
     let supporte_archives = match transaction.supporte_archives.as_ref() {
         Some(inner) => inner.to_owned(),
