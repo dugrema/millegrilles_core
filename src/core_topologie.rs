@@ -1431,6 +1431,15 @@ async fn transaction_set_consignation_instance<M, T>(middleware: &M, transaction
         Err(format!("core_topologie.transaction_set_consignation_instance Erreur sauvegarde consignation_id : {:?}", e))?
     }
 
+    // Emettre evenement changement de consignation
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_MODIFICATION_CONSIGNATION)
+        .exchanges(vec![Securite::L1Public])
+        .build();
+    let evenement = json!({
+        CHAMP_INSTANCE_ID: transaction.instance_id
+    });
+    middleware.emettre_evenement(routage, &evenement).await?;
+
     middleware.reponse_ok()
 }
 
