@@ -87,6 +87,7 @@ const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 const EVENEMENT_INSTANCE_SUPPRIMEE: &str = "instanceSupprimee";
 const EVENEMENT_APPLICATION_DEMARREE: &str = "applicationDemarree";
 const EVENEMENT_APPLICATION_ARRETEE: &str = "applicationArretee";
+const EVENEMENT_MODIFICATION_CONSIGNATION: &str = "modificationConsignation";
 
 const INDEX_DOMAINE: &str = "domaine";
 const INDEX_NOEUDS: &str = "noeuds";
@@ -1088,8 +1089,11 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message
     }
 
     // Valider commande
-    if let Err(e) = message.message.get_msg().map_contenu::<TransactionConfigurerConsignation>() {
-        Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?;
+    let commande = match message.message.get_msg().map_contenu::<TransactionConfigurerConsignation>() {
+        Ok(inner) => inner,
+        Err(e) => {
+            Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
+        }
     };
 
     // Traiter la cle
@@ -1384,11 +1388,21 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
     // Emettre commande de modification de configuration pour fichiers
     let routage = RoutageMessageAction::builder("fichiers", "modifierConfiguration")
         .exchanges(vec![Securite::L2Prive])
-        .partition(transaction.instance_id)
+        .partition(transaction.instance_id.as_str())
         .build();
 
     // Transmettre commande non-blocking
     middleware.transmettre_commande(routage, &configuration, false).await?;
+
+    // Emettre evenement changement de consignation
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_MODIFICATION_CONSIGNATION)
+        .exchanges(vec![Securite::L1Public])
+        .build();
+    let evenement = json!({
+        CHAMP_INSTANCE_ID: transaction.instance_id,
+        "consignation_url": transaction.consignation_url,
+    });
+    middleware.emettre_evenement(routage, &evenement).await?;
 
     middleware.reponse_ok()
 }
