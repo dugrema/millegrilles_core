@@ -15,7 +15,7 @@ use millegrilles_common_rust::chrono::{DateTime, NaiveDateTime, Timelike, Utc};
 use millegrilles_common_rust::configuration::{ConfigMessages, IsConfigNoeud};
 use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
 use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::constantes::Securite::{L2Prive, L3Protege, L4Secure};
+use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege, L4Secure};
 use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMilleGrille, preparer_btree_recursif};
 use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
@@ -224,16 +224,15 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
-    // RK 2.prive, 3.protege
-    let requetes_privees_protegees: Vec<&str> = vec![
+    // RK 1.public
+    let requetes_publiques: Vec<&str> = vec![
         REQUETE_CHARGER_USAGER,
         REQUETE_GET_CSR_RECOVERY_PARCODE,
         REQUETE_COOKIE_USAGER,
         // REQUETE_GET_TOKEN_SESSION,
     ];
-    for req in requetes_privees_protegees {
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
+    for req in requetes_publiques {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L1Public});
     }
 
     let requetes_protegees: Vec<&str> = vec![
@@ -246,6 +245,14 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     // RK 4.secure pour requetes internes
     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_USERID_PAR_NOMUSAGER), exchange: Securite::L4Secure});
+
+    let commandes_publiques: Vec<&str> = vec![
+        // Commandes
+        COMMANDE_AUTHENTIFIER_WEBAUTHN,
+    ];
+    for commande in commandes_publiques {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L1Public});
+    }
 
     let commandes: Vec<&str> = vec![
         // Transactions recues sous forme de commande pour validation
@@ -613,7 +620,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
     let user_id = message.get_user_id();
-    match message.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
+    match message.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
         true => Ok(()),
         false => match user_id {
             Some(u) => Ok(()),
@@ -667,7 +674,14 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m).await,
 
             // Commandes inconnues
-            _ => Err(format!("Commande {} inconnue (section: exchange) : {}, message dropped", DOMAINE_NOM, m.action))?,
+            _ => Err(format!("Commande {} inconnue (section: exchange L2/L3) : {}, message dropped", DOMAINE_NOM, m.action))?,
+        }
+    } else if m.verifier_exchanges(vec!(Securite::L1Public)) {
+        match m.action.as_str() {
+            COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m).await,
+
+            // Commandes inconnues
+            _ => Err(format!("Commande {} inconnue (section: exchange L1) : {}, message dropped", DOMAINE_NOM, m.action))?,
         }
     } else if m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         // Commande proprietaire (administrateur)
@@ -1130,8 +1144,8 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
     let mut filtre = doc!{};
 
     // Le filtre utilise le user_id du certificat de preference (et ignore les parametres).
-    // Pour un certificat 2.prive, 3.protege ou 4.public, va utiliser les parametres.
-    if message.verifier_exchanges(vec![L2Prive, L3Protege, L4Secure]) || est_delegation_globale {
+    // Pour un certificat de service (1.public), va utiliser les parametres.
+    if message.verifier_exchanges(vec![L1Public]) || est_delegation_globale {
         if let Some(nom_usager) = requete.nom_usager.as_ref() {
             filtre.insert(CHAMP_USAGER_NOM, nom_usager);
         }
@@ -1145,7 +1159,7 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
             Some(u) => {
                 filtre.insert(CHAMP_USER_ID, u);
             },
-            None => match message.verifier_exchanges(vec![L2Prive, L3Protege, L4Secure]) {
+            None => match message.verifier_exchanges(vec![L1Public]) {
                 true => {
                     if let Some(nom_usager) = requete.nom_usager.as_ref() {
                         filtre.insert(CHAMP_USAGER_NOM, nom_usager);
@@ -1373,8 +1387,8 @@ async fn get_cookie_usager<M>(middleware: &M, message: MessageValideAction) -> R
 {
     debug!("get_cookie_usager Requete : {:?}", &message.message);
 
-    if ! message.verifier_exchanges(vec![Securite::L2Prive]) ||
-        ! message.verifier_roles(vec![RolesCertificats::MaitreComptes]) {
+    if ! message.verifier_exchanges(vec![Securite::L1Public, Securite::L2Prive]) ||
+        ! message.verifier_roles(vec![RolesCertificats::MaitreComptes, RolesCertificats::WebAuth]) {
         info!("get_cookie_usager Mauvais certificat (doit avoir securite L2Prive, role MaitreComptes");
         let reponse = json!({"ok": false, "err": "Mauvais certificat pour requete"});
         match middleware.formatter_reponse(&reponse,None) {
