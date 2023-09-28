@@ -227,12 +227,18 @@ pub fn preparer_queues() -> Vec<QueueType> {
     // RK 1.public
     let requetes_publiques: Vec<&str> = vec![
         REQUETE_CHARGER_USAGER,
-        REQUETE_GET_CSR_RECOVERY_PARCODE,
         REQUETE_COOKIE_USAGER,
         // REQUETE_GET_TOKEN_SESSION,
     ];
     for req in requetes_publiques {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L1Public});
+    }
+
+    let requetes_privee: Vec<&str> = vec![
+        REQUETE_GET_CSR_RECOVERY_PARCODE,
+    ];
+    for req in requetes_privee {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
     }
 
     let requetes_protegees: Vec<&str> = vec![
@@ -695,6 +701,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire).await,
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m).await,
             COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => commande_signer_compte_par_proprietaire(middleware, m).await,
+            COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m).await,
 
             // Commandes inconnues
             _ => Ok(acces_refuse(middleware, 252)?)
@@ -703,6 +710,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
         match m.action.as_str() {
             // TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire).await,
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m).await,
+            COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: user_id): {}, message dropped", DOMAINE_NOM, m.action))?,
@@ -2264,7 +2272,7 @@ struct CommandeAjouterCsrRecovery {
 #[derive(Deserialize)]
 struct CommandeGenererChallenge {
     #[serde(rename="userId")]
-    user_id: String,
+    user_id: Option<String>,
     hostname: String,
     delegation: Option<bool>,
     #[serde(rename="webauthnRegistration")]
@@ -2289,9 +2297,24 @@ async fn commande_generer_challenge<M>(middleware: &M, message: MessageValideAct
     let commande: CommandeGenererChallenge = message.message.get_msg().map_contenu()?;
     let hostname = commande.hostname.as_str();
 
+    let user_id = match message.get_user_id() {
+        Some(inner) => inner,
+        None => {
+            if let Some(user_id) = commande.user_id {
+                if message.verifier_exchanges(vec![Securite::L2Prive, Securite::L3Protege]) {
+                    user_id
+                } else {
+                   Err(format!("core_maitredescomptes.commande_generer_challenge Erreur message non autorise"))?
+                }
+            } else {
+                Err(format!("core_maitredescomptes.commande_generer_challenge Erreur message sans user_id"))?
+            }
+        }
+    };
+
     let compte = {
         let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-        let filtre = doc! { CHAMP_USER_ID: &commande.user_id };
+        let filtre = doc! { CHAMP_USER_ID: &user_id };
         let resultat = match collection.find_one(filtre, None).await? {
             Some(inner) => inner,
             None => {
