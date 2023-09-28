@@ -711,6 +711,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             // TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire).await,
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m).await,
+            TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: user_id): {}, message dropped", DOMAINE_NOM, m.action))?,
@@ -2503,39 +2504,55 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
 {
     debug!("Consommer ajouter_cle : {:?}", &message.message);
 
-    let idmg = middleware.idmg();
+    let uuid_transaction = message.message.parsed.id.clone();
 
-    // Verifier autorisation du message
-    // Doit provenir d'un maitre des comptes sur exchange 2.prive
-    if ! message.verifier(
-        Some(vec!(Securite::L2Prive)),
-        Some(vec!(RolesCertificats::MaitreComptes)),
-    ) {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err,None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-        }
-    }
-
-    let commande: CommandeAjouterCle = message.message.get_msg().map_contenu()?;
-
-    // Valider la signature du message client.
-    let reponse_client_serialise = {
-        let mut reponse_client_serialise = MessageSerialise::from_parsed(commande.transaction)?;
-        if let Err(e) = valider_message(middleware, &mut reponse_client_serialise).await {
-            let err = json!({"ok": false, "code": 3, "err": format!{"Permission refusee, reponseClient invalide : {:?}", e}});
+    let certificat = match message.message.certificat {
+        Some(inner) => inner.clone(),
+        None => {
+            let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat manquant"});
             debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-            match middleware.formatter_reponse(&err, None) {
+            match middleware.formatter_reponse(&err,None) {
                 Ok(m) => return Ok(Some(m)),
-                Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
+                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
             }
         }
-        reponse_client_serialise
     };
 
-    let transaction_ajouter_cle_contenu: TransactionAjouterCle = reponse_client_serialise.parsed.map_contenu()?;
+    let transaction_ajouter_cle_contenu: TransactionAjouterCle = message.message.parsed.map_contenu()?;
+
+    let idmg = middleware.idmg();
+
+    // // Verifier autorisation du message
+    // // Doit provenir d'un maitre des comptes sur exchange 2.prive
+    // if ! message.verifier(
+    //     Some(vec!(Securite::L2Prive)),
+    //     Some(vec!(RolesCertificats::MaitreComptes)),
+    // ) {
+    //     let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+    //     debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+    //     match middleware.formatter_reponse(&err,None) {
+    //         Ok(m) => return Ok(Some(m)),
+    //         Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+    //     }
+    // }
+    //
+    // let commande: CommandeAjouterCle = message.message.get_msg().map_contenu()?;
+    //
+    // // Valider la signature du message client.
+    // let reponse_client_serialise = {
+    //     let mut reponse_client_serialise = MessageSerialise::from_parsed(commande.transaction)?;
+    //     if let Err(e) = valider_message(middleware, &mut reponse_client_serialise).await {
+    //         let err = json!({"ok": false, "code": 3, "err": format!{"Permission refusee, reponseClient invalide : {:?}", e}});
+    //         debug!("ajouter_cle autorisation acces refuse : {:?}", err);
+    //         match middleware.formatter_reponse(&err, None) {
+    //             Ok(m) => return Ok(Some(m)),
+    //             Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
+    //         }
+    //     }
+    //     reponse_client_serialise
+    // };
+    //
+    // let transaction_ajouter_cle_contenu: TransactionAjouterCle = reponse_client_serialise.parsed.map_contenu()?;
     let hostname = match transaction_ajouter_cle_contenu.hostname.as_ref() {
         Some(inner) => inner.as_str(),
         None => {
@@ -2551,25 +2568,11 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
     // Verifier si on fait une association en utilisant un nouveau certificat active de maniere
     // externe (e.g. par le proprietaire dans Coup D'Oeil ou code QR). Utiliser fingperprint
     // de la cle publique du message signe par l'usager.
-    let (user_id_certificat, fingerprint_pk) = match reponse_client_serialise.certificat.as_ref() {
-        Some(inner) => {
-            let user_id = match inner.get_user_id()? {
-                Some(inner) => inner.as_str(),
-                None => {
-                    let err = json!({"ok": false, "code": 8, "err": "Permission refusee, certificat client sans user_id"});
-                    debug!("ajouter_cle autorisation acces refuse certificat client sans user_id (8): {:?}", err);
-                    match middleware.formatter_reponse(&err,None) {
-                        Ok(m) => return Ok(Some(m)),
-                        Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
-                    }
-                }
-            };
-
-            (user_id, inner.fingerprint.as_str())
-        },
+    let user_id_certificat = match certificat.get_user_id()? {
+        Some(inner) => inner.to_owned(),
         None => {
-            let err = json!({"ok": false, "code": 6, "err": "Permission refusee, certificat client absent"});
-            debug!("ajouter_cle autorisation acces refuse certificat client absent (6): {:?}", err);
+            let err = json!({"ok": false, "code": 8, "err": "Permission refusee, certificat client sans user_id"});
+            debug!("ajouter_cle autorisation acces refuse certificat client sans user_id (8): {:?}", err);
             match middleware.formatter_reponse(&err,None) {
                 Ok(m) => return Ok(Some(m)),
                 Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
@@ -2577,9 +2580,37 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
         }
     };
 
+    let fingerprint_pk = certificat.fingerprint_pk()?;
+
+    // let (user_id_certificat, fingerprint_pk) = match reponse_client_serialise.certificat.as_ref() {
+    //     Some(inner) => {
+    //         let user_id = match inner.get_user_id()? {
+    //             Some(inner) => inner.as_str(),
+    //             None => {
+    //                 let err = json!({"ok": false, "code": 8, "err": "Permission refusee, certificat client sans user_id"});
+    //                 debug!("ajouter_cle autorisation acces refuse certificat client sans user_id (8): {:?}", err);
+    //                 match middleware.formatter_reponse(&err,None) {
+    //                     Ok(m) => return Ok(Some(m)),
+    //                     Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
+    //                 }
+    //             }
+    //         };
+    //
+    //         (user_id, inner.fingerprint.as_str())
+    //     },
+    //     None => {
+    //         let err = json!({"ok": false, "code": 6, "err": "Permission refusee, certificat client absent"});
+    //         debug!("ajouter_cle autorisation acces refuse certificat client absent (6): {:?}", err);
+    //         match middleware.formatter_reponse(&err,None) {
+    //             Ok(m) => return Ok(Some(m)),
+    //             Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
+    //         }
+    //     }
+    // };
+
     // Validation - s'assurer que le compte usager existe
     let collection_webauthn = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
-    let filtre_webauthn = doc! { CHAMP_USER_ID: user_id_certificat, "hostname": hostname, "type_challenge": "registration" };
+    let filtre_webauthn = doc! { CHAMP_USER_ID: &user_id_certificat, "hostname": hostname, "type_challenge": "registration" };
     let doc_registration: DocChallenge = match collection_webauthn.find_one(filtre_webauthn, None).await? {
         Some(inner) => convertir_bson_deserializable(inner)?,
         None => {
@@ -2592,7 +2623,7 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
         }
     };
 
-    let compte_usager = match charger_compte_user_id(middleware, user_id_certificat).await? {
+    let compte_usager = match charger_compte_user_id(middleware, &user_id_certificat).await? {
         Some(inner) => inner,
         None => {
             let err = json!({"ok": false, "code": 2, "err": format!("Usager inconnu pour userId (2) : {}", user_id_certificat)});
@@ -2607,12 +2638,12 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
     // Valider la commande de registration webauthn, sauvegarder nouvelle credential, retirer challenge registration
     let webauthn_credential = verifier_challenge_registration(idmg, &doc_registration, &transaction_ajouter_cle_contenu)?;
     let mut credential_interne = sauvegarder_credential(
-        middleware, user_id_certificat, hostname, webauthn_credential, true).await?;
+        middleware, &user_id_certificat, hostname, webauthn_credential, true).await?;
 
     {
         // Supprimer activation pour le certificat (si present)
         let collection = middleware.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
-        let filtre = doc! { CHAMP_USER_ID: user_id_certificat, "fingerprint_pk": fingerprint_pk };
+        let filtre = doc! { CHAMP_USER_ID: &user_id_certificat, "fingerprint_pk": fingerprint_pk };
         collection.delete_one(filtre, None).await?;
     }
 
@@ -2628,7 +2659,7 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
         None, None, false)?;
 
     // Sauvegarder la transaction, marquer complete et repondre
-    let uuid_transaction = reponse_client_serialise.parsed.id.clone();
+    // let uuid_transaction = reponse_client_serialise.parsed.id.clone();
     let mut mva = MessageValideAction::from_message_millegrille(
         transaction_credential, TypeMessageOut::Transaction)?;
 
