@@ -702,6 +702,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m).await,
             COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => commande_signer_compte_par_proprietaire(middleware, m).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m).await,
+            TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
 
             // Commandes inconnues
             _ => Ok(acces_refuse(middleware, 252)?)
@@ -712,6 +713,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire).await,
+            TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: user_id): {}, message dropped", DOMAINE_NOM, m.action))?,
@@ -2419,6 +2421,10 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
                 true => {
                     let reponse_json: ReponseCertificatSigne = response.json().await?;
                     debug!("signer_certificat_usager Reponse certificat : {:?}", reponse_json);
+                    // Charger le certificat - le valide et sauvegarde dans PKI
+                    let enveloppe = middleware.charger_enveloppe(
+                        &reponse_json.certificat, None, None).await?;
+                    debug!("signer_certificat_usager Nouveau certificat valide, fingerprint : {}", enveloppe.fingerprint);
                     return Ok(middleware.formatter_reponse(reponse_json, None)?)
                 },
                 false => {
@@ -2922,22 +2928,22 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
 {
     debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
     // Verifier autorisation
-    if !message.verifier(
-        Some(vec!(Securite::L2Prive)),
-        Some(vec!(RolesCertificats::MaitreComptes)),
-    ) {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err, None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("commande_ajouter_delegation_signee Erreur preparation reponse (1) ajouter_delegation_signee : {:?}", e))?
+    let user_id = match message.get_user_id() {
+        Some(inner) => inner,
+        None => {
+            let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat sans user_id"});
+            debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+            match middleware.formatter_reponse(&err, None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("commande_ajouter_delegation_signee Erreur preparation reponse (1) ajouter_delegation_signee : {:?}", e))?
+            }
         }
-    }
+    };
 
     // Valider contenu
     let commande: CommandeAjouterDelegationSignee = message.message.parsed.map_contenu()?;
     let mut message_confirmation = commande.confirmation;
-    let user_id = commande.user_id.as_str();
+    // let user_id = commande.user_id.as_str();
     let hostname = commande.hostname.as_str();
 
     // S'assurer que la signature est recente (moins de 2 minutes, ajustement 10 secondes futur max)
@@ -2978,7 +2984,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
 
     // Valider le format du contenu (parse)
     let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = message_confirmation.map_contenu()?;
-    if commande_ajouter_delegation.user_id.as_str() != user_id {
+    if commande_ajouter_delegation.user_id.as_str() != user_id.as_str() {
         let err = json!({"ok": false, "code": 5, "err": "Permission refusee, user_id signe et session serveur mismatch"});
         debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
         match middleware.formatter_reponse(&err, None) {
@@ -2992,7 +2998,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     // Verifier que le challenge est bien associe a cet usager pour une delegation
     let challenge = {
         let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
-        let filtre = doc! { CHAMP_USER_ID: user_id, "type_challenge": "delegation", "hostname": hostname, "challenge": challenge_recu};
+        let filtre = doc! { CHAMP_USER_ID: &user_id, "type_challenge": "delegation", "hostname": hostname, "challenge": challenge_recu};
         let doc_challenge: DocChallenge = match collection.find_one(filtre, None).await? {
             Some(inner) => convertir_bson_deserializable(inner)?,
             None => {
@@ -3010,7 +3016,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     if challenge == commande_ajouter_delegation.challenge {
         // Challenge est OK, supprimer pour eviter replay attacks
         let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
-        let filtre = doc! { CHAMP_USER_ID: user_id, "hostname": hostname, "challenge": challenge_recu};
+        let filtre = doc! { CHAMP_USER_ID: &user_id, "hostname": hostname, "challenge": challenge_recu};
         collection.delete_one(filtre, None).await?;
     } else {
         let err = json!({"ok": false, "code": 7, "err": "Permission refusee, challenge delegation inconnu"});
@@ -3029,7 +3035,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
 
     // Charger le document de compte et retourner comme reponse
-    let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
+    let reponse = match charger_compte_user_id(middleware, user_id).await? {
         Some(compte) => serde_json::to_value(&compte)?,
         None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
     };
@@ -3073,6 +3079,21 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur conversion en CommandeAjouterCle : {:?}", e))?
     };
 
+    let user_id_option = match transaction.get_enveloppe_certificat() {
+        Some(inner) => match inner.get_user_id()? {
+            Some(inner) => Some(inner.to_owned()),
+            None => commande.user_id.clone()
+        },
+        None => commande.user_id.clone()
+    };
+
+    let user_id = match user_id_option.as_ref() {
+        Some(inner) => inner.as_str(),
+        None => {
+            Err(format!("transaction_ajouter_delegation_signee User_id None"))?
+        }
+    };
+
     // Valider contenu
     let mut message_confirmation = commande.confirmation;
 
@@ -3111,7 +3132,7 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
 
     // Le filtre agit a la fois sur le nom usager (valide par la cle) et le user_id (valide par serveur)
     let filtre = doc! {
-        CHAMP_USER_ID: commande.user_id.as_str(),
+        CHAMP_USER_ID: user_id,
         CHAMP_USAGER_NOM: commande_ajouter_delegation.nom_usager.as_str(),
     };
     let ops = doc! {
@@ -3129,7 +3150,7 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
     if resultat.matched_count == 1 {
         Ok(None)
     } else {
-        Err(format!("transaction_ajouter_delegation_signee Aucun match pour usager {:?}", commande.user_id.as_str()))
+        Err(format!("transaction_ajouter_delegation_signee Aucun match pour usager {:?}", user_id))
     }
 }
 
@@ -3197,7 +3218,7 @@ struct CommandeResetWebauthnUsager {
 struct CommandeAjouterDelegationSignee {
     confirmation: MessageMilleGrille,
     #[serde(rename="userId")]
-    user_id: String,
+    user_id: Option<String>,
     hostname: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
