@@ -255,6 +255,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let commandes_publiques: Vec<&str> = vec![
         // Commandes
         COMMANDE_AUTHENTIFIER_WEBAUTHN,
+        COMMANDE_SUPPRIMER_COOKIE,
     ];
     for commande in commandes_publiques {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L1Public});
@@ -685,6 +686,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
     } else if m.verifier_exchanges(vec!(Securite::L1Public)) {
         match m.action.as_str() {
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m).await,
+            COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: exchange L1) : {}, message dropped", DOMAINE_NOM, m.action))?,
