@@ -2193,6 +2193,8 @@ async fn signer_demande_certificat_usager<M>(middleware: &M, compte_usager: Comp
         let routage_evenement = RoutageMessageAction::builder(
             DOMAINE_NOM, "activationFingerprintPk")
             .exchanges(vec![Securite::L2Prive])
+            .partition(fingerprint_pk)
+            // .user_id(user_id)
             .build();
         middleware.emettre_evenement(routage_evenement, &evenement_activation).await?;
 
@@ -2414,7 +2416,9 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
 
     let commande_signature = CommandeSignatureUsager::new(nom_usager_str, user_id_str, csr_str, compte);
     let commande_signee = middleware.formatter_message(
-        MessageKind::Document, &commande_signature, None::<&str>, None::<&str>, None::<&str>, None, false)?;
+        MessageKind::Document, &commande_signature,
+        None::<&str>, None::<&str>, None::<&str>, None::<&str>,
+        None, false)?;
 
     // On retransmet le message recu tel quel
     match client.post(url_post).json(&commande_signee).send().await {
@@ -2664,7 +2668,7 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
     let mut transaction_credential = middleware.formatter_message(
         MessageKind::Transaction, &credential_interne,
         Some(DOMAINE_NOM_MAITREDESCOMPTES), Some(TRANSACTION_AJOUTER_CLE),
-        None, None, false)?;
+        None::<&str>, None::<&str>, None, false)?;
 
     // Sauvegarder la transaction, marquer complete et repondre
     // let uuid_transaction = reponse_client_serialise.parsed.id.clone();

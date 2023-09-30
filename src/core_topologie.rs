@@ -925,8 +925,8 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, ges
 
         let transaction = middleware.formatter_message(
             MessageKind::Transaction, &tval,
-            Some(DOMAINE_NOM), Some(TRANSACTION_MONITOR), None, None,
-            false)?;
+            Some(DOMAINE_NOM), Some(TRANSACTION_MONITOR), None::<&str>, None::<&str>,
+            None, false)?;
 
         // Sauvegarder la transation
         let msg = MessageSerialise::from_parsed(transaction)?;
@@ -2581,7 +2581,7 @@ async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideActi
             // middleware.formatter_reponse(fiche, None)
             middleware.formatter_message(
                 MessageKind::Commande, &r, Some(DOMAINE_TOPOLOGIE), Some("fichePublique"),
-                None, Some(1), true)
+                None::<&str>, None::<&str>,Some(1), true)
         }
         None => {
             middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)
