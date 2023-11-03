@@ -38,6 +38,7 @@ use millegrilles_common_rust::messages_generiques::MessageCedule;
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreCatalogues";
 pub const NOM_COLLECTION_CATALOGUES: &str = "CoreCatalogues/catalogues";
+pub const NOM_COLLECTION_CATALOGUES_VERSIONS: &str = "CoreCatalogues/catalogues_versions";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
 
 const NOM_Q_TRANSACTIONS: &str = "CoreCatalogues/transactions";
@@ -272,6 +273,22 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_catalogues)
     ).await?;
 
+    // catalogues_versions
+    let options_unique_catalogues_versions = IndexOptions {
+        nom_index: Some(String::from(INDEX_NOMS_CATALOGUES)),
+        unique: true
+    };
+    let champs_index_catalogues_versions = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_NOM_CATALOGUE), direction: 1},
+        ChampIndex {nom_champ: String::from(CHAMP_VERSION), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_CATALOGUES_VERSIONS,
+        champs_index_catalogues_versions,
+        Some(options_unique_catalogues_versions)
+    ).await?;
+
     Ok(())
 }
 
@@ -500,40 +517,46 @@ async fn traiter_commande_application<M>(middleware: &M, commande: MessageValide
 where M: ValidateurX509 + MongoDao + GenerateurMessages + VerificateurMessage
 {
     // let message = commande.message.get_msg();
-    debug!("Traitement catalogue application {:?}", commande);
+    debug!("traiter_commande_application Traitement catalogue application {:?}", commande);
 
     // let value_catalogue: MessageMilleGrille = match commande.message.parsed.contenu.get("catalogue") {
     let message_catalogue: MessageCatalogue = commande.message.parsed.map_contenu()?;
     let value_catalogue = message_catalogue.catalogue;
 
     let mut catalogue = MessageSerialise::from_parsed(value_catalogue)?;
-    debug!("Catalogue charge : {:?}", catalogue);
+    debug!("traiter_commande_application Catalogue charge : {:?}", catalogue);
 
     // let info_catalogue: CatalogueApplication = serde_json::from_value(Value::Object(catalogue.get_msg().contenu.to_owned()))?;
     let info_catalogue: CatalogueApplication = catalogue.parsed.map_contenu()?;
-    debug!("Information catalogue charge : {:?}", info_catalogue);
+    debug!("traiter_commande_application Information catalogue charge : {:?}", info_catalogue);
 
-    let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
-    let filtre = doc! {CHAMP_NOM_CATALOGUE: info_catalogue.nom.as_str()};
-    let doc_catalogue = collection_catalogues.find_one(filtre, None).await?;
-    let version = match &doc_catalogue {
-        Some(d) => {
-            let version = d.get_str(CHAMP_VERSION)?;
-            // Verifier si la version recue est plus grande que celle sauvegardee
-            debug!("Version recue : {}, dans DB : {}", info_catalogue.version, version);
-
-            // Si version moins grande, on skip
-            if version == info_catalogue.version {
-                debug!("Meme version de catalogue, on skip");
-                return Ok(None)
-            }
-
-            Some(version)
-        },
-        None => None,
+    let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES_VERSIONS)?;
+    let version = info_catalogue.version.as_str();
+    let filtre = doc! {
+        CHAMP_NOM_CATALOGUE: info_catalogue.nom.as_str(),
+        CHAMP_VERSION: version,
     };
-
-    debug!("Verifier si catalogue present pour version {:?}", version);
+    let doc_catalogue = collection_catalogues.find_one(filtre, None).await?;
+    if doc_catalogue.is_some() {
+        debug!("traiter_commande_application Catalogue {} version {} deja dans DB, skip.", info_catalogue.nom, info_catalogue.version);
+        return Ok(None)
+    }
+    // let version = match &doc_catalogue {
+    //     Some(d) => {
+    //         let version = d.get_str(CHAMP_VERSION)?;
+    //         // Verifier si la version recue est plus grande que celle sauvegardee
+    //         debug!("Version recue : {}, dans DB : {}", info_catalogue.version, version);
+    //
+    //         // Si version moins grande, on skip
+    //         if version == info_catalogue.version {
+    //             debug!("Meme version de catalogue, on skip");
+    //             return Ok(None)
+    //         }
+    //
+    //         Some(version)
+    //     },
+    //     None => None,
+    // };
 
     // Valider le catalogue
     let resultat_validation = unsafe {
@@ -543,20 +566,19 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages + VerificateurMessage
     };
 
     if resultat_validation.valide() {
-        debug!("Catalogue accepte - certificat valide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
+        debug!("traiter_commande_application Catalogue accepte - certificat valide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
         // Conserver la transaction et la traiter immediatement
-        let mva = MessageValideAction::new(
-            catalogue,
-            commande.q,
-            commande.routing_key,
-            DOMAINE_NOM.into(),
-            TRANSACTION_APPLICATION.into(),
-            TypeMessageOut::Transaction
-        );
-        sauvegarder_traiter_transaction(middleware, mva, gestionnaire).await?;
-
+        // let mva = MessageValideAction::new(
+        //     commande.message,
+        //     commande.q,
+        //     commande.routing_key,
+        //     DOMAINE_NOM.into(),
+        //     TRANSACTION_APPLICATION.into(),
+        //     TypeMessageOut::Transaction
+        // );
+        sauvegarder_traiter_transaction(middleware, commande, gestionnaire).await?;
     } else {
-        error!("Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
+        error!("traiter_commande_application Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
     }
 
     Ok(None)
@@ -582,13 +604,25 @@ async fn maj_catalogue<M>(middleware: &M, transaction: impl Transaction)
     -> Result<Option<MessageMilleGrille>, String>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Sauvegarder application recu via catalogue (transaction)");
+    debug!("maj_catalogue Sauvegarder application recu via catalogue (transaction)");
 
-    let catalogue: Catalogue = match transaction.convertir() {
+    // let catalogue: Catalogue = match transaction.convertir() {
+    //     Ok(inner) => inner,
+    //     Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur transaction.convertir {:?}", e))?
+    // };
+
+    let transaction_catalogue: MessageCatalogue = match transaction.convertir() {
         Ok(inner) => inner,
         Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur transaction.convertir {:?}", e))?
     };
+
+    let catalogue: Catalogue = match transaction_catalogue.catalogue.map_contenu() {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur catalogue map_contenu vers Catalogue {:?}", e))?
+    };
+
     let nom = catalogue.nom.clone();
+    let version = catalogue.version.clone();
     // let contenu = transaction.contenu();
     // let nom = match contenu.get_str("nom") {
     //     Ok(c) => Ok(c.to_owned()),
@@ -614,18 +648,28 @@ async fn maj_catalogue<M>(middleware: &M, transaction: impl Transaction)
         "$setOnInsert": {CHAMP_CREATION: Utc::now()},
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
-    let filtre = doc! {
-        "nom": nom,
-    };
 
-    let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
-    let opts = UpdateOptions::builder().upsert(true).build();
-    let resultat = match collection_catalogues.update_one(filtre, ops, Some(opts)).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("Erreur maj document catalogue avec mongo : {:?}", e))?
-    };
+    {
+        let collection_catalogues_versions = middleware.get_collection(NOM_COLLECTION_CATALOGUES_VERSIONS)?;
+        let filtre = doc! { CHAMP_NOM_CATALOGUE: &nom, CHAMP_VERSION: &version };
+        let opts = UpdateOptions::builder().upsert(true).build();
+        let resultat = match collection_catalogues_versions.update_one(filtre, ops.clone(), Some(opts)).await {
+            Ok(r) => r,
+            Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur maj document catalogue avec mongo : {:?}", e))?
+        };
+        debug!("Resultat maj catalogue_versions : {:?}", resultat);
+    }
 
-    debug!("Resultat maj document : {:?}", resultat);
+    {
+        let filtre = doc! { "nom": &nom };
+        let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
+        let opts = UpdateOptions::builder().upsert(true).build();
+        let resultat = match collection_catalogues.update_one(filtre, ops, Some(opts)).await {
+            Ok(r) => r,
+            Err(e) => Err(format!("Erreur maj document catalogue avec mongo : {:?}", e))?
+        };
+        debug!("Resultat maj catalogues : {:?}", resultat);
+    }
 
     Ok(None)
 }
