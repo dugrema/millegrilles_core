@@ -615,32 +615,39 @@ async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Resul
     };
 
     // Une erreur est survenue dans le post, fallback vers noeuds 4.secure (si presents)
-    debug!("Echec connexion a certissuer local, relai vers instances 4.secure");
-    let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, PKI_COMMANDE_SIGNER_CSR)
-        .exchanges(vec![Securite::L4Secure])
-        .build();
+    warn!("Echec connexion a certissuer local, relai vers instances 4.secure");
+    // let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, PKI_COMMANDE_SIGNER_CSR)
+    //     .exchanges(vec![Securite::L4Secure])
+    //     .build();
+    //
+    // let value: Value = commande.map_contenu()?;
+    //
+    // match middleware.transmettre_commande(routage, &value, true).await? {
+    //     Some(reponse) => {
+    //         if let TypeMessage::Valide(reponse) = reponse {
+    //             let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu()?;
+    //             Ok(Some(middleware.formatter_reponse(reponse_json, None)?))
+    //         } else {
+    //             error!("core_pki.commande_signer_csr Erreur signature, echec local et relai 4.secure");
+    //             Ok(Some(middleware.formatter_reponse(
+    //                 json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
+    //                 None
+    //             )?))
+    //         }
+    //     },
+    //     None => {
+    //         error!("core_pki.commande_signer_csr Erreur signature, aucune reponse");
+    //         Ok(Some(middleware.formatter_reponse(
+    //             json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
+    //             None
+    //         )?))
+    //     }
+    // }
 
-    match middleware.transmettre_commande(routage, &commande.contenu, true).await? {
-        Some(reponse) => {
-            if let TypeMessage::Valide(reponse) = reponse {
-                let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu()?;
-                Ok(Some(middleware.formatter_reponse(reponse_json, None)?))
-            } else {
-                error!("core_pki.commande_signer_csr Erreur signature, echec local et relai 4.secure");
-                Ok(Some(middleware.formatter_reponse(
-                    json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
-                    None
-                )?))
-            }
-        },
-        None => {
-            error!("core_pki.commande_signer_csr Erreur signature, aucune reponse");
-            Ok(Some(middleware.formatter_reponse(
-                json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
-                None
-            )?))
-        }
-    }
+    Ok(Some(middleware.formatter_reponse(
+        json!({"ok": false, "err": "Erreur signature : aucun signateur disponible ou refus"}),
+        None
+    )?))
 }
 
 async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageValideAction) -> Result<Option<Cow<'a, MessageMilleGrille>>, Box<dyn Error>>
