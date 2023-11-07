@@ -1284,6 +1284,7 @@ struct TransactionConfigurerConsignation {
     // SFTP
     hostname_sftp: Option<String>,
     username_sftp: Option<String>,
+    port_sftp: Option<u16>,
     remote_path_sftp: Option<String>,
     key_type_sftp: Option<String>,
     // AWS S3
@@ -1295,10 +1296,12 @@ struct TransactionConfigurerConsignation {
     // Backup
     type_backup: Option<String>,
     hostname_sftp_backup: Option<String>,
-    port_sftp_backup: Option<String>,
+    port_sftp_backup: Option<u16>,
     username_sftp_backup: Option<String>,
     remote_path_sftp_backup: Option<String>,
     key_type_sftp_backup: Option<String>,
+    backup_intervalle_secs: Option<i64>,
+    backup_limit_bytes: Option<i64>,
 }
 
 async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
@@ -1310,7 +1313,7 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
         Ok(t) => t,
         Err(e) => Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
     };
-    debug!("transaction_configurer_consignation Set fichiers primaire : {:?}", transaction);
+    debug!("transaction_configurer_consignation Transaction : {:?}", transaction);
 
     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
 
@@ -1336,6 +1339,16 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
         None => true
     };
 
+    let port_sftp = match transaction.port_sftp {
+        Some(inner) => Some(inner as i64),
+        None => None,
+    };
+
+    let port_sftp_backup = match transaction.port_sftp_backup {
+        Some(inner) => Some(inner as i64),
+        None => None,
+    };
+
     let set_ops = doc! {
         "type_store": transaction.type_store,
         "url_download": transaction.url_download,
@@ -1345,6 +1358,7 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
         "sync_actif": sync_actif,
         "supporte_archives": supporte_archives,
         "data_chiffre": data_chiffre,
+        "port_sftp": port_sftp,
         "hostname_sftp": transaction.hostname_sftp,
         "username_sftp": transaction.username_sftp,
         "remote_path_sftp": transaction.remote_path_sftp,
@@ -1355,9 +1369,12 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
         "s3_bucket": transaction.s3_bucket,
         "type_backup": transaction.type_backup,
         "hostname_sftp_backup": transaction.hostname_sftp_backup,
+        "port_sftp_backup": port_sftp_backup,
         "username_sftp_backup": transaction.username_sftp_backup,
         "remote_path_sftp_backup": transaction.remote_path_sftp_backup,
         "key_type_sftp_backup": transaction.key_type_sftp_backup,
+        "backup_intervalle_secs": transaction.backup_intervalle_secs,
+        "backup_limit_bytes": transaction.backup_limit_bytes,
     };
 
     let ops = doc! {
@@ -2680,6 +2697,8 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
         "username_sftp_backup": 1,
         "remote_path_sftp_backup": 1,
         "key_type_sftp_backup": 1,
+        "backup_intervalle_secs": 1,
+        "backup_limit_bytes": 1,
     };
 
     if let Some(true) = requete.stats {
@@ -2884,6 +2903,8 @@ pub struct ReponseConsignationSatellite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostname_sftp: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub port_sftp: Option<u16>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub username_sftp: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_path_sftp: Option<String>,
@@ -2905,13 +2926,17 @@ pub struct ReponseConsignationSatellite {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hostname_sftp_backup: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub port_sftp_backup: Option<String>,
+    pub port_sftp_backup: Option<u16>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username_sftp_backup: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remote_path_sftp_backup: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key_type_sftp_backup: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backup_intervalle_secs: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub backup_limit_bytes: Option<usize>,
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal: Option<PresenceFichiersRepertoire>,
