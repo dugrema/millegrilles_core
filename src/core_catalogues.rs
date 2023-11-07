@@ -686,6 +686,7 @@ struct CatalogueDependance {
 struct CatalogueApplicationDeps {
     nom: String,
     version: String,
+    securite: Option<String>,
     dependances: Option<Vec<CatalogueDependance>>,
 }
 
@@ -703,6 +704,7 @@ async fn liste_applications<M>(middleware: &M)
     let projection = doc!{
         "nom": true,
         "version": true,
+        "securite": true,
         "dependances.name": true,
         "dependances.image": true,
     };
@@ -745,6 +747,7 @@ async fn liste_versions_application<M>(middleware: &M, message: MessageValideAct
         "version": true,
         "dependances.name": true,
         "dependances.image": true,
+        "securite": true,
     };
 
     let collection = middleware.get_collection_typed::<CatalogueApplicationDeps>(NOM_COLLECTION_CATALOGUES_VERSIONS)?;
