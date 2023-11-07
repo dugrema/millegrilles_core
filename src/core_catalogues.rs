@@ -47,6 +47,7 @@ const NOM_Q_TRIGGERS: &str = "CoreCatalogues/triggers";
 
 const REQUETE_INFO_APPLICATION: &str = "infoApplication";
 const REQUETE_LISTE_APPLICATIONS: &str = "listeApplications";
+const REQUETE_VERSIONS_APPLICATION: &str = "listeVersionsApplication";
 const TRANSACTION_APPLICATION: &str = "catalogueApplication";
 
 const INDEX_NOMS_CATALOGUES: &str = "noms_catalogues";
@@ -156,7 +157,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     // RK 3.protege seulement
-    let requetes = vec![REQUETE_INFO_APPLICATION, REQUETE_LISTE_APPLICATIONS];
+    let requetes = vec![REQUETE_INFO_APPLICATION, REQUETE_LISTE_APPLICATIONS, REQUETE_VERSIONS_APPLICATION];
     for req in requetes {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
     }
@@ -339,6 +340,7 @@ where
         DOMAINE_NOM => {
             match message.action.as_str() {
                 REQUETE_LISTE_APPLICATIONS => liste_applications(middleware).await,
+                REQUETE_VERSIONS_APPLICATION => liste_versions_application(middleware, message).await,
                 REQUETE_INFO_APPLICATION => repondre_application(middleware, message.message.get_msg()).await,
                 _ => {
                     error!("Message action inconnue : '{}'. Message dropped.", message.action);
@@ -718,31 +720,50 @@ async fn liste_applications<M>(middleware: &M)
     while let Some(row) = curseur.next().await {
         let catalogue = row?;
         apps.push(catalogue);
-        // match d {
-        //     Ok(mut doc) => {
-        //         filtrer_doc_id(&mut doc);
-        //
-        //         match convertir_bson_value(doc) {
-        //             Ok(v) => apps.push(v),
-        //             Err(e) => warn!("Erreur conversion doc vers json : {:?}", e)
-        //         }
-        //
-        //     },
-        //     Err(e) => warn!("Erreur chargement document : {:?}", e)
-        // }
     }
 
     debug!("Apps : {:?}", apps);
     let reponse = ReponseListeApplications { ok: true, resultats: Some(apps) };
-    // let liste = json!({
-    //     "ok": true,
-    //     "resultats": apps,
-    // });
 
-    // let reponse = match middleware.formatter_reponse(&reponse,None) {
-    //     Ok(m) => m,
-    //     Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
-    // };
+    Ok(Some(middleware.formatter_reponse(&reponse,None)?))
+}
+
+#[derive(Deserialize)]
+struct RequeteVersionsApplication {
+    nom: String,
+}
+
+async fn liste_versions_application<M>(middleware: &M, message: MessageValideAction)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: GenerateurMessages + MongoDao
+{
+    let requete: RequeteVersionsApplication = message.message.parsed.map_contenu()?;
+
+    let filtre = doc! { "nom": &requete.nom };
+    let projection = doc!{
+        "nom": true,
+        "version": true,
+        "dependances.name": true,
+        "dependances.image": true,
+    };
+
+    let collection = middleware.get_collection_typed::<CatalogueApplicationDeps>(NOM_COLLECTION_CATALOGUES)?;
+    let ops = FindOptions::builder()
+        .projection(Some(projection))
+        .build();
+    let mut curseur = match collection.find(filtre, Some(ops)).await {
+        Ok(c) => c,
+        Err(e) => Err(format!("Erreur chargement applications : {:?}", e))?
+    };
+
+    let mut apps = Vec::new();
+    while let Some(row) = curseur.next().await {
+        let catalogue = row?;
+        apps.push(catalogue);
+    }
+
+    debug!("Apps : {:?}", apps);
+    let reponse = ReponseListeApplications { ok: true, resultats: Some(apps) };
 
     Ok(Some(middleware.formatter_reponse(&reponse,None)?))
 }
