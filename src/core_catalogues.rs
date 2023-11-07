@@ -747,7 +747,7 @@ async fn liste_versions_application<M>(middleware: &M, message: MessageValideAct
         "dependances.image": true,
     };
 
-    let collection = middleware.get_collection_typed::<CatalogueApplicationDeps>(NOM_COLLECTION_CATALOGUES)?;
+    let collection = middleware.get_collection_typed::<CatalogueApplicationDeps>(NOM_COLLECTION_CATALOGUES_VERSIONS)?;
     let ops = FindOptions::builder()
         .projection(Some(projection))
         .build();
