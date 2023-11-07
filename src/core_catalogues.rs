@@ -674,6 +674,25 @@ async fn maj_catalogue<M>(middleware: &M, transaction: impl Transaction)
     Ok(None)
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CatalogueDependance {
+    name: Option<String>,
+    image: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CatalogueApplicationDeps {
+    nom: String,
+    version: String,
+    dependances: Option<Vec<CatalogueDependance>>,
+}
+
+#[derive(Serialize)]
+struct ReponseListeApplications {
+    ok: bool,
+    resultats: Option<Vec<CatalogueApplicationDeps>>
+}
+
 async fn liste_applications<M>(middleware: &M)
     -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -682,11 +701,11 @@ async fn liste_applications<M>(middleware: &M)
     let projection = doc!{
         "nom": true,
         "version": true,
-        "images": true,
-        "registries": true,
+        "dependances.name": true,
+        "dependances.image": true,
     };
 
-    let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
+    let collection = middleware.get_collection_typed::<CatalogueApplicationDeps>(NOM_COLLECTION_CATALOGUES)?;
     let ops = FindOptions::builder()
         .projection(Some(projection))
         .build();
@@ -696,31 +715,36 @@ async fn liste_applications<M>(middleware: &M)
     };
 
     let mut apps = Vec::new();
-    while let Some(d) = curseur.next().await {
-        match d {
-            Ok(mut doc) => {
-                filtrer_doc_id(&mut doc);
-
-                match convertir_bson_value(doc) {
-                    Ok(v) => apps.push(v),
-                    Err(e) => warn!("Erreur conversion doc vers json : {:?}", e)
-                }
-
-            },
-            Err(e) => warn!("Erreur chargement document : {:?}", e)
-        }
+    while let Some(row) = curseur.next().await {
+        let catalogue = row?;
+        apps.push(catalogue);
+        // match d {
+        //     Ok(mut doc) => {
+        //         filtrer_doc_id(&mut doc);
+        //
+        //         match convertir_bson_value(doc) {
+        //             Ok(v) => apps.push(v),
+        //             Err(e) => warn!("Erreur conversion doc vers json : {:?}", e)
+        //         }
+        //
+        //     },
+        //     Err(e) => warn!("Erreur chargement document : {:?}", e)
+        // }
     }
 
     debug!("Apps : {:?}", apps);
-    let liste = json!({
-        "resultats": apps,
-    });
+    let reponse = ReponseListeApplications { ok: true, resultats: Some(apps) };
+    // let liste = json!({
+    //     "ok": true,
+    //     "resultats": apps,
+    // });
 
-    let reponse = match middleware.formatter_reponse(&liste,None) {
-        Ok(m) => m,
-        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
-    };
-    Ok(Some(reponse))
+    // let reponse = match middleware.formatter_reponse(&reponse,None) {
+    //     Ok(m) => m,
+    //     Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
+    // };
+
+    Ok(Some(middleware.formatter_reponse(&reponse,None)?))
 }
 
 #[derive(Deserialize)]
