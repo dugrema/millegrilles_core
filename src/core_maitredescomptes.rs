@@ -96,6 +96,9 @@ const TRANSACTION_SUPPRIMER_CLES: &str = "supprimerCles";
 const TRANSACTION_RESET_WEBAUTHN_USAGER: &str = "resetWebauthnUsager";
 
 const EVENEMENT_EVICT_USAGER: &str = "evictUsager";
+const EVENEMENT_MAJ_COMPTE_USAGER: &str = "majCompteUsager";
+const EVENEMENT_INSCRIRE_COMPTE_USAGER: &str = "inscrireCompteUsager";
+const EVENEMENT_SUPPRIMER_COMPTE_USAGER: &str = "supprimerCompteUsager";
 
 const INDEX_ID_USAGER: &str = "idusager_unique";
 const INDEX_NOM_USAGER: &str = "nomusager_unique";
@@ -670,7 +673,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
     if m.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege)) {
         // Actions autorisees pour echanges prives
         match m.action.as_str() {
-            TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m).await,
+            TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m, gestionnaire).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
 
@@ -1296,6 +1299,7 @@ struct MessageAuthentificationClient {}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RequeteListeUsagers {
     liste_userids: Option<Vec<String>>,
+    nom_masque_debut: Option<String>,
 }
 
 async fn liste_usagers<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -1613,10 +1617,11 @@ async fn ajouter_fingerprint_pk_usager<M,S,T>(middleware: &M, user_id: S, finger
     Ok(())
 }
 
-async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
+async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineMaitreDesComptes)
+    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud + VerificateurMessage
 {
-    debug!("Consommer inscrire_usager : {:?}", &message.message);
+    debug!("inscrire_usager Consommer inscrire_usager : {:?}", &message.message);
     let transaction: TransactionInscrireUsager = message.message.get_msg().map_contenu()?;
     let nom_usager = transaction.nom_usager.as_str();
 
@@ -1626,16 +1631,16 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Res
     let doc_usager = collection.find_one(filtre, None).await?;
     let reponse = match doc_usager {
         Some(d) => {
-            debug!("Usager {} existe deja : {:?}, on skip", nom_usager, d);
+            debug!("inscrire_usager Usager {} existe deja : {:?}, on skip", nom_usager, d);
             let val = json!({"ok": false, "err": format!("Usager {} existe deja", nom_usager)});
             match middleware.formatter_reponse(&val,None) {
                 Ok(m) => Ok(Some(m)),
-                Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))
+                Err(e) => Err(format!("inscrire_usager Erreur preparation reponse liste_usagers : {:?}", e))
             }
         },
         None => {
             let uuid_transaction = message.message.parsed.id.as_str();
-            debug!("L'usager '{}' n'existe pas, on genere un certificat", nom_usager);
+            debug!("inscrire_usager L'usager '{}' n'existe pas, on genere un certificat", nom_usager);
             let user_id = &transaction.user_id;
             let securite = &transaction.securite;
 
@@ -1645,11 +1650,11 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Res
                     let fingerprint_pk = match csr_calculer_fingerprintpk(csr.as_str()) {
                         Ok(fp) => fp,
                         Err(e) => {
-                            error!("Erreur calcul fingerprint_pk du csr : {:?}", e);
+                            error!("inscrire_usager Erreur calcul fingerprint_pk du csr : {:?}", e);
                             let val = json!({"ok": false, "err": format!("Erreur calcul fingerprint_pk du csr")});
                             return match middleware.formatter_reponse(&val,None) {
                                 Ok(m) => Ok(Some(m)),
-                                Err(e) => Err(format!("Erreur preparation reponse csr manquant : {:?}", e))?
+                                Err(e) => Err(format!("inscrire_usager Erreur preparation reponse csr manquant : {:?}", e))?
                             }
                         }
                     };
@@ -1662,15 +1667,21 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction) -> Res
                     let val = json!({"ok": false, "err": format!("Requete sans CSR")});
                     return match middleware.formatter_reponse(&val,None) {
                         Ok(m) => Ok(Some(m)),
-                        Err(e) => Err(format!("Erreur preparation reponse csr manquant : {:?}", e))?
+                        Err(e) => Err(format!("inscrire_usager Erreur preparation reponse csr manquant : {:?}", e))?
                     }
                 }
             };
 
             sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
-            let transaction: TransactionImpl = message.clone().try_into()?;
-            let resultat_inscrire_usager = sauvegarder_inscrire_usager(middleware, transaction).await?;
-            marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction, EtatTransaction::Complete).await?;
+            let resultat_inscrire_usager = sauvegarder_traiter_transaction(
+                middleware, message, gestionnaire).await?;
+
+            if let Err(e) = emettre_maj_compte_usager(middleware, user_id, Some(EVENEMENT_INSCRIRE_COMPTE_USAGER)).await {
+                warn!("Erreur emission evenement inscription usager : {:?}", e);
+            }
+            // let transaction: TransactionImpl = message.clone().try_into()?;
+            // let resultat_inscrire_usager = sauvegarder_inscrire_usager(middleware, transaction).await?;
+            // marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, uuid_transaction, EtatTransaction::Complete).await?;
 
             // let reponse = match certificat {
             //     Some(inner) => Some(inner),
@@ -1732,6 +1743,10 @@ async fn sauvegarder_inscrire_usager<M, T>(middleware: &M, transaction: T)
         Err(e) => Err(format!("Erreur update db sauvegarder_inscrire_usager : {:?}", e))?
     };
     debug!("Resultat sauvegarder_inscrire_usager : {:?}", resultat);
+
+    if let Err(e) = emettre_maj_compte_usager(middleware, user_id, None).await {
+        warn!("commande_maj_usager_delegations Erreur emission evenement maj : {:?}", e);
+    }
 
     let reponse = json!({"ok": true, "userId": user_id});
     match middleware.formatter_reponse(&reponse,None) {
@@ -3307,6 +3322,10 @@ pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: Message
         None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
     };
 
+    if let Err(e) = emettre_maj_compte_usager(middleware, &commande.user_id, None).await {
+        warn!("commande_maj_usager_delegations Erreur emission evenement maj : {:?}", e);
+    }
+
     Ok(Some(middleware.formatter_reponse(&reponse, None)?))
 }
 
@@ -3462,6 +3481,43 @@ fn generer_token_compte<M,S>(middleware: &M, user_id: S) -> Result<MessageMilleG
 struct ReponseCertificatSigne {
     ok: bool,
     certificat: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct EvenementMajCompteUsager {
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+    #[serde(rename="userId")]
+    user_id: String,
+    compte_prive: Option<bool>,
+    delegation_globale: Option<String>,
+}
+
+async fn emettre_maj_compte_usager<M,S>(middleware: &M, user_id: S, action: Option<&str>)
+    -> Result<(), Box<dyn Error>>
+    where
+        M: GenerateurMessages + MongoDao,
+        S: AsRef<str>
+{
+    let user_id = user_id.as_ref();
+    let action = match action {
+        Some(inner) => inner,
+        None => EVENEMENT_MAJ_COMPTE_USAGER
+    };
+
+    let filtre = doc! {CHAMP_USER_ID: user_id};
+    let collection = middleware.get_collection_typed::<EvenementMajCompteUsager>(NOM_COLLECTION_USAGERS)?;
+    if let Some(compte) = collection.find_one(filtre, None).await? {
+        debug!("emettre_maj_compte_usager compte : {:?}", compte);
+        let mut routage_builder = RoutageMessageAction::builder(DOMAINE_NOM, action)
+            .exchanges(vec![Securite::L3Protege]);
+        // if partition {
+        //     routage_builder = routage_builder.partition(&compte.user_id);
+        // }
+        let routage = routage_builder.build();
+        middleware.emettre_evenement(routage, &compte).await?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
