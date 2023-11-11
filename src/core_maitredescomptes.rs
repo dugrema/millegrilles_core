@@ -75,6 +75,7 @@ const REQUETE_USERID_PAR_NOMUSAGER: &str = "getUserIdParNomUsager";
 const REQUETE_GET_CSR_RECOVERY_PARCODE: &str = "getCsrRecoveryParcode";
 const REQUETE_LISTE_PROPRIETAIRES: &str = "getListeProprietaires";
 const REQUETE_COOKIE_USAGER: &str = "getCookieUsager";
+const REQUETE_WEBAUTHN_USAGER: &str = "getWebauthnUsager";
 // const REQUETE_GET_TOKEN_SESSION: &str = "getTokenSession";
 
 // const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
@@ -119,6 +120,7 @@ const CHAMP_WEBAUTHN: &str = "webauthn";
 const CHAMP_WEBAUTHN_HOSTNAMES: &str = "webauthn_hostnames";
 const CHAMP_CODE: &str = "code";
 const CHAMP_TYPE_CHALLENGE_WEBAUTHN: &str = "type_challenge";
+const CHAMP_DERNIER_AUTH: &str = "dernier_auth";
 
 const DELEGATION_PROPRIETAIRE: &str = "proprietaire";
 
@@ -239,6 +241,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     let requetes_privee: Vec<&str> = vec![
         REQUETE_GET_CSR_RECOVERY_PARCODE,
+        REQUETE_WEBAUTHN_USAGER,
     ];
     for req in requetes_privee {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
@@ -1866,7 +1869,7 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     let idmg = middleware.idmg();
     let commande: CommandeAuthentificationUsager = message.message.get_msg().map_contenu()?;
 
-    let doc_webauth_state= match charger_challenge_authentification(
+    let doc_webauth_state = match charger_challenge_authentification(
         middleware, &commande.user_id, &commande.hostname, &commande.challenge).await
     {
         Ok(inner) => inner,
@@ -1897,7 +1900,9 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     };
 
     // Verifier authentification
-    let reg = commande.commande_webauthn.webauthn.try_into()?;
+    let reg: PublicKeyCredential = commande.commande_webauthn.webauthn.try_into()?;
+    let cred_id = reg.id.clone();
+    debug!("commande_authentifier_usager Cred id : {}", cred_id);
     let resultat = match verifier_challenge_authentification(
         &commande.hostname, idmg, reg, passkey_authentication.try_into()?
     ) {
@@ -1911,14 +1916,28 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
     debug!("commande_authentifier_webauthn Resultat webauth OK : {:?}", resultat);
 
     // Supprimer challenge pour eviter reutilisation
-    let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
-    let filtre = doc! {
-        CHAMP_USER_ID: &commande.user_id,
-        "hostname": &commande.hostname,
-        "type_challenge": "authentication",
-        "challenge": &commande.challenge,
-    };
-    collection.delete_one(filtre, None).await?;
+    {
+        let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+        let filtre = doc! {
+            CHAMP_USER_ID: &commande.user_id,
+            "hostname": &commande.hostname,
+            "type_challenge": "authentication",
+            "challenge": &commande.challenge,
+        };
+        collection.delete_one(filtre, None).await?;
+    }
+
+    // Conserver dernier acces pour la passkey
+    {
+        let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+        let filtre = doc! {
+            CHAMP_USER_ID: &commande.user_id,
+            "hostname": &commande.hostname,
+            "passkey.cred.cred_id": cred_id,
+        };
+        let ops = doc! { "$set": { CHAMP_DERNIER_AUTH: Utc::now() } };
+        collection.update_one(filtre, ops, None).await?;
+    }
 
     let mut reponse_ok = json!({
         "ok": true,
