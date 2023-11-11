@@ -3067,11 +3067,11 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
 async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
 {
-    debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
+    debug!("commande_reset_webauthn_usager Consommer commande : {:?}", &message.message);
     // Verifier autorisation
     if !message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+        debug!("commande_reset_webauthn_usager autorisation acces refuse : {:?}", err);
         match middleware.formatter_reponse(&err, None) {
             Ok(m) => return Ok(Some(m)),
             Err(e) => Err(format!("Erreur preparation reponse (1) ajouter_delegation_signee : {:?}", e))?
@@ -3079,7 +3079,7 @@ async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &Gestio
     }
 
     // Valider contenu en faisant le mapping
-    let _commande_resultat: CommandeResetWebauthnUsager = match message.message.get_msg().map_contenu() {
+    let commande_resultat: CommandeResetWebauthnUsager = match message.message.get_msg().map_contenu() {
         Ok(c) => c,
         Err(e) => {
             let reponse = json!({"ok": false, "code": 2, "err": format!("Format de la commande invalide : {:?}", e)});
@@ -3087,7 +3087,41 @@ async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &Gestio
         }
     };
 
-    Ok(sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?)
+    let user_id = commande_resultat.user_id.as_str();
+
+    // Executer la transaction. S'occupe des elements persistants (cles webauthn)
+    let resultat_transaction = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
+
+    // Traiter les elements volatils (activations, cookies)
+
+    if let Some(true) = commande_resultat.reset_webauthn {
+        // Supprimer activations
+        let filtre = doc! { CHAMP_USER_ID: user_id };
+        let collection = middleware.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
+        if let Err(e) = collection.delete_many(filtre, None).await {
+            Err(format!("commande_reset_webauthn_usager Erreur delete_many activations {:?} : {:?}", commande_resultat, e))?
+        }
+    }
+
+    if let Some(true) = commande_resultat.evict_all_sessions {
+        // Supprimer les cookies de sessions longue duree, emettre evenement evict
+        {
+            let filtre = doc! { "user_id": user_id };
+            let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
+            if let Err(e) = collection.delete_many(filtre, None).await {
+                Err(format!("commande_reset_webauthn_usager Erreur delete_many cookies {:?} : {:?}", commande_resultat, e))?
+            }
+        }
+
+        // Emettre message pour fermer toutes les sessions en cours de l'usager
+        let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_EVICT_USAGER)
+            .exchanges(vec![L2Prive])
+            .build();
+        let message = json!({CHAMP_USER_ID: user_id});
+        middleware.emettre_evenement(routage, &message).await?;
+    }
+
+    Ok(resultat_transaction)
 }
 
 async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction: T)
@@ -3182,45 +3216,22 @@ async fn transaction_reset_webauthn_usager<M, T>(middleware: &M, transaction: T)
 {
     let commande: CommandeResetWebauthnUsager = match transaction.clone().convertir() {
         Ok(t) => t,
-        Err(e) => Err(format!("Erreur conversion en CommandeResetWebauthnUsager : {:?}", e))?
+        Err(e) => Err(format!("transaction_reset_webauthn_usager Erreur conversion en CommandeResetWebauthnUsager : {:?}", e))?
     };
 
     debug!("transaction_reset_webauthn_usager {:?}", commande);
 
-    if let Some(evict) = commande.evict_all_sessions {
-        if evict {
-            // Emettre message pour fermer toutes les sessions en cours de l'usager
-            let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_EVICT_USAGER)
-                .exchanges(vec![L2Prive])
-                .build();
-            let message = json!({CHAMP_USER_ID: &commande.user_id});
-            middleware.emettre_evenement(routage, &message).await?;
+    if let Some(true) = commande.reset_webauthn {
+        // Supprimer cles webauthn et activations
+
+        let filtre = doc! { CHAMP_USER_ID: commande.user_id.as_str() };
+        let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+        if let Err(e) = collection.delete_many(filtre.clone(), None).await {
+            Err(format!("transaction_reset_webauthn_usager Erreur delete_many webauthn {:?} : {:?}", commande, e))?
         }
     }
 
-    // Le filtre agit a la fois sur le nom usager (valide par la cle) et le user_id (valide par serveur)
-    let filtre = doc! {
-        CHAMP_USER_ID: commande.user_id.as_str(),
-    };
-    let mut unset_opts = doc! {};
-    if let Some(r) = commande.reset_webauthn { if(r) { unset_opts.insert(CHAMP_WEBAUTHN, true); } }
-    if let Some(r) = commande.reset_activations { if(r) { unset_opts.insert(CHAMP_ACTIVATIONS_PAR_FINGERPRINT_PK, true); } }
-    let ops = doc! {
-        "$unset": unset_opts,
-        "$currentDate": { CHAMP_MODIFICATION: true }
-    };
-
-    let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    let resultat = match collection.update_one(filtre, ops, None).await {
-        Ok(r) => r,
-        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", commande, e))?
-    };
-    debug!("transaction_reset_webauthn_usager resultat {:?}", resultat);
-    if resultat.matched_count == 1 {
-        Ok(None)
-    } else {
-        Err(format!("transaction_reset_webauthn_usager Aucun match pour usager {:?}", commande))
-    }
+    middleware.reponse_ok()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3229,8 +3240,6 @@ struct CommandeResetWebauthnUsager {
     user_id: String,
     #[serde(rename="resetWebauthn")]
     reset_webauthn: Option<bool>,
-    #[serde(rename="resetActivations")]
-    reset_activations: Option<bool>,
     #[serde(rename="evictAllSessions")]
     evict_all_sessions: Option<bool>,
 }
