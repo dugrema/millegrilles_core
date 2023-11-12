@@ -1494,12 +1494,66 @@ struct RowWebauthnCredentials {
     passkey: PasskeyAuthenticationCred,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+struct RowCookieInfo {
+    user_id: String,
+    hostname: String,
+    expiration: i64,
+    #[serde(rename="_mg-creation")]
+    date_creation: Option<millegrilles_common_rust::bson::DateTime>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RowActivationInfo {
+    #[serde(rename="userId")]
+    user_id: String,
+    fingerprint_pk: String,
+    #[serde(rename="_mg-creation")]
+    date_creation: millegrilles_common_rust::bson::DateTime,
+}
+
 #[derive(Serialize)]
 struct PasskeyResponse {
     cred_id: String,
     hostname: String,
     date_creation: DateEpochSeconds,
     dernier_auth: Option<DateEpochSeconds>,
+}
+
+#[derive(Serialize)]
+struct CookieReponse {
+    hostname: String,
+    expiration: DateEpochSeconds,
+    date_creation: Option<DateEpochSeconds>,
+}
+
+impl From<RowCookieInfo> for CookieReponse {
+    fn from(value: RowCookieInfo) -> Self {
+        let date_creation = match value.date_creation {
+            Some(inner) => Some(DateEpochSeconds::from_i64(inner.timestamp_millis()/1000)),
+            None => None
+        };
+        Self {
+            hostname: value.hostname,
+            expiration: DateEpochSeconds::from_i64(value.expiration),
+            date_creation,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ActivationReponse {
+    fingerprint_pk: String,
+    date_creation: DateEpochSeconds,
+}
+
+impl From<RowActivationInfo> for ActivationReponse {
+    fn from(value: RowActivationInfo) -> Self {
+        Self {
+            fingerprint_pk: value.fingerprint_pk,
+            date_creation: DateEpochSeconds::from_i64(value.date_creation.timestamp_millis()/1000)
+        }
+    }
 }
 
 impl From<RowWebauthnCredentials> for PasskeyResponse {
@@ -1521,6 +1575,8 @@ impl From<RowWebauthnCredentials> for PasskeyResponse {
 struct GetPasskeysResponse {
     user_id: String,
     passkeys: Vec<PasskeyResponse>,
+    activations: Vec<ActivationReponse>,
+    cookies: Vec<CookieReponse>
 }
 
 async fn get_passkeys_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
@@ -1553,17 +1609,47 @@ async fn get_passkeys_usager<M>(middleware: &M, message: MessageValideAction) ->
     let filtre = doc! { CHAMP_USER_ID: &user_id };
     debug!("get_passkeys_usager Charger pour usager {:?}", filtre);
 
-    let collection = middleware.get_collection_typed::<RowWebauthnCredentials>(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
-    let mut curseur = collection.find(filtre, None).await?;
+    let passkeys = {
+        let mut passkeys = Vec::new();
+        let collection = middleware.get_collection_typed::<RowWebauthnCredentials>(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+        let mut curseur = collection.find(filtre.clone(), None).await?;
+        while let Some(cred) = curseur.next().await {
+            let cred = cred?;
+            debug!("get_passkeys_usager Cred : {:?}", cred);
+            passkeys.push(cred.into());
+        }
 
-    let mut passkeys = Vec::new();
-    while let Some(cred) = curseur.next().await {
-        let cred = cred?;
-        debug!("get_passkeys_usager Cred : {:?}", cred);
-        passkeys.push(cred.into());
-    }
+        passkeys
+    };
 
-    let reponse = GetPasskeysResponse { user_id: user_id.to_owned(), passkeys };
+    let activations: Vec<ActivationReponse> = {
+        let mut activations = Vec::new();
+        let collection = middleware.get_collection_typed::<RowActivationInfo>(NOM_COLLECTION_ACTIVATIONS)?;
+        let mut curseur = collection.find(filtre, None).await?;
+        while let Some(activation) = curseur.next().await {
+            let activation = activation?;
+            debug!("get_passkeys_usager Activation : {:?}", activation);
+            activations.push(activation.into());
+        }
+
+        activations
+    };
+
+    let cookies: Vec<CookieReponse> = {
+        let mut cookies = Vec::new();
+        let collection = middleware.get_collection_typed::<RowCookieInfo>(NOM_COLLECTION_COOKIES)?;
+        let filtre = doc! { "user_id": &user_id };
+        let mut curseur = collection.find(filtre, None).await?;
+        while let Some(cookie) = curseur.next().await {
+            let cookie = cookie?;
+            debug!("get_passkeys_usager Activation : {:?}", cookie);
+            cookies.push(cookie.into());
+        }
+
+        cookies
+    };
+
+    let reponse = GetPasskeysResponse { user_id: user_id.to_owned(), passkeys, activations, cookies };
 
     Ok(Some(middleware.formatter_reponse(&reponse, None)?))
 }
@@ -2139,7 +2225,14 @@ async fn creer_session_cookie<M,U,H>(middleware: &M, user_id: U, hostname: H, du
     let cookie = CookieSession::new(user_id.as_ref(), hostname.as_ref(), duree_session);
     let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
     let cookie_bson = convertir_to_bson(cookie.clone())?;
-    collection.insert_one(cookie_bson, None).await?;
+    // collection.insert_one(cookie_bson, None).await?;
+    let ops = doc!{
+        "$set": cookie_bson,
+        "$currentDate": { CHAMP_CREATION: true },
+    };
+    let options = UpdateOptions::builder().upsert(true).build();
+    let filtre = doc!{"challenge": &cookie.challenge};
+    collection.update_many(filtre, ops, options).await?;
     Ok(cookie)
 }
 
