@@ -75,7 +75,7 @@ const REQUETE_USERID_PAR_NOMUSAGER: &str = "getUserIdParNomUsager";
 const REQUETE_GET_CSR_RECOVERY_PARCODE: &str = "getCsrRecoveryParcode";
 const REQUETE_LISTE_PROPRIETAIRES: &str = "getListeProprietaires";
 const REQUETE_COOKIE_USAGER: &str = "getCookieUsager";
-const REQUETE_WEBAUTHN_USAGER: &str = "getWebauthnUsager";
+const REQUETE_PASSKEYS_USAGER: &str = "getPasskeysUsager";
 // const REQUETE_GET_TOKEN_SESSION: &str = "getTokenSession";
 
 // const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
@@ -241,7 +241,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 
     let requetes_privee: Vec<&str> = vec![
         REQUETE_GET_CSR_RECOVERY_PARCODE,
-        REQUETE_WEBAUTHN_USAGER,
+        REQUETE_PASSKEYS_USAGER,
     ];
     for req in requetes_privee {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L2Prive});
@@ -651,6 +651,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
                 REQUETE_GET_CSR_RECOVERY_PARCODE => get_csr_recovery_parcode(middleware, message).await,
                 REQUETE_LISTE_PROPRIETAIRES => get_liste_proprietaires(middleware, message).await,
                 REQUETE_COOKIE_USAGER => get_cookie_usager(middleware, message).await,
+                REQUETE_PASSKEYS_USAGER => get_passkeys_usager(middleware, message).await,
                 // REQUETE_GET_TOKEN_SESSION => get_token_session(middleware, message).await,
                 _ => {
                     error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
@@ -1464,6 +1465,107 @@ async fn get_cookie_usager<M>(middleware: &M, message: MessageValideAction) -> R
             }
         }
     }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RequeteGetPasskeysUsager {
+    #[serde(rename="userId")]
+    user_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct PasskeyAuthenticationCred2 {
+    cred_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct PasskeyAuthenticationCred {
+    cred: PasskeyAuthenticationCred2
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct RowWebauthnCredentials {
+    #[serde(rename="userId")]
+    user_id: String,
+    hostname: String,
+    #[serde(rename="_mg-creation")]
+    date_creation: millegrilles_common_rust::bson::DateTime,
+    dernier_auth: Option<millegrilles_common_rust::bson::DateTime>,
+    passkey: PasskeyAuthenticationCred,
+}
+
+#[derive(Serialize)]
+struct PasskeyResponse {
+    cred_id: String,
+    hostname: String,
+    date_creation: DateEpochSeconds,
+    dernier_auth: Option<DateEpochSeconds>,
+}
+
+impl From<RowWebauthnCredentials> for PasskeyResponse {
+    fn from(value: RowWebauthnCredentials) -> Self {
+        let dernier_auth = match value.dernier_auth {
+            Some(inner) => Some(DateEpochSeconds::from_i64(inner.timestamp_millis()/1000)),
+            None => None
+        };
+        Self {
+            cred_id: value.passkey.cred.cred_id,
+            hostname: value.hostname,
+            date_creation: DateEpochSeconds::from_i64(value.date_creation.timestamp_millis()/1000),
+            dernier_auth
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct GetPasskeysResponse {
+    user_id: String,
+    passkeys: Vec<PasskeyResponse>,
+}
+
+async fn get_passkeys_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("get_passkeys_usager Requete : {:?}", &message.message);
+
+    let user_id = match message.get_user_id() {
+        Some(inner) => inner,
+        None => {
+            let reponse = json!({"ok": false, "err": "User_id absent du certificat"});
+            match middleware.formatter_reponse(&reponse, None) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
+            }
+        }
+    };
+
+    let requete: RequeteGetPasskeysUsager = message.message.get_msg().map_contenu()?;
+
+    // Si l'usager est un propritaire, permettre de fournir le user_id
+    let user_id = match message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        true => match requete.user_id {
+            Some(inner) => inner,
+            None => user_id
+        },
+        false => user_id
+    };
+
+    let filtre = doc! { CHAMP_USER_ID: &user_id };
+    debug!("get_passkeys_usager Charger pour usager {:?}", filtre);
+
+    let collection = middleware.get_collection_typed::<RowWebauthnCredentials>(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+    let mut curseur = collection.find(filtre, None).await?;
+
+    let mut passkeys = Vec::new();
+    while let Some(cred) = curseur.next().await {
+        let cred = cred?;
+        debug!("get_passkeys_usager Cred : {:?}", cred);
+        passkeys.push(cred.into());
+    }
+
+    let reponse = GetPasskeysResponse { user_id: user_id.to_owned(), passkeys };
+
+    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
 }
 
 async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
