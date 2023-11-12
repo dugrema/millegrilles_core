@@ -3330,7 +3330,7 @@ async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &Gestio
 
         // Emettre message pour fermer toutes les sessions en cours de l'usager
         let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_EVICT_USAGER)
-            .exchanges(vec![L2Prive])
+            .exchanges(vec![L1Public])
             .build();
         let message = json!({CHAMP_USER_ID: user_id});
         middleware.emettre_evenement(routage, &message).await?;
