@@ -1573,6 +1573,7 @@ impl From<RowWebauthnCredentials> for PasskeyResponse {
 
 #[derive(Serialize)]
 struct GetPasskeysResponse {
+    ok: bool,
     user_id: String,
     passkeys: Vec<PasskeyResponse>,
     activations: Vec<ActivationReponse>,
@@ -1649,7 +1650,7 @@ async fn get_passkeys_usager<M>(middleware: &M, message: MessageValideAction) ->
         cookies
     };
 
-    let reponse = GetPasskeysResponse { user_id: user_id.to_owned(), passkeys, activations, cookies };
+    let reponse = GetPasskeysResponse { ok: true, user_id: user_id.to_owned(), passkeys, activations, cookies };
 
     Ok(Some(middleware.formatter_reponse(&reponse, None)?))
 }
