@@ -22,7 +22,7 @@ use millegrilles_common_rust::tokio::time::sleep;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::resoumettre_transactions;
 
-use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
+// use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
 // use crate::core_backup::GESTIONNAIRE_BACKUP;
 // use crate::core_catalogues::{NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues};
 use crate::core_catalogues::{GESTIONNAIRE_CATALOGUES, init_regles_validation as init_validation_catalogues};
@@ -60,7 +60,7 @@ pub async fn build() -> FuturesUnordered<JoinHandle<()>> {
     futures.extend( GESTIONNAIRE_MAITREDESCOMPTES.preparer_threads(middleware.clone()).await.expect("core pki") );
 
     // Preparer ceduleur (emet triggers a toutes les minutes)
-    futures.extend(preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur"));
+    // futures.extend(preparer_threads_ceduleur(middleware.clone()).await.expect("ceduleur"));
 
     // ** Thread d'entretien **
     futures.push(spawn(entretien(middleware.clone())));
