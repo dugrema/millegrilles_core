@@ -2980,6 +2980,7 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
     let user_id = transaction_contenu.user_id.as_str();
     let hostname = transaction_contenu.hostname.as_str();
     let webauthn_credential = transaction_contenu.passkey;
+    let cred_id = webauthn_credential.cred_id().to_string();
 
     let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
     if reset_cles {
@@ -2994,7 +2995,7 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
     let mut inserer = reset_cles;
     if ! inserer {
         // Verifier si la cle existe deja
-        let filtre = doc! {CHAMP_USER_ID: user_id, "hostname": hostname};
+        let filtre = doc! { CHAMP_USER_ID: user_id, "hostname": hostname, "passkey.cred.cred_id": cred_id};
         let resultat = match collection.count_documents(filtre, None).await {
             Ok(inner) => inner,
             Err(e) => Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur count cles existantes : {:?}", e))?
