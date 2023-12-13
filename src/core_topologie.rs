@@ -1571,6 +1571,7 @@ struct PresenceDomaine {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceMonitor {
     domaine: Option<String>,
+    domaines: Option<Vec<String>>,
     instance_id: String,
     services: Option<HashMap<String, InfoService>>,
     applications_configurees: Option<Vec<Value>>,
