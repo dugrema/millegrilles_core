@@ -1730,12 +1730,13 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct InformationMonitor {
-    domaine: Option<String>,
+    domaines: Option<Vec<String>>,
     instance_id: String,
     securite: Option<String>,
     onion: Option<String>,
     applications: Option<Vec<InformationApplication>>,
     applications_configurees: Option<Vec<ApplicationConfiguree>>,
+    date_presence: Option<DateEpochSeconds>,
 }
 
 impl InformationMonitor {
@@ -2285,7 +2286,7 @@ async fn produire_fiche_publique<M>(middleware: &M)
 async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePublique, Box<dyn Error>>
     where M: MongoDao + ValidateurX509 + ChiffrageFactoryTrait
 {
-    let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+    let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
 
     let filtre = doc! {};
     let mut curseur = collection.find(filtre, None).await?;
@@ -2293,18 +2294,76 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
     let chiffrage = get_cles_chiffrage(middleware).await;
 
     // let mut adresses = Vec::new();
+    let mut instances: HashMap<String, InformationInstance> = HashMap::new();
     let mut applications: HashMap<String, Vec<ApplicationPublique>> = HashMap::new();
+    let mut applications_v2: HashMap<String, ApplicationsV2> = HashMap::new();
 
-    while let Some(inst) = curseur.next().await {
-        let doc_instance = inst?;
-        let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
-        debug!("Information instance : {:?}", info_instance);
-        // if let Some(d) = &info_instance.domaine {
-        //     adresses.push(d.to_owned());
-        // }
-        // if let Some(o) = &info_instance.onion {
-        //     adresses.push(o.to_owned());
-        // }
+    let map_ports = {
+        let mut map_ports: HashMap<String, u16> = HashMap::new();
+        map_ports.insert("http".to_string(), 80);
+        map_ports.insert("https".to_string(), 443);
+        map_ports.insert("wss".to_string(), 443);
+        map_ports
+    };
+
+    while curseur.advance().await? {
+        let info_instance: InformationMonitor = curseur.deserialize_current()?;
+        // let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
+        debug!("generer_contenu_fiche_publique Information instance : {:?}", info_instance);
+
+        let securite_instance = match info_instance.securite.as_ref() {
+            Some(inner) => inner.as_str(),
+            None => {
+                info!("generer_contenu_fiche_publique Instance {} sans niveau de securite, on skip", info_instance.instance_id);
+                continue;
+            }
+        };
+
+        let securite = Securite::try_from(securite_instance)?;
+        match securite {
+            Securite::L4Secure => {
+                info!("generer_contenu_fiche_publique Instance {} 4.secure, skip pour fiche publique", securite_instance);
+                continue;
+            },
+            _ => ()
+        }
+
+        let domaines = match info_instance.domaines {
+            Some(inner) => {
+                if inner.len() == 0 {
+                    info!("generer_contenu_fiche_publique Instance {} n'as aucuns domaines, skip pour fiche publique (1)", info_instance.instance_id);
+                    continue;
+                }
+                inner
+            },
+            None => {
+                info!("generer_contenu_fiche_publique Instance {} n'as aucuns domaines, skip pour fiche publique (2)", info_instance.instance_id);
+                continue;
+            }
+        };
+
+        let presence_expiree = Utc::now() - Duration::from_secs(3600);
+        match info_instance.date_presence {
+            Some(inner) => {
+                if inner.get_datetime() < &presence_expiree {
+                    info!("generer_contenu_fiche_publique Instance {} expiree, skip", info_instance.instance_id);
+                    continue;
+                }
+            },
+            None => {
+                info!("generer_contenu_fiche_publique Instance {} sans date de presence, skip", info_instance.instance_id);
+                continue;
+            }
+        }
+
+        // Preparer partie de la fiche publique d'instance
+        let information_instance = InformationInstance {
+            ports: map_ports.clone(),
+            onion: None,
+            securite: securite_instance.to_owned(),
+            domaines: Some(domaines.clone())
+        };
+        instances.insert(info_instance.instance_id.clone(), information_instance);
 
         // Conserver la liste des applications/versions par nom d'application
         let mut app_versions = HashMap::new();
@@ -2317,19 +2376,91 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
         // Generer la liste des applications avec leur url
         if let Some(apps) = info_instance.applications {
             for app in apps {
-                match &app.securite {
+                let securite = match &app.securite {
                     Some(s) => {
-                        if s.as_str() != SECURITE_1_PUBLIC && s.as_str() != SECURITE_2_PRIVE {
-                            continue;  // Pas public ou prive, on skip l'application
+                        let securite = match Securite::try_from(s.as_str()) {
+                            Ok(inner) => inner,
+                            Err(e) => {
+                                warn!("generer_contenu_fiche_publique Securite app {} incorrecte : {:?}, skip", app.application, e);
+                                continue;
+                            }
+                        };
+                        match securite {
+                            Securite::L1Public | Securite::L2Prive => securite,
+                            _ => {
+                                debug!("generer_contenu_fiche_publique Securite app {} n'est pas 1 ou 2, skip", app.application);
+                                continue;
+                            }
                         }
                     }
                     None => continue  // On assume securite protege ou secure, skip
-                }
+                };
 
+                // V2
+                let mut application_v2 = match applications_v2.get_mut(&app.application) {
+                    Some(inner) => inner,
+                    None => {
+                        let label = match app.name_property.clone() {
+                            Some(inner) => {
+                                if Some(false) != app.supporte_usagers {
+                                    let mut label = HashMap::new();
+                                    label.insert("fr".to_string(), inner);
+                                    Some(label)
+                                } else {
+                                    None
+                                }
+                            },
+                            None => None
+                        };
+                        let mut app_v2 = ApplicationsV2 {
+                            instances: HashMap::new(),
+                            name: label,
+                            securite: securite.get_str().to_owned(),
+                            supporte_usager: None,
+                        };
+
+                        applications_v2.insert(app.application.clone(), app_v2);
+
+                        // Recuperer pointeur mut
+                        applications_v2.get_mut(&app.application).expect("app_v2")
+                    }
+                };
+
+                let pathname = {
+                    let pathname = match app.url.as_ref() {
+                        Some(inner) => match Url::parse(inner.as_str()) {
+                            Ok(url) => Some(url.path().to_owned()),
+                            Err(e) => {
+                                debug!("Erreur parse URL {:}", e);
+                                None
+                            }
+                        },
+                        None => None
+                    };
+
+                    match pathname {
+                        Some(inner) => inner,
+                        None => {
+                            // Utiliser pathname par defaut
+                            format!("/{}", &app.application)
+                        }
+                    }
+                };
+
+                let mut appv2_info = InformationApplicationInstance {
+                    pathname: format!("/{}", &app.application),
+                    port: None,
+                    version: "".to_string()
+                };
+
+                // V1
                 let mut app_publique: ApplicationPublique = app.clone().try_into()?;
                 let nom_app = app_publique.application.as_str();
                 if let Some(v) = app_versions.get(nom_app) {
                     app_publique.version = v.version.to_owned();
+                    if let Some(version) = v.version.as_ref() {
+                        appv2_info.version = version.to_owned();
+                    }
                 }
 
                 // Recuperer pointer mut pour vec applications. Creer si l'application n'existe pas deja.
@@ -2360,16 +2491,19 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
 
                     apps_mut.push(app_onion);
                 }
+
+                application_v2.instances.insert(info_instance.instance_id.clone(), appv2_info);
             }
         }
     }
 
     Ok(FichePublique {
-        // adresses: Some(adresses),
         applications: Some(applications),
+        applications_v2,
         chiffrage: Some(chiffrage),
         ca: Some(middleware.ca_pem().into()),
         idmg: middleware.idmg().into(),
+        instances,
     })
 }
 
@@ -2392,12 +2526,41 @@ async fn get_cles_chiffrage<M>(middleware: &M) -> Vec<Vec<String>>
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct InformationInstance {
+    domaines: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    onion: Option<Vec<String>>,
+    ports: HashMap<String, u16>,
+    securite: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct InformationApplicationInstance {
+    pathname: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    port: Option<u16>,
+    version: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct ApplicationsV2 {
+    instances: HashMap<String, InformationApplicationInstance>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<HashMap<String, String>>,
+    securite: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    supporte_usager: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct FichePublique {
-    // adresses: Option<Vec<String>>,
     applications: Option<HashMap<String, Vec<ApplicationPublique>>>,
+    #[serde(rename = "applicationsV2")]
+    applications_v2: HashMap<String, ApplicationsV2>,
     chiffrage: Option<Vec<Vec<String>>>,
     ca: Option<String>,
     idmg: String,
+    instances: HashMap<String, InformationInstance>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2493,8 +2656,8 @@ async fn produire_information_locale<M>(middleware: &M)
             let doc_instance = inst?;
             let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
             debug!("Information instance : {:?}", info_instance);
-            if let Some(d) = &info_instance.domaine {
-                adresses.push(d.to_owned());
+            if let Some(d) = &info_instance.domaines {
+                adresses.extend(d.iter().map(|d| d.to_owned()));
             }
         }
         adresses
@@ -2798,10 +2961,13 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
             let collection = middleware.get_collection(NOM_COLLECTION_INSTANCES)?;
             if let Some(doc_instance) = collection.find_one(filtre, None).await? {
                 let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
-                let mut domaines = Vec::new();
-                if let Some(inner) = info_instance.domaine {
-                    domaines.push(inner);
-                }
+                let mut domaines = match info_instance.domaines {
+                    Some(inner) => inner.clone(),
+                    None => Vec::new()
+                };
+                // if let Some(inner) = info_instance.domaine {
+                //     domaines.push(inner);
+                // }
                 if let Some(inner) = info_instance.onion {
                     domaines.push(inner);
                 }
