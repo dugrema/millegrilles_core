@@ -1607,35 +1607,61 @@ struct InfoService {
     replicas: Option<usize>,
 }
 
+#[derive(Serialize)]
+struct ReponseApplicationDeployee {
+    instance_id: String,
+    application: String,
+    securite: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    onion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name_property: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    supporte_usagers: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ReponseListeApplicationsDeployees {
+    ok: bool,
+    resultats: Vec<ReponseApplicationDeployee>,
+}
+
 async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideAction)
                                          -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    // Valider le niveau de securite
-    // let sec_enum_opt = match message.message.get_extensions() {
-    //     Some(extensions) => {
-    //         // Verifier le type de securite
-    //         match extensions.exchange_top() {
-    //             Some(sec) => Some(sec),
-    //             None => None
-    //         }
-    //     }
-    //     None => None,
-    // };
-    // let sec_cascade = match sec_enum_opt {
-    //     Some(s) => securite_cascade_public(&s),
-    //     None => {
-    //         // Aucun niveau de securite, abort
-    //         let reponse = match middleware.formatter_reponse(json!({"ok": false}), None) {
-    //             Ok(m) => m,
-    //             Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur preparation reponse applications : {:?}", e))?
-    //         };
-    //         return Ok(Some(reponse));
-    //     }
-    // };
+    // Recuperer instance_id
+    let certificat = match message.message.certificat {
+        Some(inner) => inner,
+        None => {
+            warn!("liste_applications_deployees Certificat absent du message");
+            let reponse = json!({"ok": false, "err": "Certificat absent du message"});
+            return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+        }
+    };
+    let instance_id = certificat.get_common_name()?;
+    let exchanges = certificat.get_exchanges()?;
+    debug!("liste_applications_deployees Instance_id {}, exchanges : {:?}", instance_id, exchanges);
+
+    let niveau_securite = if certificat.verifier_exchanges(vec![Securite::L3Protege]) {
+        Securite::L3Protege
+    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        Securite::L3Protege
+    } else if certificat.verifier_exchanges(vec![Securite::L2Prive]) {
+        Securite::L2Prive
+    } else if certificat.verifier_roles(vec![RolesCertificats::ComptePrive]) {
+        Securite::L2Prive
+    } else {
+        warn!("liste_applications_deployees Acces refuse, aucunes conditions d'acces du certificat pour liste apps");
+        let reponse = json!({"ok": false, "err": "Acces refuse"});
+        return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+    };
+    debug!("liste_applications_deployees Niveau de securite : {:?}", niveau_securite);
 
     // Retour de toutes les applications (maitrecomptes est toujours sur exchange 2.prive)
-    let sec_cascade = securite_cascade_public(Securite::L3Protege);
+    let sec_cascade = securite_cascade_public(niveau_securite);
 
     let mut curseur = {
         let filtre = doc! {};
@@ -1649,11 +1675,12 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
     };
 
     // Extraire liste d'applications
-    let mut apps = Vec::new();
+    let mut resultats = Vec::new();
     while let Some(d) = curseur.next().await {
         match d {
             Ok(mut doc) => {
                 let info_monitor: InformationMonitor = serde_json::from_value(serde_json::to_value(doc)?)?;
+                let instance_id = info_monitor.instance_id.as_str();
 
                 if let Some(applications) = info_monitor.applications {
                     for app in applications {
@@ -1679,37 +1706,25 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
                                     None => None
                                 };
 
-                                let mut info_app = json!({
-                                    "application": app.application.as_str(),
-                                    "securite": securite_str(&securite),
-                                    "url": url,
-                                    "onion": onion,
-                                });
-
-                                let mut info_app_doc = info_app.as_object_mut().expect("as_object_mut");
+                                let mut info_app = ReponseApplicationDeployee {
+                                    instance_id: instance_id.to_owned(),
+                                    application: app.application.clone(),
+                                    securite: securite.get_str().to_owned(),
+                                    url: Some(url.to_owned()),
+                                    onion: onion.to_owned(),
+                                    name_property: None,
+                                    supporte_usagers: None,
+                                };
 
                                 if let Some(p) = app.name_property.as_ref() {
-                                    info_app_doc.insert("name_property".to_string(), Value::String(p.into()));
+                                    info_app.name_property = Some(p.to_string());
                                 }
 
                                 if let Some(p) = app.supporte_usagers.as_ref() {
-                                    info_app_doc.insert("supporte_usagers".to_string(), Value::Bool(p.to_owned()));
+                                    info_app.supporte_usagers = Some(p.to_owned());
                                 }
 
-                                apps.push(info_app);
-
-                                // if let Some(onion) = info_monitor.onion.as_ref() {
-                                //     // Ajouter adresses .onion
-                                //     let mut url_onion = Url::parse(url.as_str())?;
-                                //     url_onion.set_host(Some(onion.as_str()));
-                                //     let info_app_onion = json!({
-                                //         "application": app.application.as_str(),
-                                //         "securite": securite_str(&securite),
-                                //         "url": url_onion.as_str(),
-                                //     });
-                                //
-                                //     apps.push(info_app_onion);
-                                // }
+                                resultats.push(info_app);
                             }
                         }
                     }
@@ -1719,8 +1734,11 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
         }
     }
 
-    debug!("Apps : {:?}", apps);
-    let liste = json!({"resultats": apps});
+    let liste = ReponseListeApplicationsDeployees {
+        ok: true,
+        resultats,
+    };
+
     let reponse = match middleware.formatter_reponse(&liste, None) {
         Ok(m) => m,
         Err(e) => Err(format!("core_topologie.liste_applications_deployees  Erreur preparation reponse applications : {:?}", e))?
