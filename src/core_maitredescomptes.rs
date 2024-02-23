@@ -3272,10 +3272,14 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
 
     // Charger le document de compte et retourner comme reponse
-    let reponse = match charger_compte_user_id(middleware, user_id).await? {
+    let reponse = match charger_compte_user_id(middleware, &user_id).await? {
         Some(compte) => serde_json::to_value(&compte)?,
         None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
     };
+
+    if let Err(e) = emettre_maj_compte_usager(middleware, user_id, None).await {
+        warn!("ajouter_delegation_signee Erreur emission evenement inscription usager : {:?}", e);
+    }
 
     Ok(Some(middleware.formatter_reponse(&reponse, None)?))
 }
@@ -3716,6 +3720,8 @@ struct EvenementMajCompteUsager {
     user_id: String,
     compte_prive: Option<bool>,
     delegation_globale: Option<String>,
+    delegations_version: Option<usize>,
+    delegations_date: Option<usize>,
 }
 
 async fn emettre_maj_compte_usager<M,S>(middleware: &M, user_id: S, action: Option<&str>)
@@ -3734,11 +3740,15 @@ async fn emettre_maj_compte_usager<M,S>(middleware: &M, user_id: S, action: Opti
     let collection = middleware.get_collection_typed::<EvenementMajCompteUsager>(NOM_COLLECTION_USAGERS)?;
     if let Some(compte) = collection.find_one(filtre, None).await? {
         debug!("emettre_maj_compte_usager compte : {:?}", compte);
-        let mut routage_builder = RoutageMessageAction::builder(DOMAINE_NOM, action)
+        let routage_builder = RoutageMessageAction::builder(DOMAINE_NOM, action)
             .exchanges(vec![Securite::L3Protege]);
-        // if partition {
-        //     routage_builder = routage_builder.partition(&compte.user_id);
-        // }
+        let routage = routage_builder.build();
+        middleware.emettre_evenement(routage, &compte).await?;
+
+        // Emettre message pour l'usager (e.g. maitredescomptes)
+        let routage_builder = RoutageMessageAction::builder(DOMAINE_NOM, action)
+            .partition(&compte.user_id)
+            .exchanges(vec![Securite::L2Prive]);
         let routage = routage_builder.build();
         middleware.emettre_evenement(routage, &compte).await?;
     }
