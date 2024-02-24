@@ -1036,17 +1036,24 @@ async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &Compte
         credentials.push(cred);
     }
 
-    if credentials.len() == 0 {
+    let doc_challenge = if credentials.len() == 0 {
         debug!("preparer_authentification_webauthn Aucuns credentials webauthn pour {}/{}", user_id, hostname);
-        return Ok(None);
-    }
+        let valeur_challenge =  {
+            let mut buffer_random = [0u8; 32];
+            openssl::rand::rand_bytes(&mut buffer_random).expect("rand");
+            let challenge = buffer_random.to_vec();
+            Base64UrlSafeData::from(challenge)
+        };
+        DocChallenge::new_challenge_generique(user_id, hostname, valeur_challenge, "generique")
 
-    let (challenge, passkey_authentication) = generer_challenge_authentification(
-        hostname, idmg, credentials)?;
+    } else {
+        let (challenge, passkey_authentication) = generer_challenge_authentification(
+            hostname, idmg, credentials)?;
+
+        DocChallenge::new_challenge_authentication(user_id, hostname, challenge, passkey_authentication)
+    };
 
     // Sauvegarder challenge
-    let doc_challenge = DocChallenge::new_challenge_authentication(
-        user_id, hostname, challenge, passkey_authentication);
     let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
     let doc_passkey = convertir_to_bson(&doc_challenge)?;
     collection.insert_one(doc_passkey, None).await?;
@@ -1086,6 +1093,7 @@ struct ReponseChargerUsager {
     err: Option<String>,
     compte: Option<CompteUsager>,
     activations: Option<HashMap<String, DocActivationFingerprintPkUsager>>,
+    generic_challenge: Option<String>,
     registration_challenge: Option<CreationChallengeResponse>,
     authentication_challenge: Option<RequestChallengeResponse>,
     passkey_authentication: Option<PasskeyAuthentication>,
@@ -1098,6 +1106,7 @@ impl From<CompteUsager> for ReponseChargerUsager {
             err: None,
             compte: Some(value),
             activations: None,
+            generic_challenge: None,
             registration_challenge: None,
             authentication_challenge: None,
             passkey_authentication: None,
@@ -1114,6 +1123,7 @@ impl ReponseChargerUsager {
             err: Some(erreur.into()),
             compte: None,
             activations: None,
+            generic_challenge: None,
             registration_challenge: None,
             authentication_challenge: None,
             passkey_authentication: None,
@@ -1138,6 +1148,7 @@ impl ReponseChargerUsager {
             err: Some(format!("compte inconnu : nom_usager: {:?}, user_id: {:?}", nom_usager, user_id)),
             compte: None,
             activations: None,
+            generic_challenge: None,
             registration_challenge: None,
             authentication_challenge: None,
             passkey_authentication: None,
@@ -1236,17 +1247,18 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
                 None => Err(format!("core_maitredescomptes.charger_usager Mauvais format de challenge (registration_challenge=None"))?
             };
 
-            let (challenge, passkey_authentication) = match preparer_authentification_webauthn(middleware, compte, hostname).await? {
+            let (generic, challenge, passkey_authentication) = match preparer_authentification_webauthn(middleware, compte, hostname).await? {
                 Some(doc_challenge) => {
                     match doc_challenge.webauthn_authentication {
                         Some(inner) => {
-                            (Some(inner.authentication_challenge), Some(inner.passkey_authentication))
+                            (None, Some(inner.authentication_challenge), Some(inner.passkey_authentication))
                         },
-                        None => (None, None)
+                        None => (Some(doc_challenge.challenge), None, None)
                     }
                 },
-                None => (None, None)
+                None => (None, None, None)
             };
+            reponse_charger_usager.generic_challenge = generic;
             reponse_charger_usager.authentication_challenge = challenge;
             reponse_charger_usager.passkey_authentication = passkey_authentication;
         } else if ! est_delegation_globale {
