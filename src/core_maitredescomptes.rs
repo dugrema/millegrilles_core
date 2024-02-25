@@ -1097,6 +1097,7 @@ struct ReponseChargerUsager {
     registration_challenge: Option<CreationChallengeResponse>,
     authentication_challenge: Option<RequestChallengeResponse>,
     passkey_authentication: Option<PasskeyAuthentication>,
+    webauth_credentials_count: Option<usize>,
 }
 
 impl From<CompteUsager> for ReponseChargerUsager {
@@ -1110,6 +1111,7 @@ impl From<CompteUsager> for ReponseChargerUsager {
             registration_challenge: None,
             authentication_challenge: None,
             passkey_authentication: None,
+            webauth_credentials_count: None,
         }
     }
 }
@@ -1127,6 +1129,7 @@ impl ReponseChargerUsager {
             registration_challenge: None,
             authentication_challenge: None,
             passkey_authentication: None,
+            webauth_credentials_count: None,
         }
     }
 
@@ -1152,6 +1155,7 @@ impl ReponseChargerUsager {
             registration_challenge: None,
             authentication_challenge: None,
             passkey_authentication: None,
+            webauth_credentials_count: None,
         }
     }
 }
@@ -1261,12 +1265,17 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
             reponse_charger_usager.generic_challenge = generic;
             reponse_charger_usager.authentication_challenge = challenge;
             reponse_charger_usager.passkey_authentication = passkey_authentication;
+
+            let collection_creds = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+            let filtre = doc!{ CHAMP_USER_ID: &user_id };
+            let credentials_count = collection_creds.count_documents(filtre, None).await?;
+            reponse_charger_usager.webauth_credentials_count = Some(credentials_count as usize);
+
+            debug!("charger_usager reponse {:?}", reponse_charger_usager);
         } else if ! est_delegation_globale {
             Err(format!("charger_usager host_url n'est pas fourni dans la requete usager"))?;
         }
     }
-
-    debug!("charger_usager reponse {:?}", reponse_charger_usager);
 
     match middleware.formatter_reponse(&reponse_charger_usager,None) {
         Ok(m) => Ok(Some(m)),
