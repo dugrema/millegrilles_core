@@ -705,7 +705,7 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: 
     -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
-    debug!("Consommer evenement : {:?}", &m.message);
+    debug!("Consommer evenement : {:?}", &m.type_message);
 
     let (domaine, action) = match &m.type_message {
         TypeMessageOut::Evenement(r) => {
@@ -745,7 +745,11 @@ async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide
 {
     //let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
     let message_ref = m.message.parse()?;
-    let trigger: TriggerTransaction = match serde_json::from_str(message_ref.contenu) {
+    let message_contenu = match message_ref.contenu() {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion contenu {:?} : {:?}", m, e))?,
+    };
+    let trigger: TriggerTransaction = match message_contenu.deserialize() {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
@@ -799,7 +803,8 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionna
 {
     debug!("Evenement presence domaine : {:?}", m.type_message);
     let message_ref = m.message.parse()?;
-    let event: PresenceDomaine = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let event: PresenceDomaine = message_contenu.deserialize()?;
     debug!("Presence domaine : {:?}", event);
 
     // let mut set_ops = m.message.get_msg().map_to_bson()?;
@@ -890,7 +895,8 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValide, gestionna
 {
     let message_ref = m.message.parse()?;
     let estampille = message_ref.estampille;
-    let event: PresenceMonitor = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let event: PresenceMonitor = message_contenu.deserialize()?;
     debug!("Presence monitor : {:?}", event);
 
     // Preparer valeurs applications
@@ -1002,7 +1008,8 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValide, gestionn
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = m.message.parse()?;
-    let event: PresenceFichiers = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let event: PresenceFichiers = message_contenu.deserialize()?;
     debug!("traiter_presence_fichiers Presence fichiers : {:?}", event);
 
     if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers]) {
@@ -1137,7 +1144,8 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message
     // Valider commande
     {
         let mut message_ref = message.message.parse()?;
-        let commande = match serde_json::from_str::<TransactionConfigurerConsignation>(message_ref.contenu) {
+        let message_contenu = message_ref.contenu()?;
+        let commande = match message_contenu.deserialize() {
             Ok(inner) => inner,
             Err(e) => {
                 Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
@@ -1245,7 +1253,8 @@ async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: Mess
     // Valider commande
     {
         let message_ref = message.message.parse()?;
-        if let Err(e) = serde_json::from_str::<TransactionSetFichiersPrimaire>(message_ref.contenu) {
+        let message_contenu = message_ref.contenu()?;
+        if let Err(e) = message_contenu.deserialize::<TransactionSetFichiersPrimaire>() {
             Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?;
         };
     }
@@ -1281,7 +1290,8 @@ async fn traiter_commande_set_consignation_instance<M>(middleware: &M, message: 
     // Valider commande
     {
         let message_ref = message.message.parse()?;
-        if let Err(e) = serde_json::from_str::<TransactionSetConsignationInstance>(message_ref.contenu) {
+        let message_contenu = message_ref.contenu()?;
+        if let Err(e) = message_contenu.deserialize::<TransactionSetConsignationInstance>() {
             Err(format!("traiter_commande_set_consignation_instance Erreur convertir {:?}", e))?;
         };
     }
@@ -1855,7 +1865,8 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValide)
     let mut curseur = {
         let mut filtre = doc! {};
         let message_ref = message.message.parse()?;
-        let message_instance_id: MessageInstanceId = serde_json::from_str(message_ref.contenu)?;
+        let message_contenu = message_ref.contenu()?;
+        let message_instance_id: MessageInstanceId = message_contenu.deserialize()?;
         if let Some(inner) = message_instance_id.instance_id.as_ref() {
             filtre.insert("instance_id", inner.to_owned());
         }
@@ -1930,7 +1941,8 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValide)
     }
 
     let message_ref = message.message.parse()?;
-    let requete: RequeteListeDomaines = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteListeDomaines = message_contenu.deserialize()?;
 
     let mut curseur = {
         let projection = doc! {"instance_id": true, "domaine": true, CHAMP_MODIFICATION: true};
@@ -2009,7 +2021,8 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValide)
     let idmg_local = middleware.get_enveloppe_signature().idmg()?;
 
     let message_ref = message.message.parse()?;
-    let requete: RequeteResolveIdmg = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteResolveIdmg = message_contenu.deserialize()?;
     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
 
     // Map reponse, associe toutes les adresses dans la requete aux idmg trouves
@@ -2153,7 +2166,8 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
 
     // Mapper message avec la fiche
     let message_ref = reponse.message.parse()?;
-    let reponse_fiche: ReponseFichePubliqueTierce = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let reponse_fiche: ReponseFichePubliqueTierce = message_contenu.deserialize()?;
     debug!("Reponse fiche : {:?}", reponse);
 
     // Verifier code reponse HTTP
@@ -2833,7 +2847,8 @@ async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValide)
 {
     debug!("requete_fiche_millegrille");
     let message_ref = message.message.parse()?;
-    let requete: RequeteFicheMillegrille = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteFicheMillegrille = message_contenu.deserialize()?;
     debug!("requete_fiche_millegrille Parsed : {:?}", requete);
 
     let enveloppe_locale = middleware.get_enveloppe_signature();
@@ -2890,7 +2905,8 @@ async fn requete_applications_tiers<M>(middleware: &M, message: MessageValide)
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = message.message.parse()?;
-    let requete: RequeteApplicationsTiers = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteApplicationsTiers = message_contenu.deserialize()?;
     debug!("requete_applications_tiers Parsed : {:?}", requete);
 
     let projection = doc! {
@@ -2938,7 +2954,8 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = message.message.parse()?;
-    let requete: RequeteConsignationFichiers = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteConsignationFichiers = message_contenu.deserialize()?;
     debug!("requete_consignation_fichiers Parsed : {:?}", requete);
 
     let instance_id = match message.certificat.subject()?.get("commonName") {
@@ -3103,7 +3120,8 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
 {
     debug!("requete_get_cle_configuration Message : {:?}", &m.message);
     let message_ref = m.message.parse()?;
-    let requete: ParametresGetCleConfiguration = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: ParametresGetCleConfiguration = message_contenu.deserialize()?;
     debug!("requete_get_cle_configuration cle parsed : {:?}", requete);
 
     if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers]) {
@@ -3252,7 +3270,8 @@ async fn requete_configuration_fichiers<M>(middleware: &M, message: MessageValid
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = message.message.parse()?;
-    let requete: RequeteConfigurationFichiers = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteConfigurationFichiers = message_contenu.deserialize()?;
     debug!("requete_configuration_fichiers Parsed : {:?}", requete);
 
     let mut liste = Vec::new();

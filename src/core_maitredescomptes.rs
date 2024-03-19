@@ -826,7 +826,11 @@ where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     let message_ref = m.message.parse()?;
-    let trigger: TriggerTransaction = match serde_json::from_str(message_ref.contenu) {
+    let message_contenu = match message_ref.contenu() {
+        Ok(t) => t,
+        Err(e) => Err(format!("core_maitredescomptes.traiter_transaction Erreur conversion message contenu() {:?} : {:?}", m, e))?,
+    };
+    let trigger: TriggerTransaction = match message_contenu.deserialize() {
         Ok(t) => t,
         Err(e) => Err(format!("core_maitredescomptes.traiter_transaction Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
@@ -1219,7 +1223,8 @@ async fn charger_usager<M>(middleware: &M, message: MessageValide) -> Result<Opt
     let est_delegation_globale = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
 
     let message_ref = message.message.parse()?;
-    let requete: RequeteUsager = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteUsager = message_contenu.deserialize()?;
 
     let mut filtre = doc!{};
 
@@ -1377,7 +1382,8 @@ async fn liste_usagers<M>(middleware: &M, message: MessageValide) -> Result<Opti
 {
     debug!("liste_usagers : {:?}", &message.message);
     let message_ref = message.message.parse()?;
-    let requete: RequeteListeUsagers = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteListeUsagers = message_contenu.deserialize()?;
 
     let usagers = {
         let mut filtre = doc! {};
@@ -1423,7 +1429,8 @@ async fn get_liste_proprietaires<M>(middleware: &M, message: MessageValide) -> R
 {
     debug!("get_liste_proprietaires : {:?}", &message.message);
     let message_ref = message.message.parse()?;
-    let requete: RequeteListeUsagers = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteListeUsagers = message_contenu.deserialize()?;
 
     let usagers = {
         let filtre = doc! { CHAMP_DELEGATION_GLOBALE: DELEGATION_PROPRIETAIRE };
@@ -1487,7 +1494,8 @@ async fn get_cookie_usager<M>(middleware: &M, message: MessageValide) -> Result<
     }
 
     let message_ref = message.message.parse()?;
-    let requete: RequeteGetCookieUsager = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteGetCookieUsager = message_contenu.deserialize()?;
 
     let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
     let filtre = doc! {
@@ -1671,7 +1679,8 @@ async fn get_passkeys_usager<M>(middleware: &M, message: MessageValide) -> Resul
     };
 
     let message_ref = message.message.parse()?;
-    let requete: RequeteGetPasskeysUsager = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteGetPasskeysUsager = message_contenu.deserialize()?;
 
     // Si l'usager est un propritaire, permettre de fournir le user_id
     let user_id = match message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
@@ -1735,7 +1744,8 @@ async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValide) -> 
 {
     debug!("get_userid_par_nomusager : {:?}", &message.message);
     let message_ref = message.message.parse()?;
-    let requete: RequeteUserIdParNomUsager = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteUserIdParNomUsager = message_contenu.deserialize()?;
 
     // Inserer tous les nom_usagers demandes avec None. Assurer de retourner la reponse complete
     // si certains usagers sont inconnus.
@@ -1787,7 +1797,8 @@ async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValide) -> 
 {
     debug!("get_userid_par_nomusager : {:?}", &message.message);
     let message_ref = message.message.parse()?;
-    let requete: RequeteCsrRecoveryParcode = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteCsrRecoveryParcode = message_contenu.deserialize()?;
 
     let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
 
@@ -1893,7 +1904,8 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValide, gestionnaire
     debug!("inscrire_usager Consommer inscrire_usager : {:?}", &message.message);
     let (transaction, message_id) = {
         let message_ref = message.message.parse()?;
-        let transaction: TransactionInscrireUsager = serde_json::from_str(message_ref.contenu)?;
+        let message_contenu = message_ref.contenu()?;
+        let transaction: TransactionInscrireUsager = message_contenu.deserialize()?;
         let message_id = message_ref.id.clone();
         (transaction, message_id)
     };
@@ -2138,7 +2150,8 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
 
     let idmg = middleware.idmg();
     let message_ref = message.message.parse()?;
-    let commande: CommandeAuthentificationUsager = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: CommandeAuthentificationUsager = message_contenu.deserialize()?;
 
     let doc_webauth_state = match charger_challenge_authentification(
         middleware, &commande.user_id, &commande.hostname, &commande.challenge).await
@@ -2240,7 +2253,8 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
         let reponse_commande = signer_certificat_usager(
             middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
         let reponse_ref = reponse_commande.parse()?;
-        let info_certificat: ReponseSignatureCertificat = serde_json::from_str(reponse_ref.contenu)?;
+        let message_contenu = reponse_ref.contenu()?;
+        let info_certificat: ReponseSignatureCertificat = message_contenu.deserialize()?;
         if let Some(certificat) = info_certificat.certificat {
             // Inserer le certificat dans la reponse
             reponse_ok.as_object_mut().expect("as_object_mut")
@@ -2361,7 +2375,8 @@ async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageVa
     };
 
     let message_ref = message.message.parse()?;
-    let commande: CommandeSignerCertificat = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: CommandeSignerCertificat = message_contenu.deserialize()?;
     debug!("commande_signer_compte_usager CommandeSignerCertificat : {:?}", commande);
 
     // Charger le compte usager
@@ -2439,7 +2454,8 @@ async fn commande_signer_compte_par_proprietaire<M>(middleware: &M, message: Mes
     debug!("commande_signer_compte_par_proprietaire Resultat validation delegation proprietaire OK");
 
     let message_ref = message.message.parse()?;
-    let commande: CommandeSignerCertificatParProprietaire = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: CommandeSignerCertificatParProprietaire = message_contenu.deserialize()?;
     debug!("commande_signer_compte_par_proprietaire CommandeSignerCertificatParProprietaire : {:?}", commande);
 
     let user_id = commande.user_id.as_str();
@@ -2476,7 +2492,8 @@ async fn signer_demande_certificat_usager<M>(middleware: &M, compte_usager: Comp
     if let Some(true) = demande_certificat.activation_tierce {
         // Calculer fingerprint du nouveau certificat
         let reponse_ref = reponse_commande.parse()?;
-        let reponsecert_obj: ReponseCertificatUsager = serde_json::from_str(reponse_ref.contenu)?;
+        let message_contenu = reponse_ref.contenu()?;
+        let reponsecert_obj: ReponseCertificatUsager = message_contenu.deserialize()?;
         let pem = reponsecert_obj.certificat;
         let enveloppe_cert = middleware.charger_enveloppe(&pem, None, None).await?;
         let fingerprint_pk = enveloppe_cert.fingerprint_pk()?;
@@ -2524,7 +2541,8 @@ async fn commande_ajouter_csr_recovery<M>(middleware: &M, message: MessageValide
     debug!("commande_ajouter_csr_recovery : {:?}", message);
 
     let message_ref = message.message.parse()?;
-    let commande: CommandeAjouterCsrRecovery = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: CommandeAjouterCsrRecovery = message_contenu.deserialize()?;
     debug!("commande_ajouter_csr_recovery CommandeAjouterCsrRecovery : {:?}", commande);
 
     let csr = commande.csr;
@@ -2613,7 +2631,8 @@ async fn commande_generer_challenge<M>(middleware: &M, message: MessageValide) -
     debug!("commande_generer_challenge : {:?}", message);
 
     let message_ref = message.message.parse()?;
-    let commande: CommandeGenererChallenge = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: CommandeGenererChallenge = message_contenu.deserialize()?;
     let hostname = commande.hostname.as_str();
 
     let user_id = match message.certificat.get_user_id()? {
@@ -2686,7 +2705,8 @@ async fn supprimer_cookie<M>(middleware: &M, message: MessageValide) -> Result<O
     debug!("supprimer_cookie : {:?}", message);
 
     let message_ref = message.message.parse()?;
-    let commande: RequeteGetCookieUsager = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: RequeteGetCookieUsager = message_contenu.deserialize()?;
     let filtre = doc!{
         "user_id": commande.user_id,
         "hostname": commande.hostname,
@@ -2769,7 +2789,8 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
         Some(reponse) => {
             if let TypeMessage::Valide(reponse) = reponse {
                 let reponse_ref = reponse.message.parse()?;
-                let reponse_json: ReponseCertificatSigne = serde_json::from_str(reponse_ref.contenu)?;
+                let message_contenu = reponse_ref.contenu()?;
+                let reponse_json: ReponseCertificatSigne = message_contenu.deserialize()?;
                 Ok(middleware.build_reponse(reponse_json)?.0)
             } else {
                 error!("core_pki.commande_signer_csr Erreur signature, echec local et relai 4.secure");
@@ -2836,7 +2857,8 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValide, gestion
 
     let certificat = message.certificat.as_ref();
 
-    let transaction_ajouter_cle_contenu: TransactionAjouterCle = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let transaction_ajouter_cle_contenu: TransactionAjouterCle = message_contenu.deserialize()?;
 
     let idmg = middleware.idmg();
 
@@ -3201,7 +3223,8 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     let message_id = {
         // Valider contenu
         let message_ref = message.message.parse()?;
-        let commande: CommandeAjouterDelegationSignee = serde_json::from_str(message_ref.contenu)?;
+        let message_contenu = message_ref.contenu()?;
+        let commande: CommandeAjouterDelegationSignee = message_contenu.deserialize()?;
 
         let mut message_confirmation = commande.confirmation;
         // let user_id = commande.user_id.as_str();
@@ -3244,7 +3267,8 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
         debug!("ajouter_delegation_signee Correspondance cle publique millegrille OK");
 
         // Valider le format du contenu (parse)
-        let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = serde_json::from_str(message_confirmation.contenu)?;
+        let message_confirmation_buffer = message_confirmation.contenu()?;
+        let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = message_confirmation_buffer.deserialize()?;
         if commande_ajouter_delegation.user_id.as_str() != user_id.as_str() {
             let err = json!({"ok": false, "code": 5, "err": "Permission refusee, user_id signe et session serveur mismatch"});
             debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
@@ -3328,7 +3352,8 @@ async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &Gestio
     // Valider contenu en faisant le mapping
     let commande_resultat: CommandeResetWebauthnUsager = {
         let message_ref = message.message.parse()?;
-        match serde_json::from_str(message_ref.contenu) {
+        let message_contenu = message_ref.contenu()?;
+        match message_contenu.deserialize() {
             Ok(c) => c,
             Err(e) => {
                 let reponse = json!({"ok": false, "code": 2, "err": format!("Format de la commande invalide : {:?}", e)});
@@ -3424,8 +3449,12 @@ async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: T
         Err(format!("transaction_ajouter_delegation_signee Permission refusee, pubkey n'est pas la cle de la MilleGrille"))?
     }
 
-    debug!("transaction_ajouter_delegation_signee {:?}", message_confirmation.contenu);
-    let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = match serde_json::from_str(message_confirmation.contenu) {
+    debug!("transaction_ajouter_delegation_signee {:?}", message_confirmation.routage);
+    let message_confirmation_contenu = match message_confirmation.contenu() {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur map contenu() : {:?}", e))?
+    };
+    let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = match message_confirmation_contenu.deserialize() {
         Ok(inner) => inner,
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur map_contenu : {:?}", e))?
     };
@@ -3446,7 +3475,7 @@ async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: T
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
     let resultat = match collection.update_one(filtre, ops, None).await {
         Ok(r) => r,
-        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", message_confirmation.contenu, e))?
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", message_confirmation.routage, e))?
     };
     debug!("transaction_ajouter_delegation_signee resultat {:?}", resultat);
     if resultat.matched_count == 1 {
@@ -3564,7 +3593,8 @@ pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: Message
     // Valider contenu
     let (message_id, commande) = {
         let message_ref = message.message.parse()?;
-        let commande: TransactionMajUsagerDelegations = serde_json::from_str(message_ref.contenu)?;
+        let message_contenu = message_ref.contenu()?;
+        let commande: TransactionMajUsagerDelegations = message_contenu.deserialize()?;
         let message_id = message_ref.id.to_owned();
         (message_id, commande)
     };

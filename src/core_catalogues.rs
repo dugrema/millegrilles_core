@@ -525,7 +525,11 @@ where
 {
     // let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
     let message_ref = m.message.parse()?;
-    let trigger: TriggerTransaction = match serde_json::from_str(message_ref.contenu) {
+    let message_contenu = match message_ref.contenu() {
+        Ok(t) => t,
+        Err(e) => Err(format!("Erreur conversion message contenu() {:?} : {:?}", m, e))?,
+    };
+    let trigger: TriggerTransaction = match message_contenu.deserialize() {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
@@ -567,14 +571,16 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
 
     // let value_catalogue: MessageMilleGrille = match commande.message.parsed.contenu.get("catalogue") {
     let message_ref = commande.message.parse()?;
-    let message_catalogue: MessageCatalogue = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let message_catalogue: MessageCatalogue = message_contenu.deserialize()?;
     // let value_catalogue = message_catalogue.catalogue;
 
     // let mut catalogue = MessageSerialise::from_parsed(value_catalogue)?;
     // debug!("traiter_commande_application Catalogue charge : {:?}", catalogue);
 
     // let info_catalogue: CatalogueApplication = serde_json::from_value(Value::Object(catalogue.get_msg().contenu.to_owned()))?;
-    let info_catalogue: CatalogueApplication = serde_json::from_str(message_catalogue.catalogue.contenu)?;
+    let catalogue_contenu = message_catalogue.catalogue.contenu()?;
+    let info_catalogue: CatalogueApplication = catalogue_contenu.deserialize()?;
     debug!("traiter_commande_application Information catalogue charge : {:?}", info_catalogue);
 
     let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES_VERSIONS)?;
@@ -664,7 +670,11 @@ async fn maj_catalogue<M>(middleware: &M, transaction: TransactionValide)
         Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur transaction.convertir {:?}", e))?
     };
 
-    let catalogue: Catalogue = match serde_json::from_str(transaction_catalogue.catalogue.contenu) {
+    let message_contenu = match transaction_catalogue.catalogue.contenu() {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur catalogue contenu() {:?}", e))?
+    };
+    let catalogue: Catalogue = match message_contenu.deserialize() {
         Ok(inner) => inner,
         Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur catalogue map_contenu vers Catalogue {:?}", e))?
     };
@@ -786,7 +796,8 @@ async fn liste_versions_application<M>(middleware: &M, message: MessageValide)
     where M: GenerateurMessages + MongoDao
 {
     let message_ref = message.message.parse()?;
-    let requete: RequeteVersionsApplication = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteVersionsApplication = message_contenu.deserialize()?;
 
     let filtre = doc! { "nom": &requete.nom };
     let projection = doc!{
@@ -828,7 +839,8 @@ async fn repondre_application<M>(middleware: &M, m: MessageValide)
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = m.message.parse()?;
-    let message_nom: ReponseNom = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let message_nom: ReponseNom = message_contenu.deserialize()?;
     let nom_application = message_nom.nom;
 
     let filtre = doc! {"nom": nom_application};

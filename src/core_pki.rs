@@ -477,7 +477,11 @@ where
     let fingerprint = match domaine.as_str() {
         DOMAINE_NOM => {
             let message_ref = m.message.parse()?;
-            let message_fingerprint: Result<String, String> = match serde_json::from_str::<MessageFingerprint>(message_ref.contenu) {
+            let message_contenu = match message_ref.contenu() {
+                Ok(inner) => inner,
+                Err(e) => Err(format!("core_pki.requete_certificat Erreur contenu() : {:?}", e))?,
+            };
+            let message_fingerprint: Result<String, String> = match message_contenu.deserialize::<MessageFingerprint>() {
                 Ok(inner) => Ok(inner.fingerprint),
                 Err(e) => Err(format!("core_pki.requete_certificat Fingerprint manquant pour requete de certificat : {:?}", e))?,
             };
@@ -545,9 +549,13 @@ where
 {
     // let fingerprint_pk = match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK) {
     let message_ref = m.message.parse()?;
-    let message_fingerprint: MessageFingerprintPublicKey = match serde_json::from_str(message_ref.contenu) {
+    let message_contenu = match message_ref.contenu() {
         Ok(inner) => inner,
-        Err(e) => Err(format!("Erreur fingerprint pk absent/erreur mapping {:?}", e))?,
+        Err(e) => Err(format!("requete_certificat_par_pk Erreur contenu() {:?}", e))?,
+    };
+    let message_fingerprint: MessageFingerprintPublicKey = match message_contenu.deserialize() {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("requete_certificat_par_pk Erreur fingerprint pk absent/erreur mapping {:?}", e))?,
     };
     let fingerprint_pk = message_fingerprint.fingerprint_pk;
 
@@ -602,7 +610,8 @@ async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageVa
     };
 
     let message_ref = m.message.parse()?;
-    let commande: CommandeSauvegarderCertificat = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: CommandeSauvegarderCertificat = message_contenu.deserialize()?;
 
     let ca_pem = match &commande.ca {
         Some(c) => Some(c.as_str()),
@@ -726,7 +735,8 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
 
     // Valider format de la demande avec mapping
     let message_ref = m.message.parse()?;
-    let message_parsed: DemandeSignature = serde_json::from_str(message_ref.contenu)?;
+    let message_contenu = message_ref.contenu()?;
+    let message_parsed: DemandeSignature = message_contenu.deserialize()?;
     let certificat = m.certificat.as_ref();
 
     if certificat.verifier_roles(vec![RolesCertificats::Instance]) {
@@ -837,7 +847,11 @@ where
     //let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
     let (message_id, trigger) = {
         let message_ref = m.message.parse()?;
-        let trigger: TriggerTransaction = match serde_json::from_str(message_ref.contenu) {
+        let message_contenu = match message_ref.contenu() {
+            Ok(t) => t,
+            Err(e) => Err(format!("Erreur conversion message contenu() {:?} : {:?}", m, e))?,
+        };
+        let trigger: TriggerTransaction = match message_contenu.deserialize() {
             Ok(t) => t,
             Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
         };
