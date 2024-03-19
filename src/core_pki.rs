@@ -930,7 +930,7 @@ where M: ValidateurX509 {
 }
 
 async fn evenement_certificat_maitredescles<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
-    where M: ConfigMessages + ChiffrageFactoryTrait
+    where M: ValidateurX509 + ConfigMessages + ChiffrageFactoryTrait
 {
     info!("Recevoir certificat maitre des cles {:?}", m);
     let type_message = TypeMessage::Valide(m);
