@@ -11,24 +11,24 @@ use millegrilles_common_rust::certificats::{charger_enveloppe, ValidateurX509, V
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::common_messages::DemandeSignature;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
-use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, emettre_presence_domaine, formatter_message_certificat, Middleware, sauvegarder_traiter_transaction, thread_emettre_presence_domaine, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
-use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
+use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::{reqwest, reqwest::Url};
 use millegrilles_common_rust::configuration::{ConfigMessages, IsConfigNoeud};
+use millegrilles_common_rust::db_structs::TransactionValide;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
-use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
+use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TriggerTransaction};
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
-use millegrilles_common_rust::verificateur::VerificateurMessage;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 
@@ -70,8 +70,10 @@ pub struct GestionnaireDomainePki {}
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomainePki {
-    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+        where
+            M: ValidateurX509 + GenerateurMessages + MongoDao,
+            T: TryInto<TransactionValide> + Send
     {
         aiguillage_transaction(middleware, transaction).await
     }
@@ -103,28 +105,28 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
-    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_requete(middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_commande(middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_transaction(self, middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_evenement(middleware, message).await  // Fonction plus bas
@@ -141,12 +143,12 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-        -> Result<Option<MessageMilleGrille>, String>
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, String>
         where
-            M: ValidateurX509 + GenerateurMessages + MongoDao,
-            T: Transaction
+            M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
+            T: TryInto<TransactionValide> + Send
     {
-        aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
+        aiguillage_transaction(middleware, transaction).await
     }
 }
 
@@ -323,48 +325,66 @@ async fn entretien<M>(middleware: Arc<M>)
     }
 }
 
-async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer requete : {:?}", &message.message);
+    debug!("Consommer requete : {:?}", &m.message);
 
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
+    let (domaine, action) = match &m.type_message {
+        TypeMessageOut::Requete(r) => {
+            (r.domaine.clone(), r.action.clone())
+        }
+        _ => {
+            Err(format!("consommer_requete Mauvais type de message"))?
+        }
+    };
 
-    match message.domaine.as_str() {
-        DOMAINE_LEGACY_NOM | DOMAINE_NOM => match message.action.as_str() {
-            PKI_REQUETE_CERTIFICAT => requete_certificat(middleware, message).await,
-            PKI_REQUETE_CERTIFICAT_PAR_PK => requete_certificat_par_pk(middleware, message).await,
+    match domaine.as_str() {
+        DOMAINE_LEGACY_NOM | DOMAINE_NOM => match action.as_str() {
+            PKI_REQUETE_CERTIFICAT => requete_certificat(middleware, m).await,
+            PKI_REQUETE_CERTIFICAT_PAR_PK => requete_certificat_par_pk(middleware, m).await,
             _ => {
-                error!("Message requete action inconnue : {}. Message dropped.", message.action);
+                error!("Message requete action inconnue : {}. Message dropped.", action);
                 Ok(None)
             },
         },
-        DOMAINE_CERTIFICAT_NOM => requete_certificat(middleware, message).await,
+        DOMAINE_CERTIFICAT_NOM => requete_certificat(middleware, m).await,
         _ => {
-            error!("Message requete domaine inconnu : '{}'. Message dropped.", message.domaine);
+            error!("Message requete domaine inconnu : '{}'. Message dropped.", domaine);
             Ok(None)
         },
     }
 }
 
-async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_commande<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
 
+    // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
+    let (domaine, action) = match &m.type_message {
+        TypeMessageOut::Commande(r) => {
+            (r.domaine.clone(), r.action.clone())
+        }
+        _ => {
+            Err(format!("consommer_commande Mauvais type de message"))?
+        }
+    };
+
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
+    match m.certificat.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
         true => Ok(()),
         false => {
-            match m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+            match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
                 true => Ok(()),
-                false => Err(format!("core_pki.consommer_commande Autorisation invalide (aucun exchange, pas delegation globale) : {}", m.routing_key))
+                false => Err(String::from("core_pki.consommer_commande Autorisation invalide (aucun exchange, pas delegation globale)"))
             }
         },
     }?;
 
-    match m.action.as_str() {
+    match action.as_str() {
         // Commandes standard
         // COMMANDE_BACKUP_HORAIRE => backup(middleware.as_ref(), DOMAINE_NOM, NOM_COLLECTION_TRANSACTIONS, true).await,
         // COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
@@ -375,46 +395,61 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction) -> Result
         PKI_COMMANDE_SIGNER_CSR => commande_signer_csr(middleware, m).await,
 
         // Commandes inconnues
-        _ => Err(format!("Commande Pki inconnue : {}, message dropped", m.action))?,
+        _ => Err(format!("Commande Pki inconnue : {}, message dropped", action))?,
     }
 }
 
-async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomainePki, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomainePki, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
 where
-    M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+    M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer transaction core_pki : {:?}", &m.message);
-
+    let (domaine, action) = match &m.type_message {
+        TypeMessageOut::Transaction(r) => {
+            (r.domaine.clone(), r.action.clone())
+        }
+        _ => {
+            Err(format!("consommer_transaction Mauvais type de message"))?
+        }
+    };
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("core_pki.consommer_transaction Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
+        false => Err(format!("core_pki.consommer_transaction Autorisation invalide (pas 4.secure) : {}", action)),
     }?;
 
-    match m.action.as_str() {
+    match action.as_str() {
         PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
             // sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(sauvegarder_traiter_transaction(middleware, m, gestionnaire).await?)
         },
-        _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
+        _ => Err(format!("Mauvais type d'action pour une transaction : {}", action))?,
     }
 }
 
-async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_evenement<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: GenerateurMessages + ConfigMessages + ChiffrageFactoryTrait + ValidateurX509 + MongoDao
 {
     debug!("Consommer evenement : {:?}", &m.message);
 
+    let (domaine, action) = match &m.type_message {
+        TypeMessageOut::Evenement(r) => {
+            (r.domaine.clone(), r.action.clone())
+        }
+        _ => {
+            Err(format!("consommer_evenement Mauvais type de message"))?
+        }
+    };
     // // Autorisation : doit etre de niveau 4.secure
     // match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
     //     true => Ok(()),
     //     false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
     // }?;
 
-    match m.action.as_str() {
+    match action.as_str() {
         EVENEMENT_CERTIFICAT_MAITREDESCLES => evenement_certificat_maitredescles(middleware, m).await,
         PKI_REQUETE_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware, m).await,
-        _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
+        _ => Err(format!("Mauvais type d'action pour un evenement : {}", action))?,
     }
 }
 
@@ -428,15 +463,23 @@ struct MessageFingerprintPublicKey {
     fingerprint_pk: String
 }
 
-async fn requete_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn requete_certificat<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let fingerprint = match m.domaine.as_str() {
+    let (domaine, exchange) = match &m.type_message {
+        TypeMessageOut::Requete(r) => {
+            (r.domaine.clone(), r.exchanges.clone())
+        }
+        _ => Err("requete_certificat Mauvais type de message")?
+    };
+
+    let fingerprint = match domaine.as_str() {
         DOMAINE_NOM => {
-            let message_fingerprint: Result<String, String> = match m.message.parsed.map_contenu::<MessageFingerprint>() {
+            let message_ref = m.message.parse()?;
+            let message_fingerprint: Result<String, String> = match serde_json::from_str::<MessageFingerprint>(message_ref.contenu) {
                 Ok(inner) => Ok(inner.fingerprint),
-                Err(e) => Err(format!("core_pki.requete_certificat Fingerprint manquant pour requete de certificat : {:?}", e)),
+                Err(e) => Err(format!("core_pki.requete_certificat Fingerprint manquant pour requete de certificat : {:?}", e))?,
             };
             message_fingerprint
 
@@ -450,9 +493,10 @@ where
         },
         DOMAINE_CERTIFICAT_NOM => {
             //Ok(m.message.parsed.routage.action.as_str())
-            match m.message.parsed.routage.as_ref() {
+            let message_ref = m.message.parse()?;
+            match message_ref.routage.as_ref() {
                 Some(inner) => match inner.action.as_ref() {
-                    Some(inner) => Ok(inner.to_owned()),
+                    Some(inner) => Ok(inner.to_string()),
                     None => Err(String::from("action manquante pour requete certificat (fingerprint)")),
                 },
                 None => Err(String::from("routage manquant pour requete certificat (fingerprint)")),
@@ -465,7 +509,8 @@ where
         Some(inner) => inner,
         None => {
             debug!("Certificat inconnu : {}", fingerprint);
-            let reponse = middleware.formatter_reponse(json!({"ok": false, "code": 2, "err": "Certificat inconnu"}), None)?;
+            // let reponse = middleware.formatter_reponse(json!({"ok": false, "code": 2, "err": "Certificat inconnu"}), None)?;
+            let reponse = middleware.reponse_err(2, None, Some("Certificat inconnu"))?;
             return Ok(Some(reponse));
         }
     };
@@ -475,27 +520,32 @@ where
     let reponse_value = formatter_message_certificat(enveloppe.as_ref())?;
 
     // C'est une requete sur le domaine certificat, on emet l'evenement.infocertificat.fingerprint
-    let mut builder_routage = RoutageMessageAction::builder("certificat", "infoCertificat");
-    if let Some(e) = m.exchange {
-        let securite = Securite::try_from(e)?;
-        builder_routage = builder_routage.exchanges(vec![securite]);
-    }
+    // let exchanges = match exchange {
+    //     Some(e) => { vec![Securite::try_from(e)?] },
+    //     None => { vec![Securite::L1Public] }
+    // };
+    let mut builder_routage = RoutageMessageAction::builder("certificat", "infoCertificat", exchange);
+    // if let Some(e) = m.exchange {
+    //     let securite = Securite::try_from(e)?;
+    //     builder_routage = builder_routage.exchanges(vec![securite]);
+    // }
 
     let routage = builder_routage.build();
     if let Err(e) = middleware.emettre_evenement(routage, &reponse_value).await {
         warn!("Erreur emission evenement infocertificat pour {} : {}", fingerprint, e);
     }
 
-    let reponse = middleware.formatter_reponse(reponse_value, None)?;
-    Ok(Some(reponse))
+    // let reponse = middleware.formatter_reponse(reponse_value, None)?;
+    Ok(Some(middleware.build_reponse(reponse_value)?.0))
 }
 
-async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     // let fingerprint_pk = match m.message.get_msg().contenu.get(PKI_DOCUMENT_CHAMP_FINGERPRINT_PK) {
-    let message_fingerprint: MessageFingerprintPublicKey = match m.message.parsed.map_contenu() {
+    let message_ref = m.message.parse()?;
+    let message_fingerprint: MessageFingerprintPublicKey = match serde_json::from_str(message_ref.contenu) {
         Ok(inner) => inner,
         Err(e) => Err(format!("Erreur fingerprint pk absent/erreur mapping {:?}", e))?,
     };
@@ -512,7 +562,7 @@ where
             None => {
                 debug!("Certificat par PK non trouve : {:?}", fingerprint_pk);
                 let reponse_value = json!({"resultat": false});
-                let reponse = middleware.formatter_reponse(reponse_value, None)?;
+                let reponse = middleware.build_reponse(reponse_value)?.0;
                 return Ok(Some(reponse));
             },
         },
@@ -535,16 +585,24 @@ where
     debug!("requete_certificat_par_pk repondre fingerprint {:?} pour fingerprint_pk {}", fingerprint, fingerprint_pk);
     // repondre_enveloppe(middleware, &m, enveloppe.as_ref()).await?;
     let reponse_value = formatter_message_certificat(enveloppe.as_ref())?;
-    let reponse = middleware.formatter_reponse(reponse_value, None)?;
+    let reponse = middleware.build_reponse(reponse_value)?.0;
     debug!("requete_certificat_par_pk reponse pour fingerprint_pk {}\n{:?}", fingerprint_pk, reponse);
     Ok(Some(reponse))
 }
 
-async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao
+async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let commande: CommandeSauvegarderCertificat = m.message.get_msg().map_contenu()?;
+    let domaine = match &m.type_message {
+        TypeMessageOut::Commande(r) => {
+            r.domaine.clone()
+        }
+        _ => Err("requete_certificat Mauvais type de message")?
+    };
+
+    let message_ref = m.message.parse()?;
+    let commande: CommandeSauvegarderCertificat = serde_json::from_str(message_ref.contenu)?;
 
     let ca_pem = match &commande.ca {
         Some(c) => Some(c.as_str()),
@@ -553,11 +611,11 @@ where
     let enveloppe = middleware.charger_enveloppe(&commande.chaine_pem, None, ca_pem).await?;
     debug!("Commande de sauvegarde de certificat {} traitee", enveloppe.fingerprint);
 
-    if m.domaine.as_str() == PKI_DOMAINE_CERTIFICAT_NOM {
+    if domaine.as_str() == PKI_DOMAINE_CERTIFICAT_NOM {
         // Sauvegarde de l'evenement de certificat - aucune reponse
         Ok(None)
     } else {
-        let reponse = middleware.formatter_reponse(json!({"ok": true}), None)?;
+        let reponse = middleware.reponse_ok(None, None)?;
         Ok(Some(reponse))
     }
 }
@@ -572,15 +630,21 @@ struct CommandeSauvegarderCertificat {
 /// * signee par une delegation globale (e.g. proprietaire), ou
 /// * signee par un monitor du meme niveau pour un role (e.g. monitor prive pour messagerie ou postmaster), ou
 /// * etre un renouvellement pour les memes roles.
-async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn commande_signer_csr<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: GenerateurMessages + IsConfigNoeud
 {
-    let commande = match valider_demande_signature_csr(middleware, &m).await? {
-        Some(c) => c,
-        None => {
-            return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Acces refuse"}), None)?))
-        }
-    };
+    if let Err(e) = valider_demande_signature_csr(middleware, &m).await {
+        let err_string = format!("Acces refuse : {:?}", e);
+        return Ok(Some(middleware.reponse_err(None, None, Some(err_string.as_str()))?))
+    }
+
+    // let commande = match valider_demande_signature_csr(middleware, &m).await? {
+    //     Some(c) => c,
+    //     None => {
+    //         // return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Acces refuse"}), None)?))
+    //         return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
+    //     }
+    // };
 
     let config = middleware.get_configuration_noeud();
     let certissuer_url = match config.certissuer_url.as_ref() {
@@ -596,13 +660,14 @@ async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Resul
     url_post.set_path("signerModule");
 
     // On retransmet le message recu tel quel
-    match client.post(url_post).json(&commande).send().await {
+    match client.post(url_post).body(m.message.buffer).send().await {
         Ok(response) => {
             match response.status().is_success() {
                 true => {
                     let reponse_json: ReponseCertificatSigne = response.json().await?;
                     debug!("commande_signer_csr Reponse certificat : {:?}", reponse_json);
-                    return Ok(Some(middleware.formatter_reponse(reponse_json, None)?))
+                    // return Ok(Some(middleware.formatter_reponse(reponse_json, None)?))
+                    return Ok(Some(middleware.build_reponse(reponse_json)?.0))
                 },
                 false => {
                     debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : status {}", response.status());
@@ -644,48 +709,50 @@ async fn commande_signer_csr<M>(middleware: &M, m: MessageValideAction) -> Resul
     //     }
     // }
 
-    Ok(Some(middleware.formatter_reponse(
-        json!({"ok": false, "err": "Erreur signature : aucun signateur disponible ou refus"}),
-        None
-    )?))
+    // Ok(Some(middleware.formatter_reponse(
+    //     json!({"ok": false, "err": "Erreur signature : aucun signateur disponible ou refus"}),
+    //     None
+    // )?))
+    Ok(Some(
+        middleware.reponse_err(None, None, Some("Erreur signature : aucun signateur disponible ou refus"))?
+    ))
 }
 
-async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageValideAction) -> Result<Option<Cow<'a, MessageMilleGrille>>, Box<dyn Error>>
+async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageValide)
+    -> Result<(), Box<dyn Error>>
     where M: GenerateurMessages + IsConfigNoeud
 {
-    let mut message = None;
+    // let mut message = None;
 
     // Valider format de la demande avec mapping
-    let message_parsed: DemandeSignature = m.message.parsed.map_contenu()?;
-    let certificat = match &m.message.certificat {
-        Some(c) => c.clone(),
-        None => {
-            let e = json!({"ok": false, "err": "Certificat invalide"});
-            return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
-        }
-    };
+    let message_ref = m.message.parse()?;
+    let message_parsed: DemandeSignature = serde_json::from_str(message_ref.contenu)?;
+    let certificat = m.certificat.as_ref();
 
-    if m.message.verifier_roles(vec![RolesCertificats::Instance]) {
-        if m.message.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
+    if certificat.verifier_roles(vec![RolesCertificats::Instance]) {
+        if certificat.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
             debug!("valider_demande_signature_csr Demande de CSR signee par une instance 3.protege ou 4.secure, demande approuvee");
-            message = Some(Cow::Borrowed(&m.message.parsed));
-        } else if m.message.verifier_exchanges(vec![Securite::L2Prive]) {
+            // message = Some(Cow::Borrowed(&m.message.parsed));
+            return Ok(())
+        } else if certificat.verifier_exchanges(vec![Securite::L2Prive]) {
             debug!("valider_demande_signature_csr Demande de CSR signee par une instance 2.prive");
-            message = Some(Cow::Borrowed(&m.message.parsed));
-        } else if m.message.verifier_exchanges(vec![Securite::L1Public]) {
+            // message = Some(Cow::Borrowed(&m.message.parsed));
+            return Ok(())
+        } else if certificat.verifier_exchanges(vec![Securite::L1Public]) {
             debug!("valider_demande_signature_csr Demande de CSR signee par une instance 1.public, demande approuvee");
-            message = Some(Cow::Borrowed(&m.message.parsed));
+            // message = Some(Cow::Borrowed(&m.message.parsed));
+            return Ok(())
         } else {
             error!("valider_demande_signature_csr Demande de CSR signee par une instance sans exchanges, REFUSE");
         }
-    } else if m.message.verifier_roles(vec![RolesCertificats::MaitreDesClesConnexion]) {
-        if m.message.verifier_exchanges(vec![Securite::L4Secure]) {
+    } else if certificat.verifier_roles(vec![RolesCertificats::MaitreDesClesConnexion]) {
+        if certificat.verifier_exchanges(vec![Securite::L4Secure]) {
             // Un certificat de maitre des cles connexion (4.secure) supporte une cle volatile
 
             // Validation des valeurs
             if message_parsed.domaines.is_some() || message_parsed.dns.is_some() {
-                warn!("valider_demande_signature_csr Signature certificat maitre des cles volatil refuse (exchanges/domaines/dns presents)");
-                return Ok(None);
+                // warn!("valider_demande_signature_csr Signature certificat maitre des cles volatil refuse (exchanges/domaines/dns presents)");
+                Err("valider_demande_signature_csr Signature certificat maitre des cles volatil refuse (exchanges/domaines/dns presents)")?
             }
 
             // Verifier que le role demande est MaitreDesClesConnexionVolatil
@@ -694,43 +761,48 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
                     let role_maitre_des_cles_string = ROLE_MAITRE_DES_CLES.to_string();
                     let role_maitre_des_cles_volatil_string = ROLE_MAITRE_DES_CLES_VOLATIL.to_string();
                     if r.len() == 2 && r.contains(&role_maitre_des_cles_string) && r.contains(&role_maitre_des_cles_volatil_string) {
-                        message = Some(Cow::Borrowed(&m.message.parsed))
+                        // message = Some(Cow::Borrowed(&m.message.parsed))
+                        return Ok(())
                     } else {
                         warn!("valider_demande_signature_csr Signature certificat maitre des cles volatil refuse (mauvais role)");
-                        let e = json!({"ok": false, "err": "Mauvais role"});
-                        return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
+                        // let e = json!({"ok": false, "err": "Mauvais role"});
+                        // return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
+                        Err("Mauvais role")?
                     }
                 },
                 None => {
-                    let e = json!({"ok": false, "err": "Aucun role"});
-                    return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
+                    // let e = json!({"ok": false, "err": "Aucun role"});
+                    // return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
+                    Err("Aucun role")?
                 }
             }
         } else {
             error!("valider_demande_signature_csr Demande de CSR signee par une un certificat MaitreDesClesConnexion de niveau != 4.secure, REFUSE");
-            let e = json!({"ok": false, "err": "niveau != 4.secure"});
-            return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
+            // let e = json!({"ok": false, "err": "niveau != 4.secure"});
+            // return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
+            Err("niveau != 4.secure")?
         }
-    } else if m.message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         debug!("valider_demande_signature_csr Demande de CSR signee par une delegation globale (proprietaire), demande approuvee");
-        message = Some(Cow::Borrowed(&m.message.parsed));
-    } else if m.message.verifier_exchanges(vec![Securite::L4Secure]) {
+        // message = Some(Cow::Borrowed(&m.message.parsed));
+        return Ok(())
+    } else if certificat.verifier_exchanges(vec![Securite::L4Secure]) {
         debug!("valider_demande_signature_csr Demande de CSR signee pour un domaine");
         if message_parsed.domaines.is_some() || message_parsed.exchanges.is_some() {
-            Err(format!("domaines/exchanges/roles doivent etre vide"))?;
+            Err(String::from("domaines/exchanges/roles doivent etre vide"))?;
         }
 
         let domaines = match certificat.get_domaines()? {
             Some(d) => d,
             None => {
-                Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, demandeur sans domaines : {:?}", m.message.certificat))?
+                Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, demandeur sans domaines : {:?}", certificat))?
             }
         };
 
         let roles = match &message_parsed.roles {
             Some(r) => r,
             None => {
-                Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, demande sans roles : {:?}", m.message.certificat))?
+                Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, demande sans roles : {:?}", certificat))?
             }
         };
 
@@ -739,16 +811,17 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
         for role in roles {
             debug!("Role {} in roles : {:?}?", role, domaines_minuscules);
             if ! domaines_minuscules.contains(role) {
-                Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, role {} non autorise pour domaines : {:?}", role, m.message.certificat))?
+                Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, role {} non autorise pour domaines : {:?}", role, certificat))?
             }
         }
 
-        message = Some(Cow::Borrowed(&m.message.parsed));
+        // message = Some(Cow::Borrowed(&m.message.parsed));
+        return Ok(())
     } else {
-        Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee pour demandeur qui n'est pas autorise : {:?}", m.message.certificat))?;
+        Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee pour demandeur qui n'est pas autorise : {:?}", certificat))?;
     }
 
-    Ok(message)
+    Err(String::from("Acces refuse (default)"))?
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -757,54 +830,69 @@ struct ReponseCertificatSigne {
     certificat: Vec<String>,
 }
 
-async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     //let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
-    let trigger: TriggerTransaction = match m.message.parsed.map_contenu() {
-        Ok(t) => t,
-        Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
+    let (message_id, trigger) = {
+        let message_ref = m.message.parse()?;
+        let trigger: TriggerTransaction = match serde_json::from_str(message_ref.contenu) {
+            Ok(t) => t,
+            Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
+        };
+        let message_id = message_ref.id.to_owned();
+        (message_id, trigger)
     };
 
     let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;
-    debug!("Traitement transaction, chargee : {:?}", transaction);
+    debug!("Traitement transaction, chargee : {:?}", message_id);
 
-    let uuid_transaction = transaction.get_uuid_transaction().to_owned();
     let reponse = aiguillage_transaction(middleware, transaction).await;
     if reponse.is_ok() {
         // Marquer transaction completee
-        debug!("Transaction traitee {}, marquer comme completee", uuid_transaction);
-        marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
+        debug!("Transaction traitee {}, marquer comme completee", message_id);
+        marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &message_id, EtatTransaction::Complete).await?;
     }
 
     reponse
 }
 
-async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
-    T: Transaction
+async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T)
+                                      -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where
+        M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
+        T: TryInto<TransactionValide>
 {
-    let action = match transaction.get_routage().action.as_ref() {
-        Some(inner) => inner.as_str(),
-        None => Err(format!("Transaction {} n'a pas d'action", transaction.get_uuid_transaction()))?
+    let transaction = match transaction.try_into() {
+        Ok(inner) => inner,
+        Err(_) => Err(String::from("aiguillage_transaction Erreur try_into"))?
     };
 
-    match action {
+    let action = match transaction.transaction.routage.as_ref() {
+        Some(inner) => {
+            let action = match inner.action.as_ref() {
+                Some(action) => action.to_string(),
+                None => Err(String::from("aiguillage_transaction Action manquante"))?
+            };
+            action
+        },
+        None => Err(String::from("aiguillage_transaction Routage manquant"))?
+    };
+
+    match action.as_str() {
         PKI_TRANSACTION_NOUVEAU_CERTIFICAT => sauvegarder_certificat(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), action)),
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action)),
     }
 }
 
-async fn sauvegarder_certificat<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
-    T: Transaction
+async fn sauvegarder_certificat<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Sauvegarder certificat recu via transaction");
 
-    let contenu: TransactionCertificat = match transaction.convertir() {
+    let contenu: TransactionCertificat = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(c) => Ok(c),
         Err(e) => Err(format!("core_pki.sauvegarder_certificat Erreur conversion transaction en TransactionCertificat : {:?}", e)),
     }?;
@@ -841,11 +929,12 @@ where M: ValidateurX509 {
     Ok(())
 }
 
-async fn evenement_certificat_maitredescles<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn evenement_certificat_maitredescles<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ConfigMessages + ChiffrageFactoryTrait
 {
     info!("Recevoir certificat maitre des cles {:?}", m);
-    middleware.recevoir_certificat_chiffrage(middleware, &m.message).await?;
+    let type_message = TypeMessage::Valide(m);
+    middleware.recevoir_certificat_chiffrage(middleware, &type_message).await?;
     Ok(None)
 }
 

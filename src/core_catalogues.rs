@@ -10,15 +10,14 @@ use millegrilles_common_rust::certificats::{RegleValidationIdmg, ValidateurX509,
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::formatteur_messages::MessageMilleGrille;
-use millegrilles_common_rust::formatteur_messages::MessageSerialise;
+use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{thread_emettre_presence_domaine, Middleware, sauvegarder_traiter_transaction};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
-use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
+use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio::spawn;
@@ -26,14 +25,14 @@ use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::{ValidationOptions, VerificateurMessage};
+use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TriggerTransaction};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Serialize, Deserialize};
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesRefDefault, RoutageMessageOwned};
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreCatalogues";
@@ -73,8 +72,10 @@ pub struct GestionnaireDomaineCatalogues {}
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomaineCatalogues {
-    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+        where
+            M: ValidateurX509 + GenerateurMessages + MongoDao,
+            T: TryInto<TransactionValide> + Send
     {
         aiguillage_transaction(middleware, transaction).await
     }
@@ -106,28 +107,28 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
-    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_requete(middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_commande(middleware, message, self).await  // Fonction plus bas
     }
 
-    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_transaction(middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_evenement(middleware, message, self).await  // Fonction plus bas
@@ -144,10 +145,10 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-        -> Result<Option<MessageMilleGrille>, String>
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, String>
         where
-            M: ValidateurX509 + GenerateurMessages + MongoDao,
-            T: Transaction
+            M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
+            T: TryInto<TransactionValide> + Send
     {
         aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
     }
@@ -312,10 +313,9 @@ async fn entretien<M>(middleware: Arc<M>)
             debug!("Charger catalogues");
 
             let commande = json!({});
-            let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, "transmettreCatalogues")
-                .exchanges(vec![Securite::L3Protege])
+            let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, "transmettreCatalogues", vec![Securite::L3Protege])
                 .build();
-            match middleware.transmettre_commande(routage, &commande, true).await {
+            match middleware.transmettre_commande(routage, &commande).await {
                 Ok(r) => {
                     debug!("Reponse demande catalogues : {:?}", r);
                     catalogues_charges = true;
@@ -328,51 +328,66 @@ async fn entretien<M>(middleware: Arc<M>)
     }
 }
 
-async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_requete<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer requete : {:?}", &message.message);
 
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
+    let (domaine, action) = match &message.type_message {
+        TypeMessageOut::Requete(r) => {
+            (r.domaine.clone(), r.action.clone())
+        }
+        _ => {
+            Err(format!("consommer_requete Mauvais type de message"))?
+        }
+    };
 
-    match message.domaine.as_str() {
+    match domaine.as_str() {
         DOMAINE_NOM => {
-            match message.action.as_str() {
+            match action.as_str() {
                 REQUETE_LISTE_APPLICATIONS => liste_applications(middleware).await,
                 REQUETE_VERSIONS_APPLICATION => liste_versions_application(middleware, message).await,
-                REQUETE_INFO_APPLICATION => repondre_application(middleware, message.message.get_msg()).await,
+                REQUETE_INFO_APPLICATION => repondre_application(middleware, message).await,
                 _ => {
-                    error!("Message action inconnue : '{}'. Message dropped.", message.action);
+                    error!("Message action inconnue : '{}'. Message dropped.", action);
                     Ok(None)
                 },
             }
         },
         _ => {
-            error!("Message requete domaine inconnu : '{}'. Message dropped.", message.domaine);
+            error!("Message requete domaine inconnu : '{}'. Message dropped.", domaine);
             Ok(None)
         },
     }
 }
 
-async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineCatalogues)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
         false => {
-            match m.verifier_delegation_globale(String::from(DELEGATION_GLOBALE_PROPRIETAIRE)) {
+            match m.certificat.verifier_delegation_globale(String::from(DELEGATION_GLOBALE_PROPRIETAIRE)) {
                 true => Ok(()),
                 false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)"))
             }
         },
     }?;
 
-    match m.action.as_str() {
+    let action = match &m.type_message {
+        TypeMessageOut::Commande(r) => {
+            r.action.clone()
+        }
+        _ => Err(format!("consommer_commande Mauvais type de de message"))?
+    };
+
+    match action.as_str() {
         // Commandes standard
         TRANSACTION_APPLICATION => traiter_commande_application(middleware, m, gestionnaire).await,
     //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
@@ -382,7 +397,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionna
     //     PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
     //
     //     // Commandes inconnues
-        _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
+        _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, action))?,
     }
 }
 
@@ -404,44 +419,58 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionna
 //     Ok(None)
 // }
 
-async fn consommer_transaction<M>(_middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_transaction<M>(_middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer transaction : {:?}", &m.message);
 
+    let action = match &m.type_message {
+        TypeMessageOut::Transaction(r) => {
+            r.action.clone()
+        },
+        _ => Err(format!("consommer_transaction Mauvais type de message"))?
+    };
+
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => Err(format!("core.catalogue.consommer_transaction Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
+        false => Err(format!("core.catalogue.consommer_transaction Autorisation invalide (pas 4.secure) : action = {}", action)),
     }?;
 
-    match m.action.as_str() {
+    match action.as_str() {
     //     PKI_TRANSACTION_NOUVEAU_CERTIFICAT => {
     //         sauvegarder_transaction(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
     //         Ok(None)
     //     },
-        _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
+        _ => Err(format!("Mauvais type d'action pour une transaction : {}", action))?,
     }
 
     Ok(None)
 }
 
-async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineCatalogues)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer evenement : {:?}", &m.message);
 
+    let action = match &m.type_message {
+        TypeMessageOut::Transaction(r) => {
+            r.action.clone()
+        },
+        _ => Err(format!("consommer_evenement Mauvais type de message"))?
+    };
+
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
+    match m.certificat.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
         true => Ok(()),
-        false => Err(format!("core_catalogues.consommer_evenement Autorisation invalide (pas 3.protege/4.secure) : {}", m.routing_key)),
+        false => Err(format!("core_catalogues.consommer_evenement Autorisation invalide (pas 3.protege/4.secure) : action = {}", action)),
     }?;
 
-    match m.action.as_str() {
+    match action.as_str() {
         TRANSACTION_APPLICATION => traiter_commande_application(middleware, m, gestionnaire).await,
-        _ => Err(format!("core_catalogues.consommer_evenement Mauvais type d'action pour un evenement : {}", m.action))?,
+        _ => Err(format!("core_catalogues.consommer_evenement Mauvais type d'action pour un evenement : {}", action))?,
     }
 }
 
@@ -454,43 +483,57 @@ impl ProcesseurTransactions {
 
 #[async_trait]
 impl TraiterTransaction for ProcesseurTransactions {
-    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+        where
+            M: ValidateurX509 + GenerateurMessages + MongoDao,
+            T: TryInto<TransactionValide> + Send
     {
         aiguillage_transaction(middleware, transaction).await
     }
 }
 
-async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
-where
-    M: ValidateurX509 + GenerateurMessages + MongoDao,
-    T: Transaction
+async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T)
+                                      -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where
+        M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
+        T: TryInto<TransactionValide>
 {
-    let action = match transaction.get_routage().action.as_ref() {
-        Some(inner) => inner.as_str(),
-        None => Err(format!("Transaction {} n'a pas d'action", transaction.get_uuid_transaction()))?
+    let transaction = match transaction.try_into() {
+        Ok(inner) => inner,
+        Err(_) => Err(format!("aiguillage_transaction Erreur try_into"))?
+    };
+    let message_id = transaction.transaction.id.clone();
+    let action = match transaction.transaction.routage.as_ref() {
+        Some(inner) => {
+            match inner.action.as_ref() {
+                Some(inner) => inner.clone(),
+                None => Err(format!("Transaction {} n'a pas d'action", message_id))?
+            }
+        },
+        None => Err(format!("Transaction {} n'a pas de routage", message_id))?
     };
 
-    match action {
+    match action.as_str() {
         TRANSACTION_APPLICATION => maj_catalogue(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), action)),
+        _ => Err(format!("Transaction {} est de type non gere : {}", message_id, action)),
     }
 }
 
-async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     // let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
-    let trigger: TriggerTransaction = match m.message.parsed.map_contenu() {
+    let message_ref = m.message.parse()?;
+    let trigger: TriggerTransaction = match serde_json::from_str(message_ref.contenu) {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
 
     let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;
-    debug!("Traitement transaction, chargee : {:?}", transaction);
+    debug!("Traitement transaction, chargee : {:?}", transaction.transaction.id);
 
-    let uuid_transaction = transaction.get_uuid_transaction().to_owned();
+    let uuid_transaction = transaction.transaction.id.clone();
     let reponse = aiguillage_transaction(middleware, transaction).await;
     if reponse.is_ok() {
         // Marquer transaction completee
@@ -511,25 +554,27 @@ where M: ValidateurX509 {
 }
 
 #[derive(Clone, Deserialize)]
-struct MessageCatalogue {
-    catalogue: MessageMilleGrille,
+struct MessageCatalogue<'a> {
+    #[serde(borrow="'a")]
+    catalogue: MessageMilleGrillesRefDefault<'a>,
 }
 
-async fn traiter_commande_application<M>(middleware: &M, commande: MessageValideAction, gestionnaire: &GestionnaireDomaineCatalogues) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-where M: ValidateurX509 + MongoDao + GenerateurMessages + VerificateurMessage
+async fn traiter_commande_application<M>(middleware: &M, commande: MessageValide, gestionnaire: &GestionnaireDomaineCatalogues) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+where M: ValidateurX509 + MongoDao + GenerateurMessages
 {
     // let message = commande.message.get_msg();
     debug!("traiter_commande_application Traitement catalogue application {:?}", commande);
 
     // let value_catalogue: MessageMilleGrille = match commande.message.parsed.contenu.get("catalogue") {
-    let message_catalogue: MessageCatalogue = commande.message.parsed.map_contenu()?;
-    let value_catalogue = message_catalogue.catalogue;
+    let message_ref = commande.message.parse()?;
+    let message_catalogue: MessageCatalogue = serde_json::from_str(message_ref.contenu)?;
+    // let value_catalogue = message_catalogue.catalogue;
 
-    let mut catalogue = MessageSerialise::from_parsed(value_catalogue)?;
-    debug!("traiter_commande_application Catalogue charge : {:?}", catalogue);
+    // let mut catalogue = MessageSerialise::from_parsed(value_catalogue)?;
+    // debug!("traiter_commande_application Catalogue charge : {:?}", catalogue);
 
     // let info_catalogue: CatalogueApplication = serde_json::from_value(Value::Object(catalogue.get_msg().contenu.to_owned()))?;
-    let info_catalogue: CatalogueApplication = catalogue.parsed.map_contenu()?;
+    let info_catalogue: CatalogueApplication = serde_json::from_str(message_catalogue.catalogue.contenu)?;
     debug!("traiter_commande_application Information catalogue charge : {:?}", info_catalogue);
 
     let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES_VERSIONS)?;
@@ -560,30 +605,31 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages + VerificateurMessage
     //     None => None,
     // };
 
-    // Valider le catalogue
-    let resultat_validation = unsafe {
-        let mut opts = ValidationOptions::new(true, true, true);
-        opts.verificateur = Some(&REGLES_VALIDATION_CATALOGUE);
-        catalogue.valider(middleware, Some(&opts)).await?
-    };
-
-    if resultat_validation.valide() {
-        debug!("traiter_commande_application Catalogue accepte - certificat valide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
-        // Conserver la transaction et la traiter immediatement
-        // let mva = MessageValideAction::new(
-        //     commande.message,
-        //     commande.q,
-        //     commande.routing_key,
-        //     DOMAINE_NOM.into(),
-        //     TRANSACTION_APPLICATION.into(),
-        //     TypeMessageOut::Transaction
-        // );
-        sauvegarder_traiter_transaction(middleware, commande, gestionnaire).await?;
-    } else {
-        error!("traiter_commande_application Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
-    }
-
-    Ok(None)
+    todo!("fix me")
+    // // Valider le catalogue
+    // let resultat_validation = unsafe {
+    //     let mut opts = ValidationOptions::new(true, true, true);
+    //     opts.verificateur = Some(&REGLES_VALIDATION_CATALOGUE);
+    //     catalogue.valider(middleware, Some(&opts)).await?
+    // };
+    //
+    // if resultat_validation.valide() {
+    //     debug!("traiter_commande_application Catalogue accepte - certificat valide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
+    //     // Conserver la transaction et la traiter immediatement
+    //     // let mva = MessageValideAction::new(
+    //     //     commande.message,
+    //     //     commande.q,
+    //     //     commande.routing_key,
+    //     //     DOMAINE_NOM.into(),
+    //     //     TRANSACTION_APPLICATION.into(),
+    //     //     TypeMessageOut::Transaction
+    //     // );
+    //     sauvegarder_traiter_transaction(middleware, commande, gestionnaire).await?;
+    // } else {
+    //     error!("traiter_commande_application Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
+    // }
+    //
+    // Ok(None)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -602,8 +648,8 @@ struct Catalogue {
     nginx: Option<HashMap<String, Value>>
 }
 
-async fn maj_catalogue<M>(middleware: &M, transaction: impl Transaction)
-    -> Result<Option<MessageMilleGrille>, String>
+async fn maj_catalogue<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("maj_catalogue Sauvegarder application recu via catalogue (transaction)");
@@ -613,12 +659,12 @@ async fn maj_catalogue<M>(middleware: &M, transaction: impl Transaction)
     //     Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur transaction.convertir {:?}", e))?
     // };
 
-    let transaction_catalogue: MessageCatalogue = match transaction.convertir() {
+    let transaction_catalogue: MessageCatalogue = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(inner) => inner,
         Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur transaction.convertir {:?}", e))?
     };
 
-    let catalogue: Catalogue = match transaction_catalogue.catalogue.map_contenu() {
+    let catalogue: Catalogue = match serde_json::from_str(transaction_catalogue.catalogue.contenu) {
         Ok(inner) => inner,
         Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur catalogue map_contenu vers Catalogue {:?}", e))?
     };
@@ -697,7 +743,7 @@ struct ReponseListeApplications {
 }
 
 async fn liste_applications<M>(middleware: &M)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let filtre = doc! {};
@@ -727,7 +773,7 @@ async fn liste_applications<M>(middleware: &M)
     debug!("Apps : {:?}", apps);
     let reponse = ReponseListeApplications { ok: true, resultats: Some(apps) };
 
-    Ok(Some(middleware.formatter_reponse(&reponse,None)?))
+    Ok(Some(middleware.build_reponse(&reponse)?.0))
 }
 
 #[derive(Deserialize)]
@@ -735,11 +781,12 @@ struct RequeteVersionsApplication {
     nom: String,
 }
 
-async fn liste_versions_application<M>(middleware: &M, message: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn liste_versions_application<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: GenerateurMessages + MongoDao
 {
-    let requete: RequeteVersionsApplication = message.message.parsed.map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteVersionsApplication = serde_json::from_str(message_ref.contenu)?;
 
     let filtre = doc! { "nom": &requete.nom };
     let projection = doc!{
@@ -768,7 +815,7 @@ async fn liste_versions_application<M>(middleware: &M, message: MessageValideAct
     debug!("Apps : {:?}", apps);
     let reponse = ReponseListeApplications { ok: true, resultats: Some(apps) };
 
-    Ok(Some(middleware.formatter_reponse(&reponse,None)?))
+    Ok(Some(middleware.build_reponse(&reponse)?.0))
 }
 
 #[derive(Deserialize)]
@@ -776,11 +823,12 @@ struct ReponseNom {
     nom: String,
 }
 
-async fn repondre_application<M>(middleware: &M, param: &MessageMilleGrille)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn repondre_application<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let message_nom: ReponseNom = param.map_contenu()?;
+    let message_ref = m.message.parse()?;
+    let message_nom: ReponseNom = serde_json::from_str(message_ref.contenu)?;
     let nom_application = message_nom.nom;
 
     let filtre = doc! {"nom": nom_application};
@@ -801,8 +849,8 @@ async fn repondre_application<M>(middleware: &M, param: &MessageMilleGrille)
         None => json!({"ok": false, "err": "Application inconnue"})
     };
 
-    match middleware.formatter_reponse(&val,None) {
-        Ok(m) => Ok(Some(m)),
+    match middleware.build_reponse(&val) {
+        Ok(m) => Ok(Some(m.0)),
         Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
     }
 }

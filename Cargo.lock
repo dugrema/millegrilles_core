@@ -2254,7 +2254,7 @@ dependencies = [
 
 [[package]]
 name = "millegrilles_core"
-version = "2023.11.9"
+version = "2024.2.0"
 dependencies = [
  "env_logger",
  "log",
@@ -2266,7 +2266,6 @@ dependencies = [
 [[package]]
 name = "millegrilles_cryptographie"
 version = "2024.2.0"
-source = "git+https://github.com/dugrema/millegrilles_cryptographie.git?branch=2024.2#cb96703a0736fd08667349c92671aab370b8703d"
 dependencies = [
  "blake2",
  "chacha20poly1305",

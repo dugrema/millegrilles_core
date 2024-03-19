@@ -4,7 +4,7 @@ use std::error::Error;
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
-use millegrilles_common_rust::{base64_url, chrono, openssl, uuid};
+use millegrilles_common_rust::{base64_url, chrono, millegrilles_cryptographie, openssl, uuid};
 use millegrilles_common_rust::hex;
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::{Bson, bson, DateTime as DateTimeBson, doc};
@@ -16,8 +16,7 @@ use millegrilles_common_rust::configuration::{ConfigMessages, IsConfigNoeud};
 use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege, L4Secure};
-use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMilleGrille, preparer_btree_recursif};
-use millegrilles_common_rust::formatteur_messages::MessageSerialise;
+use millegrilles_common_rust::formatteur_messages::{preparer_btree_recursif};
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::middleware::{sauvegarder_transaction, thread_emettre_presence_domaine, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable};
@@ -26,7 +25,7 @@ use millegrilles_common_rust::mongodb as mongodb;
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions, InsertOneOptions};
 use millegrilles_common_rust::multibase;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
-use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage, valider_message};
+use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Map, Value};
 use millegrilles_common_rust::serde_json as serde_json;
 use millegrilles_common_rust::tokio::spawn;
@@ -34,11 +33,12 @@ use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::{ValidationOptions, VerificateurMessage, verifier_message, verifier_signature_serialize, verifier_signature_str};
+use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TriggerTransaction};
+use millegrilles_common_rust::verificateur::{verifier_signature_serialize, verifier_signature_str};
 use millegrilles_common_rust::{reqwest, reqwest::Url};
 use millegrilles_common_rust::common_messages::{MessageConfirmation, ReponseSignatureCertificat};
 use millegrilles_common_rust::constantes::MessageKind::Reponse;
+use millegrilles_common_rust::db_structs::TransactionValide;
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
@@ -47,10 +47,13 @@ use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCred
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::hachages::hacher_bytes_vu8;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesRef, MessageMilleGrillesRefDefault};
 use millegrilles_common_rust::mongodb::Collection;
 use millegrilles_common_rust::multibase::Base;
 use millegrilles_common_rust::multibase::Base::Base64Url;
 use millegrilles_common_rust::multihash::Code;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
+
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use crate::core_pki::COLLECTION_CERTIFICAT_NOM;
 
@@ -140,14 +143,16 @@ struct CompteUsager {
     compte_prive: Option<bool>,
 
     delegation_globale: Option<String>,
-    delegations_date: Option<DateEpochSeconds>,
+    delegations_date: Option<DateTime<Utc>>,
     delegations_version: Option<usize>,
 }
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomaineMaitreDesComptes {
-    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+        where
+            M: ValidateurX509 + GenerateurMessages + MongoDao,
+            T: TryInto<TransactionValide> + Send
     {
         aiguillage_transaction(middleware, transaction).await
     }
@@ -179,28 +184,28 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
-    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_requete(middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_commande(middleware, &self,message).await  // Fonction plus bas
     }
 
-    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_transaction(middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
-        -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_evenement(middleware, message).await  // Fonction plus bas
@@ -217,10 +222,10 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-        -> Result<Option<MessageMilleGrille>, String>
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, String>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
-            T: Transaction
+            T: TryInto<TransactionValide> + Send
     {
         aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
     }
@@ -603,7 +608,7 @@ where M: MongoDao + GenerateurMessages {
     }
 
     let date = trigger.get_date();
-    if date.get_datetime().minute() % 10 == 7 {
+    if date.minute() % 10 == 7 {
         if let Err(e) = supprimer_webauthn_expire(middleware).await {
             error!("Erreur entretien webauthn challenges : {:?}", e);
         }
@@ -626,14 +631,21 @@ where M: MongoDao + GenerateurMessages {
     Ok(())
 }
 
-async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer requete : {:?}", &message.message);
+    debug!("Consommer requete : {:?}", &m.message);
+
+    let (action, domaine) = match &m.type_message {
+        TypeMessageOut::Requete(r) => {
+            (r.action.clone(), r.domaine.clone())
+        },
+        _ => Err(format!("consommer_evenement Mauvais type de message"))?
+    };
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
-    let user_id = message.get_user_id();
-    match message.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
+    let user_id = m.certificat.get_user_id()?;
+    match m.certificat.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
         true => Ok(()),
         false => match user_id {
             Some(u) => Ok(()),
@@ -641,26 +653,26 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
         }
     }?;
 
-    match message.domaine.as_str() {
+    match domaine.as_str() {
         DOMAINE_NOM => {
-            match message.action.as_str() {
+            match action.as_str() {
                 // liste_applications_deployees(middleware, message).await,
-                REQUETE_CHARGER_USAGER => charger_usager(middleware, message).await,
-                REQUETE_LISTE_USAGERS => liste_usagers(middleware, message).await,
-                REQUETE_USERID_PAR_NOMUSAGER => get_userid_par_nomusager(middleware, message).await,
-                REQUETE_GET_CSR_RECOVERY_PARCODE => get_csr_recovery_parcode(middleware, message).await,
-                REQUETE_LISTE_PROPRIETAIRES => get_liste_proprietaires(middleware, message).await,
-                REQUETE_COOKIE_USAGER => get_cookie_usager(middleware, message).await,
-                REQUETE_PASSKEYS_USAGER => get_passkeys_usager(middleware, message).await,
+                REQUETE_CHARGER_USAGER => charger_usager(middleware, m).await,
+                REQUETE_LISTE_USAGERS => liste_usagers(middleware, m).await,
+                REQUETE_USERID_PAR_NOMUSAGER => get_userid_par_nomusager(middleware, m).await,
+                REQUETE_GET_CSR_RECOVERY_PARCODE => get_csr_recovery_parcode(middleware, m).await,
+                REQUETE_LISTE_PROPRIETAIRES => get_liste_proprietaires(middleware, m).await,
+                REQUETE_COOKIE_USAGER => get_cookie_usager(middleware, m).await,
+                REQUETE_PASSKEYS_USAGER => get_passkeys_usager(middleware, m).await,
                 // REQUETE_GET_TOKEN_SESSION => get_token_session(middleware, message).await,
                 _ => {
-                    error!("Message requete/action inconnue : '{}'. Message dropped.", message.action);
+                    error!("Message requete/action inconnue : '{}'. Message dropped.", action);
                     Ok(None)
                 },
             }
         },
         _ => {
-            error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
+            error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
             Ok(None)
         },
     }
@@ -668,15 +680,22 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> R
 
 /// Consomme une commande
 /// Verifie le niveau de securite approprie avant d'executer la commande
-async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
 
+    let (action, domaine) = match &m.type_message {
+        TypeMessageOut::Commande(r) => {
+            (r.action.clone(), r.domaine.clone())
+        },
+        _ => Err(format!("consommer_evenement Mauvais type de message"))?
+    };
+
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
-    if m.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege)) {
+    if m.certificat.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege)) {
         // Actions autorisees pour echanges prives
-        match m.action.as_str() {
+        match action.as_str() {
             TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m, gestionnaire).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
@@ -688,19 +707,19 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m).await,
 
             // Commandes inconnues
-            _ => Err(format!("Commande {} inconnue (section: exchange L2/L3) : {}, message dropped", DOMAINE_NOM, m.action))?,
+            _ => Err(format!("Commande {} inconnue (section: exchange L2/L3) : {}, message dropped", DOMAINE_NOM, action))?,
         }
-    } else if m.verifier_exchanges(vec!(Securite::L1Public)) {
-        match m.action.as_str() {
+    } else if m.certificat.verifier_exchanges(vec!(Securite::L1Public)) {
+        match action.as_str() {
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m).await,
             COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m).await,
 
             // Commandes inconnues
-            _ => Err(format!("Commande {} inconnue (section: exchange L1) : {}, message dropped", DOMAINE_NOM, m.action))?,
+            _ => Err(format!("Commande {} inconnue (section: exchange L1) : {}, message dropped", DOMAINE_NOM, action))?,
         }
-    } else if m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    } else if m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         // Commande proprietaire (administrateur)
-        match m.action.as_str() {
+        match action.as_str() {
             // Commandes delegation globale uniquement
             TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware, m).await,
             TRANSACTION_SUPPRIMER_CLES => commande_supprimer_cles(middleware, m).await,
@@ -716,8 +735,8 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             // Commandes inconnues
             _ => Ok(acces_refuse(middleware, 252)?)
         }
-    } else if m.get_user_id().is_some() {
-        match m.action.as_str() {
+    } else if m.certificat.get_user_id()?.is_some() {
+        match action.as_str() {
             // TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire).await,
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m).await,
@@ -725,41 +744,50 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m).await,
 
             // Commandes inconnues
-            _ => Err(format!("Commande {} inconnue (section: user_id): {}, message dropped", DOMAINE_NOM, m.action))?,
+            _ => Err(format!("Commande {} inconnue (section: user_id): {}, message dropped", DOMAINE_NOM, action))?,
         }
     } else {
-        debug!("Commande {} non autorisee : {}, message dropped", DOMAINE_NOM, m.action);
-        Err(format!("Commande {} non autorisee : {}, message dropped", DOMAINE_NOM, m.action))?
+        debug!("Commande {} non autorisee : {}, message dropped", DOMAINE_NOM, action);
+        Err(format!("Commande {} non autorisee : {}, message dropped", DOMAINE_NOM, action))?
     }
 }
 
-fn acces_refuse<M>(middleware: &M, code: u32) -> Result<Option<MessageMilleGrille>, String>
+fn acces_refuse<M>(middleware: &M, code: u32) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
     where M: GenerateurMessages
 {
-    let val = json!({
-        "ok": false,
-        "err": "Acces refuse",
-        "code": code
-    });
-    match middleware.formatter_reponse(&val,None) {
-        Ok(m) => Ok(Some(m)),
-        Err(e) => Err(format!("Erreur preparation reponse charger_usager : {:?}", e))
-    }
+    // let val = json!({
+    //     "ok": false,
+    //     "err": "Acces refuse",
+    //     "code": code
+    // });
+    Ok(Some(middleware.reponse_err(code as usize, None, Some("Acces refuse"))?))
+    // match middleware.formatter_reponse(&val,None) {
+    //     Ok(m) => Ok(Some(m)),
+    //     Err(e) => Err(format!("Erreur preparation reponse charger_usager : {:?}", e))
+    // }
 }
 
-async fn consommer_transaction<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_transaction<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer transaction : {:?}", &m.message);
 
+    let (action, domaine) = match &m.type_message {
+        TypeMessageOut::Transaction(r) => {
+            (r.action.clone(), r.domaine.clone())
+        },
+        _ => Err(format!("consommer_transaction Mauvais type de message"))?
+    };
+
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(Securite::L4Secure)) {
+    match m.certificat.verifier_exchanges(vec!(Securite::L4Secure)) {
         true => Ok(()),
-        false => Err(format!("core_maitredescomptes.consommer_transaction Trigger cedule autorisation invalide (pas 4.secure) : {}", m.routing_key)),
+        false => Err(format!("core_maitredescomptes.consommer_transaction Trigger cedule autorisation invalide (pas 4.secure) : {}", action)),
     }?;
 
-    match m.action.as_str() {
+    match action.as_str() {
         TRANSACTION_INSCRIRE_USAGER |
         TRANSACTION_AJOUTER_CLE |
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE |
@@ -768,38 +796,45 @@ where
             sauvegarder_transaction(middleware, &m, NOM_COLLECTION_TRANSACTIONS).await?;
             Ok(None)
         },
-        _ => Err(format!("Mauvais type d'action pour une transaction : {}", m.action))?,
+        _ => Err(format!("Mauvais type d'action pour une transaction : {}", action))?,
     }
 }
 
-async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>> {
+async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>> {
     debug!("Consommer evenement : {:?}", &m.message);
 
+    let action = match &m.type_message {
+        TypeMessageOut::Evenement(r) => {
+            r.action.clone()
+        },
+        _ => Err(format!("consommer_transaction Mauvais type de message"))?
+    };
+
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec!(Securite::L4Secure)) {
+    match m.certificat.verifier_exchanges(vec!(Securite::L4Secure)) {
         true => Ok(()),
-        false => Err(format!("core_maitredescomptes.consommer_evenement Autorisation invalide (pas 4.secure) : {}", m.routing_key)),
+        false => Err(format!("core_maitredescomptes.consommer_evenement Autorisation invalide (pas 4.secure) : {}", action)),
     }?;
 
-    match m.action.as_str() {
-        _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
+    match action.as_str() {
+        _ => Err(format!("Mauvais type d'action pour un evenement : {}", action))?,
     }
 }
 
-async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    // let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
-    let trigger: TriggerTransaction = match m.message.parsed.map_contenu() {
+    let message_ref = m.message.parse()?;
+    let trigger: TriggerTransaction = match serde_json::from_str(message_ref.contenu) {
         Ok(t) => t,
         Err(e) => Err(format!("core_maitredescomptes.traiter_transaction Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
 
     let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;
-    debug!("Traitement transaction, chargee : {:?}", transaction);
+    debug!("Traitement transaction, chargee : {:?}", transaction.transaction.id);
 
-    let uuid_transaction = transaction.get_uuid_transaction().to_owned();
+    let uuid_transaction = transaction.transaction.id.to_owned();
     let reponse = aiguillage_transaction(middleware, transaction).await;
     if reponse.is_ok() {
         // Marquer transaction completee
@@ -810,24 +845,33 @@ where
     reponse
 }
 
-async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T)
+                                      -> Result<Option<MessageMilleGrillesBufferDefault>, String>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
-        T: Transaction
+        T: TryInto<TransactionValide>
 {
-    let action = match transaction.get_routage().action.as_ref() {
-        Some(inner) => inner.as_str(),
-        None => Err(format!("Transaction {} n'a pas d'action", transaction.get_uuid_transaction()))?
+    let transaction = match transaction.try_into() {
+        Ok(inner) => inner,
+        Err(_) => Err(String::from("aiguillage_transaction Erreur try_into"))?
     };
 
-    match action {
+    let action = match transaction.transaction.routage.as_ref() {
+        Some(inner) => match inner.action.as_ref() {
+            Some(inner) => inner.to_owned(),
+            None => Err(String::from("aiguillage_transaction Action manquante de la transaction"))?
+        },
+        None => Err(String::from("aiguillage_transaction Routage manquant de la transaction"))?
+    };
+
+    match action.as_str() {
         TRANSACTION_INSCRIRE_USAGER => sauvegarder_inscrire_usager(middleware, transaction).await,
         TRANSACTION_AJOUTER_CLE => transaction_ajouter_cle(middleware, transaction).await,
         TRANSACTION_AJOUTER_DELEGATION_SIGNEE => transaction_ajouter_delegation_signee(middleware, transaction).await,
         TRANSACTION_MAJ_USAGER_DELEGATIONS => transaction_maj_usager_delegations(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_CLES => transaction_supprimer_cles(middleware, transaction).await,
         TRANSACTION_RESET_WEBAUTHN_USAGER => transaction_reset_webauthn_usager(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), action)),
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action)),
     }
 }
 
@@ -1168,19 +1212,20 @@ struct DocActivationFingerprintPkUsager {
     certificat: Option<Vec<String>>,
 }
 
-async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn charger_usager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("charger_usager : {:?}", &message.message);
-    let est_delegation_globale = message.message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
+    let est_delegation_globale = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
 
-    let requete: RequeteUsager = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteUsager = serde_json::from_str(message_ref.contenu)?;
 
     let mut filtre = doc!{};
 
     // Le filtre utilise le user_id du certificat de preference (et ignore les parametres).
     // Pour un certificat de service (1.public), va utiliser les parametres.
-    if message.verifier_exchanges(vec![L1Public]) || est_delegation_globale {
+    if message.certificat.verifier_exchanges(vec![L1Public]) || est_delegation_globale {
         if let Some(nom_usager) = requete.nom_usager.as_ref() {
             filtre.insert(CHAMP_USAGER_NOM, nom_usager);
         }
@@ -1190,11 +1235,11 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
     }
 
     if filtre.len() == 0 {
-        match message.get_user_id() {
+        match message.certificat.get_user_id()? {
             Some(u) => {
                 filtre.insert(CHAMP_USER_ID, u);
             },
-            None => match message.verifier_exchanges(vec![L1Public]) {
+            None => match message.certificat.verifier_exchanges(vec![L1Public]) {
                 true => {
                     if let Some(nom_usager) = requete.nom_usager.as_ref() {
                         filtre.insert(CHAMP_USAGER_NOM, nom_usager);
@@ -1277,8 +1322,8 @@ async fn charger_usager<M>(middleware: &M, message: MessageValideAction) -> Resu
         }
     }
 
-    match middleware.formatter_reponse(&reponse_charger_usager,None) {
-        Ok(m) => Ok(Some(m)),
+    match middleware.build_reponse(reponse_charger_usager) {
+        Ok(m) => Ok(Some(m.0)),
         Err(e) => Err(format!("Erreur preparation reponse charger_usager : {:?}", e))?
     }
 }
@@ -1327,11 +1372,12 @@ struct RequeteListeUsagers {
     nom_masque_debut: Option<String>,
 }
 
-async fn liste_usagers<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn liste_usagers<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("liste_usagers : {:?}", &message.message);
-    let requete: RequeteListeUsagers = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteListeUsagers = serde_json::from_str(message_ref.contenu)?;
 
     let usagers = {
         let mut filtre = doc! {};
@@ -1366,17 +1412,18 @@ async fn liste_usagers<M>(middleware: &M, message: MessageValideAction) -> Resul
         "usagers": usagers,
     });
 
-    match middleware.formatter_reponse(&val_reponse,None) {
-        Ok(m) => Ok(Some(m)),
+    match middleware.build_reponse(&val_reponse) {
+        Ok(m) => Ok(Some(m.0)),
         Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
     }
 }
 
-async fn get_liste_proprietaires<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn get_liste_proprietaires<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_liste_proprietaires : {:?}", &message.message);
-    let requete: RequeteListeUsagers = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteListeUsagers = serde_json::from_str(message_ref.contenu)?;
 
     let usagers = {
         let filtre = doc! { CHAMP_DELEGATION_GLOBALE: DELEGATION_PROPRIETAIRE };
@@ -1405,8 +1452,8 @@ async fn get_liste_proprietaires<M>(middleware: &M, message: MessageValideAction
         "usagers": usagers,
     });
 
-    match middleware.formatter_reponse(&val_reponse,None) {
-        Ok(m) => Ok(Some(m)),
+    match middleware.build_reponse(&val_reponse) {
+        Ok(m) => Ok(Some(m.0)),
         Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
     }
 }
@@ -1424,22 +1471,23 @@ struct RowNomUsager {
     nom_usager: String,
 }
 
-async fn get_cookie_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn get_cookie_usager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_cookie_usager Requete : {:?}", &message.message);
 
-    if ! message.verifier_exchanges(vec![Securite::L1Public, Securite::L2Prive]) ||
-        ! message.verifier_roles(vec![RolesCertificats::MaitreComptes, RolesCertificats::WebAuth]) {
+    if ! message.certificat.verifier_exchanges(vec![Securite::L1Public, Securite::L2Prive]) ||
+        ! message.certificat.verifier_roles(vec![RolesCertificats::MaitreComptes, RolesCertificats::WebAuth]) {
         info!("get_cookie_usager Mauvais certificat (doit avoir securite L2Prive, role MaitreComptes");
         let reponse = json!({"ok": false, "err": "Mauvais certificat pour requete"});
-        match middleware.formatter_reponse(&reponse,None) {
-            Ok(m) => return Ok(Some(m)),
+        match middleware.build_reponse(&reponse) {
+            Ok(m) => return Ok(Some(m.0)),
             Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
         }
     }
 
-    let requete: RequeteGetCookieUsager = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteGetCookieUsager = serde_json::from_str(message_ref.contenu)?;
 
     let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
     let filtre = doc! {
@@ -1465,23 +1513,23 @@ async fn get_cookie_usager<M>(middleware: &M, message: MessageValideAction) -> R
                 },
                 None => {
                     let reponse = json!({"ok": false, "err": "Usager inconnu"});
-                    match middleware.formatter_reponse(&reponse,None) {
-                        Ok(m) => return Ok(Some(m)),
+                    match middleware.build_reponse(&reponse) {
+                        Ok(m) => return Ok(Some(m.0)),
                         Err(e) => Err(format!("get_cookie_usager Erreur preparation reponse match usager : {:?}", e))?
                     }
                 }
             };
 
             let reponse = json!({"ok": true, "nomUsager": nom_usager, "cookie": cookie});
-            match middleware.formatter_reponse(&reponse,None) {
-                Ok(m) => Ok(Some(m)),
+            match middleware.build_reponse(&reponse) {
+                Ok(m) => Ok(Some(m.0)),
                 Err(e) => Err(format!("get_cookie_usager Erreur preparation reponse ok:true : {:?}", e))?
             }
         },
         None => {
             let reponse = json!({"ok": false, "err": "Cookie inconnu"});
-            match middleware.formatter_reponse(&reponse,None) {
-                Ok(m) => Ok(Some(m)),
+            match middleware.build_reponse(&reponse) {
+                Ok(m) => Ok(Some(m.0)),
                 Err(e) => Err(format!("get_cookie_usager Erreur preparation reponse cookie inconnu : {:?}", e))?
             }
         }
@@ -1537,26 +1585,30 @@ struct RowActivationInfo {
 struct PasskeyResponse {
     cred_id: String,
     hostname: String,
-    date_creation: DateEpochSeconds,
-    dernier_auth: Option<DateEpochSeconds>,
+    #[serde(with="epochseconds")]
+    date_creation: DateTime<Utc>,
+    #[serde(with="optionepochseconds")]
+    dernier_auth: Option<DateTime<Utc>>,
 }
 
 #[derive(Serialize)]
 struct CookieReponse {
     hostname: String,
-    expiration: DateEpochSeconds,
-    date_creation: Option<DateEpochSeconds>,
+    #[serde(with="epochseconds")]
+    expiration: DateTime<Utc>,
+    #[serde(with="optionepochseconds")]
+    date_creation: Option<DateTime<Utc>>,
 }
 
 impl From<RowCookieInfo> for CookieReponse {
     fn from(value: RowCookieInfo) -> Self {
         let date_creation = match value.date_creation {
-            Some(inner) => Some(DateEpochSeconds::from_i64(inner.timestamp_millis()/1000)),
+            Some(inner) => DateTime::from_timestamp(inner.timestamp_millis()/1000, 0),
             None => None
         };
         Self {
             hostname: value.hostname,
-            expiration: DateEpochSeconds::from_i64(value.expiration),
+            expiration: DateTime::from_timestamp(value.expiration, 0).unwrap(),
             date_creation,
         }
     }
@@ -1565,14 +1617,15 @@ impl From<RowCookieInfo> for CookieReponse {
 #[derive(Serialize)]
 struct ActivationReponse {
     fingerprint_pk: String,
-    date_creation: DateEpochSeconds,
+    #[serde(with="epochseconds")]
+    date_creation: DateTime<Utc>,
 }
 
 impl From<RowActivationInfo> for ActivationReponse {
     fn from(value: RowActivationInfo) -> Self {
         Self {
             fingerprint_pk: value.fingerprint_pk,
-            date_creation: DateEpochSeconds::from_i64(value.date_creation.timestamp_millis()/1000)
+            date_creation: DateTime::from_timestamp(value.date_creation.timestamp_millis()/1000, 0).unwrap()
         }
     }
 }
@@ -1580,13 +1633,13 @@ impl From<RowActivationInfo> for ActivationReponse {
 impl From<RowWebauthnCredentials> for PasskeyResponse {
     fn from(value: RowWebauthnCredentials) -> Self {
         let dernier_auth = match value.dernier_auth {
-            Some(inner) => Some(DateEpochSeconds::from_i64(inner.timestamp_millis()/1000)),
+            Some(inner) => DateTime::from_timestamp(inner.timestamp_millis()/1000, 0),
             None => None
         };
         Self {
             cred_id: value.passkey.cred.cred_id,
             hostname: value.hostname,
-            date_creation: DateEpochSeconds::from_i64(value.date_creation.timestamp_millis()/1000),
+            date_creation: DateTime::from_timestamp(value.date_creation.timestamp_millis()/1000, 0).unwrap(),
             dernier_auth
         }
     }
@@ -1601,31 +1654,32 @@ struct GetPasskeysResponse {
     cookies: Vec<CookieReponse>
 }
 
-async fn get_passkeys_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn get_passkeys_usager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_passkeys_usager Requete : {:?}", &message.message);
 
-    let user_id = match message.get_user_id() {
+    let user_id = match message.certificat.get_user_id()? {
         Some(inner) => inner,
         None => {
             let reponse = json!({"ok": false, "err": "User_id absent du certificat"});
-            match middleware.formatter_reponse(&reponse, None) {
-                Ok(m) => return Ok(Some(m)),
+            match middleware.build_reponse(&reponse) {
+                Ok(m) => return Ok(Some(m.0)),
                 Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
             }
         }
     };
 
-    let requete: RequeteGetPasskeysUsager = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteGetPasskeysUsager = serde_json::from_str(message_ref.contenu)?;
 
     // Si l'usager est un propritaire, permettre de fournir le user_id
-    let user_id = match message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    let user_id = match message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         true => match requete.user_id {
             Some(inner) => inner,
-            None => user_id
+            None => user_id.to_owned()
         },
-        false => user_id
+        false => user_id.to_owned()
     };
 
     let filtre = doc! { CHAMP_USER_ID: &user_id };
@@ -1673,14 +1727,15 @@ async fn get_passkeys_usager<M>(middleware: &M, message: MessageValideAction) ->
 
     let reponse = GetPasskeysResponse { ok: true, user_id: user_id.to_owned(), passkeys, activations, cookies };
 
-    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+    Ok(Some(middleware.build_reponse(&reponse)?.0))
 }
 
-async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_userid_par_nomusager : {:?}", &message.message);
-    let requete: RequeteUserIdParNomUsager = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteUserIdParNomUsager = serde_json::from_str(message_ref.contenu)?;
 
     // Inserer tous les nom_usagers demandes avec None. Assurer de retourner la reponse complete
     // si certains usagers sont inconnus.
@@ -1711,8 +1766,8 @@ async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValideActio
 
     let reponse = ReponseUserIdParNomUsager { usagers };
 
-    match middleware.formatter_reponse(&reponse,None) {
-        Ok(m) => Ok(Some(m)),
+    match middleware.build_reponse(&reponse) {
+        Ok(m) => Ok(Some(m.0)),
         Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
     }
 }
@@ -1727,16 +1782,17 @@ struct ReponseUserIdParNomUsager {
     usagers: HashMap<String, Option<String>>,
 }
 
-async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_userid_par_nomusager : {:?}", &message.message);
-    let requete: RequeteCsrRecoveryParcode = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteCsrRecoveryParcode = serde_json::from_str(message_ref.contenu)?;
 
     let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
 
     // Verifier si on a un usager avec delegation globale (permet d'utiliser le parametre nom_usager)
-    let nom_usager_param = match message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    let nom_usager_param = match message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         true => requete.nom_usager,
         false => None,
     };
@@ -1745,7 +1801,7 @@ async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValideActio
         Some(u) => Some(u),
         None => {
             // Trouver nom d'usager qui correspond au user_id du certificat usager
-            match message.get_user_id() {
+            match message.certificat.get_user_id()? {
                 Some(user_id) => {
                     debug!("get_csr_recovery_parcode Get compte usager pour user_id {}", user_id);
                     let filtre = doc!{"userId": &user_id};
@@ -1772,7 +1828,7 @@ async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValideActio
         Some(u) => u,
         None => {
             let reponse = json!({"ok": false, "err": "Acces refuse", "code": 1});
-            return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+            return Ok(Some(middleware.build_reponse(reponse)?.0));
         }
     };
 
@@ -1784,11 +1840,11 @@ async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValideActio
     match doc_recovery {
         Some(d) => {
             let info_compte: ReponseCsrRecovery = convertir_bson_deserializable(d)?;
-            Ok(Some(middleware.formatter_reponse(&info_compte, None)?))
+            Ok(Some(middleware.build_reponse(info_compte)?.0))
         },
         None => {
             let reponse = json!({"ok": false, "err": "Code de recovery introuvable pour l'usager", "code": 2});
-            Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+            Ok(Some(middleware.build_reponse(reponse)?.0))
         }
     }
 }
@@ -1830,12 +1886,17 @@ async fn ajouter_fingerprint_pk_usager<M,S,T>(middleware: &M, user_id: S, finger
     Ok(())
 }
 
-async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineMaitreDesComptes)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud + VerificateurMessage
+async fn inscrire_usager<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineMaitreDesComptes)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("inscrire_usager Consommer inscrire_usager : {:?}", &message.message);
-    let transaction: TransactionInscrireUsager = message.message.get_msg().map_contenu()?;
+    let (transaction, message_id) = {
+        let message_ref = message.message.parse()?;
+        let transaction: TransactionInscrireUsager = serde_json::from_str(message_ref.contenu)?;
+        let message_id = message_ref.id.clone();
+        (transaction, message_id)
+    };
     let nom_usager = transaction.nom_usager.as_str();
 
     // Verifier que l'usager n'existe pas deja (collection usagers)
@@ -1846,13 +1907,12 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction, gestio
         Some(d) => {
             debug!("inscrire_usager Usager {} existe deja : {:?}, on skip", nom_usager, d);
             let val = json!({"ok": false, "err": format!("Usager {} existe deja", nom_usager)});
-            match middleware.formatter_reponse(&val,None) {
-                Ok(m) => Ok(Some(m)),
+            match middleware.build_reponse(val) {
+                Ok(m) => Ok(Some(m.0)),
                 Err(e) => Err(format!("inscrire_usager Erreur preparation reponse liste_usagers : {:?}", e))
             }
         },
         None => {
-            let uuid_transaction = message.message.parsed.id.as_str();
             debug!("inscrire_usager L'usager '{}' n'existe pas, on genere un certificat", nom_usager);
             let user_id = &transaction.user_id;
             let securite = &transaction.securite;
@@ -1865,8 +1925,8 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction, gestio
                         Err(e) => {
                             error!("inscrire_usager Erreur calcul fingerprint_pk du csr : {:?}", e);
                             let val = json!({"ok": false, "err": format!("Erreur calcul fingerprint_pk du csr")});
-                            return match middleware.formatter_reponse(&val,None) {
-                                Ok(m) => Ok(Some(m)),
+                            return match middleware.build_reponse(val) {
+                                Ok(m) => Ok(Some(m.0)),
                                 Err(e) => Err(format!("inscrire_usager Erreur preparation reponse csr manquant : {:?}", e))?
                             }
                         }
@@ -1878,8 +1938,8 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction, gestio
                 None => {
                     error!("inscrire_usager Inscription usager {} sans CSR initial - ABORT", nom_usager);
                     let val = json!({"ok": false, "err": format!("Requete sans CSR")});
-                    return match middleware.formatter_reponse(&val,None) {
-                        Ok(m) => Ok(Some(m)),
+                    return match middleware.build_reponse(val) {
+                        Ok(m) => Ok(Some(m.0)),
                         Err(e) => Err(format!("inscrire_usager Erreur preparation reponse csr manquant : {:?}", e))?
                     }
                 }
@@ -1908,13 +1968,12 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValideAction, gestio
     Ok(reponse)
 }
 
-async fn sauvegarder_inscrire_usager<M, T>(middleware: &M, transaction: T)
-    -> Result<Option<MessageMilleGrille>, String>
-    where T: Transaction,
-          M: ValidateurX509 + GenerateurMessages + MongoDao,
+async fn sauvegarder_inscrire_usager<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("sauvegarder_inscrire_usager {:?}", transaction);
-    let transaction: TransactionInscrireUsager = match transaction.clone().convertir() {
+    debug!("sauvegarder_inscrire_usager {:?}", transaction.transaction.id);
+    let transaction: TransactionInscrireUsager = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion en TransactionInscrireUsager : {:?}", e))?
     };
@@ -1962,8 +2021,8 @@ async fn sauvegarder_inscrire_usager<M, T>(middleware: &M, transaction: T)
     }
 
     let reponse = json!({"ok": true, "userId": user_id});
-    match middleware.formatter_reponse(&reponse,None) {
-        Ok(m) => return Ok(Some(m)),
+    match middleware.build_reponse(reponse) {
+        Ok(m) => return Ok(Some(m.0)),
         Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
     }
 }
@@ -2021,7 +2080,8 @@ struct DemandeSignatureCertificatWebauthn {
     #[serde(rename="activationTierce", skip_serializing_if = "Option::is_none")]
     activation_tierce: Option<bool>,
     csr: String,
-    date: DateEpochSeconds,
+    #[serde(with = "epochseconds")]
+    date: DateTime<Utc>,
     #[serde(rename = "nomUsager")]
     nom_usager: String,
 }
@@ -2033,9 +2093,9 @@ impl DemandeSignatureCertificatWebauthn {
         // Le message recu est valide pour 5 minutes
         // (aussi 1 minute dans l'autre sens si clock mal ajustee)
         let date_now = Utc::now();
-        let date_message = self.date.get_datetime();
-        if date_now - chrono::Duration::minutes(5) > *date_message ||
-            date_now + chrono::Duration::minutes(1) < *date_message {
+        let date_message = self.date;
+        if date_now - chrono::Duration::minutes(5) > date_message ||
+            date_now + chrono::Duration::minutes(1) < date_message {
             Err(format!("core_maitredescomptes.DemandeSignatureCertificatWebauthn Date expire/invalide"))?
         }
 
@@ -2071,13 +2131,14 @@ struct CommandeAuthentificationUsager {
     commande_webauthn: CommandeClientAuthentificationWebauthn,
 }
 
-async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("commande_authentifier_usager : {:?}", message);
 
     let idmg = middleware.idmg();
-    let commande: CommandeAuthentificationUsager = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let commande: CommandeAuthentificationUsager = serde_json::from_str(message_ref.contenu)?;
 
     let doc_webauth_state = match charger_challenge_authentification(
         middleware, &commande.user_id, &commande.hostname, &commande.challenge).await
@@ -2086,7 +2147,7 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
         Err(e) => {
             error!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn inconnu ou expire : {:?}", e);
             let reponse_ok = json!({"ok": false, "err": "Challenge inconnu ou expire", "code": 1});
-            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+            return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
         }
     };
 
@@ -2120,7 +2181,7 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
         Err(e) => {
             error!("core_maitredescomptes.commande_authentifier_webauthn Erreur verification challenge webauthn : {:?}", e);
             let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 2});
-            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+            return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
         }
     };
     debug!("commande_authentifier_webauthn Resultat webauth OK : {:?}", resultat);
@@ -2165,22 +2226,21 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
                 None => {
                     error!("core_maitredescomptes.commande_authentifier_webauthn Compte usager inconnu pour generer certificat");
                     let reponse_ok = json!({"ok": false, "err": "Compte usager inconnu pour generer nouveau certificat", "code": 3});
-                    return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+                    return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
                 }
             },
             Err(e) => {
                 error!("core_maitredescomptes.commande_authentifier_webauthn Erreur chargement compte usager pour generer certificat : {:?}", e);
                 let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 4});
-                return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+                return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
             }
         };
         let nom_usager = &compte_usager.nom_usager;
         // let securite = SECURITE_1_PUBLIC;
         let reponse_commande = signer_certificat_usager(
             middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
-        let mut reponse_serialisee = MessageSerialise::from_parsed(reponse_commande)?;
-        valider_message(middleware, &mut reponse_serialisee).await?;
-        let info_certificat: ReponseSignatureCertificat = reponse_serialisee.parsed.map_contenu()?;
+        let reponse_ref = reponse_commande.parse()?;
+        let info_certificat: ReponseSignatureCertificat = serde_json::from_str(reponse_ref.contenu)?;
         if let Some(certificat) = info_certificat.certificat {
             // Inserer le certificat dans la reponse
             reponse_ok.as_object_mut().expect("as_object_mut")
@@ -2203,7 +2263,7 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
 
     debug!("Reponse authentification : {:?}", reponse_ok);
 
-    Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+    Ok(Some(middleware.build_reponse(reponse_ok)?.0))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2211,7 +2271,8 @@ struct CookieSession {
     user_id: String,
     hostname: String,
     challenge: String,
-    expiration: DateEpochSeconds,
+    #[serde(with = "epochseconds")]
+    expiration: DateTime<Utc>,
 }
 
 impl Into<Value> for CookieSession {
@@ -2225,7 +2286,6 @@ impl CookieSession {
         where U: Into<String>, H: Into<String>
     {
         let date_expiration = Utc::now() + chrono::Duration::seconds(duree_session);
-        let date_epoch = DateEpochSeconds::from(date_expiration);
 
         let mut buffer_challenge = [0u8; 32];
         openssl::rand::rand_bytes(&mut buffer_challenge).expect("openssl::random::rand_bytes");
@@ -2235,7 +2295,7 @@ impl CookieSession {
             user_id: user_id.into(),
             hostname: hostname.into(),
             challenge,
-            expiration: date_epoch,
+            expiration: date_expiration,
         }
     }
 }
@@ -2287,23 +2347,21 @@ async fn charger_challenge_authentification<M,U,H,C>(middleware: &M, user_id: U,
 
 /// Verifie une demande de signature de certificat pour un compte usager
 /// Emet une commande autorisant la signature lorsque c'est approprie
-async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
-    // Valider information de reponse
-    let (reply_to, correlation_id) = message.get_reply_info()?;
-
-    // Pour cert usager, utiliser user_id du cert.
-    let user_id = match message.message.get_user_id() {
+    // Utiliser user_id du cert.
+    let user_id = match message.certificat.get_user_id()? {
         Some(inner) => inner,
         None => {
             error!("commande_signer_compte_usager Doit etre signe par un certificat usager qui inclus le user_id");
             let reponse_ok = json!({"ok": false, "err": "Certificat invalide, doit inclure user_id", "code": 1});
-            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+            return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
         }
     };
 
-    let commande: CommandeSignerCertificat = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let commande: CommandeSignerCertificat = serde_json::from_str(message_ref.contenu)?;
     debug!("commande_signer_compte_usager CommandeSignerCertificat : {:?}", commande);
 
     // Charger le compte usager
@@ -2312,8 +2370,8 @@ async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageVa
         None => {
             let err = json!({"ok": false, "code": 3, "err": format!("Usager inconnu : {}", user_id)});
             debug!("signer_compte_usager usager inconnu : {:?}", err);
-            match middleware.formatter_reponse(&err,None) {
-                Ok(m) => return Ok(Some(m)),
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
                 Err(e) => Err(format!("core_maitredescomptes.commande_signer_compte_usager Erreur preparation reponse : {:?}", e))?
             }
         }
@@ -2327,7 +2385,7 @@ async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageVa
         Err(e) => {
             error!("commande_signer_compte_usager Challenge webauthn inconnu ou expire : {:?}", e);
             let reponse_ok = json!({"ok": false, "err": "Challenge inconnu ou expire", "code": 1});
-            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+            return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
         }
     };
 
@@ -2360,7 +2418,7 @@ async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageVa
         Err(e) => {
             error!("commande_signer_compte_usager Erreur verification challenge webauthn : {:?}", e);
             let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 2});
-            return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+            return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
         }
     };
 
@@ -2368,19 +2426,20 @@ async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageVa
     signer_demande_certificat_usager(middleware, compte_usager, demande_certificat).await
 }
 
-async fn commande_signer_compte_par_proprietaire<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn commande_signer_compte_par_proprietaire<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     // Verifier autorisation, pour certificats systemes (Prive), charger param user_id.
-    let est_delegation_proprietaire = message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
+    let est_delegation_proprietaire = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
     if ! est_delegation_proprietaire {
         error!("commande_signer_compte_par_proprietaire Doit etre signe par un certificat avec delegation globale 'proprietaire'");
         let reponse_ok = json!({"ok": false, "err": "Certificat invalide, doit etre proprietaire", "code": 1});
-        return Ok(Some(middleware.formatter_reponse(reponse_ok, None)?))
+        return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
     }
     debug!("commande_signer_compte_par_proprietaire Resultat validation delegation proprietaire OK");
 
-    let commande: CommandeSignerCertificatParProprietaire = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let commande: CommandeSignerCertificatParProprietaire = serde_json::from_str(message_ref.contenu)?;
     debug!("commande_signer_compte_par_proprietaire CommandeSignerCertificatParProprietaire : {:?}", commande);
 
     let user_id = commande.user_id.as_str();
@@ -2391,8 +2450,8 @@ async fn commande_signer_compte_par_proprietaire<M>(middleware: &M, message: Mes
         None => {
             let err = json!({"ok": false, "code": 2, "err": format!("Usager inconnu : {}", user_id)});
             debug!("commande_signer_compte_par_proprietaire usager inconnu : {:?}", err);
-            match middleware.formatter_reponse(&err,None) {
-                Ok(m) => return Ok(Some(m)),
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
                 Err(e) => Err(format!("core_maitredescomptes.commande_signer_compte_par_proprietaire Erreur preparation reponse : {:?}", e))?
             }
         }
@@ -2403,7 +2462,7 @@ async fn commande_signer_compte_par_proprietaire<M>(middleware: &M, message: Mes
 
 async fn signer_demande_certificat_usager<M>(middleware: &M, compte_usager: CompteUsager,
                                              demande_certificat: DemandeSignatureCertificatWebauthn)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     let nom_usager = &compte_usager.nom_usager;
@@ -2416,7 +2475,8 @@ async fn signer_demande_certificat_usager<M>(middleware: &M, compte_usager: Comp
     debug!("commande_signer_compte_usager Activation tierce : {:?}", demande_certificat.activation_tierce);
     if let Some(true) = demande_certificat.activation_tierce {
         // Calculer fingerprint du nouveau certificat
-        let reponsecert_obj: ReponseCertificatUsager = reponse_commande.map_contenu()?;
+        let reponse_ref = reponse_commande.parse()?;
+        let reponsecert_obj: ReponseCertificatUsager = serde_json::from_str(reponse_ref.contenu)?;
         let pem = reponsecert_obj.certificat;
         let enveloppe_cert = middleware.charger_enveloppe(&pem, None, None).await?;
         let fingerprint_pk = enveloppe_cert.fingerprint_pk()?;
@@ -2442,8 +2502,7 @@ async fn signer_demande_certificat_usager<M>(middleware: &M, compte_usager: Comp
         });
         // domaine_action = 'evenement.MaitreDesComptes.' + ConstantesMaitreDesComptes.EVENEMENT_ACTIVATION_FINGERPRINTPK
         let routage_evenement = RoutageMessageAction::builder(
-            DOMAINE_NOM, "activationFingerprintPk")
-            .exchanges(vec![Securite::L2Prive])
+            DOMAINE_NOM, "activationFingerprintPk", vec![Securite::L2Prive])
             .partition(fingerprint_pk)
             // .user_id(user_id)
             .build();
@@ -2459,12 +2518,13 @@ async fn signer_demande_certificat_usager<M>(middleware: &M, compte_usager: Comp
 }
 
 /// Ajouter un CSR pour recuperer un compte usager
-async fn commande_ajouter_csr_recovery<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn commande_ajouter_csr_recovery<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("commande_ajouter_csr_recovery : {:?}", message);
 
-    let commande: CommandeAjouterCsrRecovery = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let commande: CommandeAjouterCsrRecovery = serde_json::from_str(message_ref.contenu)?;
     debug!("commande_ajouter_csr_recovery CommandeAjouterCsrRecovery : {:?}", commande);
 
     let csr = commande.csr;
@@ -2477,7 +2537,7 @@ async fn commande_ajouter_csr_recovery<M>(middleware: &M, message: MessageValide
         Some(n) => n,
         None => {
             let reponse = json!({"ok": false, "err": "Common Name absent du CSR"});
-            return Ok(Some(middleware.formatter_reponse(&reponse,None)?));
+            return Ok(Some(middleware.build_reponse(reponse)?.0));
         }
     };
 
@@ -2514,8 +2574,8 @@ async fn commande_ajouter_csr_recovery<M>(middleware: &M, message: MessageValide
     let resultat = collection.update_one(filtre, ops, Some(options)).await?;
 
     let reponse = json!({"ok": true, "code": &code});
-    match middleware.formatter_reponse(&reponse,None) {
-        Ok(m) => return Ok(Some(m)),
+    match middleware.build_reponse(reponse) {
+        Ok(m) => return Ok(Some(m.0)),
         Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_csr_recovery : {:?}", e))?
     }
 }
@@ -2547,19 +2607,20 @@ struct ReponseCommandeGenererChallenge {
     passkey_authentication: Option<PasskeyAuthentication>,
 }
 
-async fn commande_generer_challenge<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn commande_generer_challenge<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("commande_generer_challenge : {:?}", message);
 
-    let commande: CommandeGenererChallenge = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let commande: CommandeGenererChallenge = serde_json::from_str(message_ref.contenu)?;
     let hostname = commande.hostname.as_str();
 
-    let user_id = match message.get_user_id() {
-        Some(inner) => inner,
+    let user_id = match message.certificat.get_user_id()? {
+        Some(inner) => inner.to_owned(),
         None => {
             if let Some(user_id) = commande.user_id {
-                if message.verifier_exchanges(vec![Securite::L2Prive, Securite::L3Protege]) {
+                if message.certificat.verifier_exchanges(vec![Securite::L2Prive, Securite::L3Protege]) {
                     user_id
                 } else {
                    Err(format!("core_maitredescomptes.commande_generer_challenge Erreur message non autorise"))?
@@ -2577,8 +2638,8 @@ async fn commande_generer_challenge<M>(middleware: &M, message: MessageValideAct
             Some(inner) => inner,
             None => {
                 let reponse = json!({"ok": true, "code": 1, "err": "Usager inconnu"});
-                match middleware.formatter_reponse(&reponse,None) {
-                    Ok(m) => return Ok(Some(m)),
+                match middleware.build_reponse(reponse) {
+                    Ok(m) => return Ok(Some(m.0)),
                     Err(e) => Err(format!("Erreur preparation reponse commande_generer_challenge : {:?}", e))?
                 }
             }
@@ -2616,15 +2677,16 @@ async fn commande_generer_challenge<M>(middleware: &M, message: MessageValideAct
         };
     }
 
-    Ok(Some(middleware.formatter_reponse(reponse, None)?))
+    Ok(Some(middleware.build_reponse(reponse)?.0))
 }
 
-async fn supprimer_cookie<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn supprimer_cookie<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("supprimer_cookie : {:?}", message);
 
-    let commande: RequeteGetCookieUsager = message.message.get_msg().map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let commande: RequeteGetCookieUsager = serde_json::from_str(message_ref.contenu)?;
     let filtre = doc!{
         "user_id": commande.user_id,
         "hostname": commande.hostname,
@@ -2633,11 +2695,11 @@ async fn supprimer_cookie<M>(middleware: &M, message: MessageValideAction) -> Re
     let collection = middleware.get_collection(NOM_COLLECTION_COOKIES)?;
     collection.delete_one(filtre, None).await?;
 
-    Ok(middleware.reponse_ok()?)
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
 /// Signe un certificat usager sans autre forme de validation. Utilise certissuerInterne/.
-async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_id: T, csr: U, compte: Option<&CompteUsager>) -> Result<MessageMilleGrille, Box<dyn Error>>
+async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_id: T, csr: U, compte: Option<&CompteUsager>) -> Result<MessageMilleGrillesBufferDefault, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud,
           S: AsRef<str>, T: AsRef<str>, U: AsRef<str>
 {
@@ -2666,13 +2728,17 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
     // });
 
     let commande_signature = CommandeSignatureUsager::new(nom_usager_str, user_id_str, csr_str, compte);
-    let commande_signee = middleware.formatter_message(
-        MessageKind::Document, &commande_signature,
-        None::<&str>, None::<&str>, None::<&str>, None::<&str>,
-        None, false)?;
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM_MAITREDESCOMPTES, "signer", vec![])
+        .build();
+    let commande_signee = middleware.build_message_action(
+        millegrilles_cryptographie::messages_structs::MessageKind::Commande, routage, &commande_signature)?.0;
+    // let commande_signee = middleware.build_message_action(
+    //     MessageKind::Document, &commande_signature,
+    //     None::<&str>, None::<&str>, None::<&str>, None::<&str>,
+    //     None, false)?;
 
     // On retransmet le message recu tel quel
-    match client.post(url_post).json(&commande_signee).send().await {
+    match client.post(url_post).body(commande_signee.buffer).send().await {
         Ok(response) => {
             match response.status().is_success() {
                 true => {
@@ -2682,7 +2748,7 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
                     let enveloppe = middleware.charger_enveloppe(
                         &reponse_json.certificat, None, None).await?;
                     debug!("signer_certificat_usager Nouveau certificat valide, fingerprint : {}", enveloppe.fingerprint);
-                    return Ok(middleware.formatter_reponse(reponse_json, None)?)
+                    return Ok(middleware.build_reponse(reponse_json)?.0)
                 },
                 false => {
                     debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : status {}", response.status());
@@ -2696,29 +2762,27 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
 
     // Une erreur est survenue dans le post, fallback vers noeuds 4.secure (si presents)
     debug!("Echec connexion a certissuer local, relai vers instances 4.secure");
-    let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, COMMANDE_SIGNER_COMPTEUSAGER)
-        .exchanges(vec![Securite::L4Secure])
+    let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, COMMANDE_SIGNER_COMPTEUSAGER, vec![Securite::L4Secure])
         .build();
 
-    match middleware.transmettre_commande(routage, &commande_signature, true).await? {
+    match middleware.transmettre_commande(routage, &commande_signature).await? {
         Some(reponse) => {
             if let TypeMessage::Valide(reponse) = reponse {
-                let reponse_json: ReponseCertificatSigne = reponse.message.parsed.map_contenu()?;
-                Ok(middleware.formatter_reponse(reponse_json, None)?)
+                let reponse_ref = reponse.message.parse()?;
+                let reponse_json: ReponseCertificatSigne = serde_json::from_str(reponse_ref.contenu)?;
+                Ok(middleware.build_reponse(reponse_json)?.0)
             } else {
                 error!("core_pki.commande_signer_csr Erreur signature, echec local et relai 4.secure");
-                Ok(middleware.formatter_reponse(
-                    json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
-                    None
-                )?)
+                Ok(middleware.build_reponse(
+                    json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"})
+                )?.0)
             }
         },
         None => {
             error!("core_pki.commande_signer_csr Erreur signature, aucune reponse");
-            Ok(middleware.formatter_reponse(
-                json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"}),
-                None
-            )?)
+            Ok(middleware.build_reponse(
+                json!({"ok": false, "err": "Erreur signature : aucun signateur disponible"})
+            )?.0)
         }
     }
 }
@@ -2761,68 +2825,29 @@ impl CommandeSignatureUsager {
     }
 }
 
-async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineMaitreDesComptes)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineMaitreDesComptes)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer ajouter_cle : {:?}", &message.message);
 
-    let uuid_transaction = message.message.parsed.id.clone();
+    let message_ref = message.message.parse()?;
+    let uuid_transaction = message_ref.id.to_owned();
 
-    let certificat = match message.message.certificat {
-        Some(inner) => inner.clone(),
-        None => {
-            let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat manquant"});
-            debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-            match middleware.formatter_reponse(&err,None) {
-                Ok(m) => return Ok(Some(m)),
-                Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-            }
-        }
-    };
+    let certificat = message.certificat.as_ref();
 
-    let transaction_ajouter_cle_contenu: TransactionAjouterCle = message.message.parsed.map_contenu()?;
+    let transaction_ajouter_cle_contenu: TransactionAjouterCle = serde_json::from_str(message_ref.contenu)?;
 
     let idmg = middleware.idmg();
 
-    // // Verifier autorisation du message
-    // // Doit provenir d'un maitre des comptes sur exchange 2.prive
-    // if ! message.verifier(
-    //     Some(vec!(Securite::L2Prive)),
-    //     Some(vec!(RolesCertificats::MaitreComptes)),
-    // ) {
-    //     let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-    //     debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-    //     match middleware.formatter_reponse(&err,None) {
-    //         Ok(m) => return Ok(Some(m)),
-    //         Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-    //     }
-    // }
-    //
-    // let commande: CommandeAjouterCle = message.message.get_msg().map_contenu()?;
-    //
-    // // Valider la signature du message client.
-    // let reponse_client_serialise = {
-    //     let mut reponse_client_serialise = MessageSerialise::from_parsed(commande.transaction)?;
-    //     if let Err(e) = valider_message(middleware, &mut reponse_client_serialise).await {
-    //         let err = json!({"ok": false, "code": 3, "err": format!{"Permission refusee, reponseClient invalide : {:?}", e}});
-    //         debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-    //         match middleware.formatter_reponse(&err, None) {
-    //             Ok(m) => return Ok(Some(m)),
-    //             Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
-    //         }
-    //     }
-    //     reponse_client_serialise
-    // };
-    //
     // let transaction_ajouter_cle_contenu: TransactionAjouterCle = reponse_client_serialise.parsed.map_contenu()?;
     let hostname = match transaction_ajouter_cle_contenu.hostname.as_ref() {
         Some(inner) => inner.as_str(),
         None => {
             let err = json!({"ok": false, "code": 15, "err": format!{"Permission refusee, hostname manquant"}});
             debug!("ajouter_cle hostname manquant");
-            match middleware.formatter_reponse(&err, None) {
-                Ok(m) => return Ok(Some(m)),
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
                 Err(e) => Err(format!("ajouter_cle: Erreur preparation reponse commande_ajouter_cle (15) : {:?}", e))?
             }
         }
@@ -2836,40 +2861,14 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
         None => {
             let err = json!({"ok": false, "code": 8, "err": "Permission refusee, certificat client sans user_id"});
             debug!("ajouter_cle autorisation acces refuse certificat client sans user_id (8): {:?}", err);
-            match middleware.formatter_reponse(&err,None) {
-                Ok(m) => return Ok(Some(m)),
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
                 Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
             }
         }
     };
 
     let fingerprint_pk = certificat.fingerprint_pk()?;
-
-    // let (user_id_certificat, fingerprint_pk) = match reponse_client_serialise.certificat.as_ref() {
-    //     Some(inner) => {
-    //         let user_id = match inner.get_user_id()? {
-    //             Some(inner) => inner.as_str(),
-    //             None => {
-    //                 let err = json!({"ok": false, "code": 8, "err": "Permission refusee, certificat client sans user_id"});
-    //                 debug!("ajouter_cle autorisation acces refuse certificat client sans user_id (8): {:?}", err);
-    //                 match middleware.formatter_reponse(&err,None) {
-    //                     Ok(m) => return Ok(Some(m)),
-    //                     Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
-    //                 }
-    //             }
-    //         };
-    //
-    //         (user_id, inner.fingerprint.as_str())
-    //     },
-    //     None => {
-    //         let err = json!({"ok": false, "code": 6, "err": "Permission refusee, certificat client absent"});
-    //         debug!("ajouter_cle autorisation acces refuse certificat client absent (6): {:?}", err);
-    //         match middleware.formatter_reponse(&err,None) {
-    //             Ok(m) => return Ok(Some(m)),
-    //             Err(e) => Err(format!("Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
-    //         }
-    //     }
-    // };
 
     // Validation - s'assurer que le compte usager existe
     let collection_webauthn = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
@@ -2879,8 +2878,8 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
         None => {
             let err = json!({"ok": false, "code": 14, "err": format!("Permission refusee, registration webauthn absent pour userId : {}", user_id_certificat)});
             debug!("ajouter_cle registration inconnu pour user_id {} (14) : {:?}", user_id_certificat, err);
-            match middleware.formatter_reponse(&err,None) {
-                Ok(m) => return Ok(Some(m)),
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
                 Err(e) => Err(format!("core_maitredescomptes.ajouter_cle Erreur preparation reponse commande_ajouter_cle (14) : {:?}", e))?
             }
         }
@@ -2891,8 +2890,8 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
         None => {
             let err = json!({"ok": false, "code": 2, "err": format!("Usager inconnu pour userId (2) : {}", user_id_certificat)});
             debug!("ajouter_cle usager inconnu : {:?}", err);
-            match middleware.formatter_reponse(&err,None) {
-                Ok(m) => return Ok(Some(m)),
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
                 Err(e) => Err(format!("core_maitredescomptes.ajouter_cle Erreur preparation reponse commande_ajouter_cle : {:?}", e))?
             }
         }
@@ -2916,20 +2915,24 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValideAction, g
     }
 
     debug!("Credentials traite - sauvegarder sous forme de nouvelle transaction");
-    let mut transaction_credential = middleware.formatter_message(
-        MessageKind::Transaction, &credential_interne,
-        Some(DOMAINE_NOM_MAITREDESCOMPTES), Some(TRANSACTION_AJOUTER_CLE),
-        None::<&str>, None::<&str>, None, false)?;
+    // let mut transaction_credential = middleware.formatter_message(
+    //     MessageKind::Transaction, &credential_interne,
+    //     Some(DOMAINE_NOM_MAITREDESCOMPTES), Some(TRANSACTION_AJOUTER_CLE),
+    //     None::<&str>, None::<&str>, None, false)?;
 
     // Sauvegarder la transaction, marquer complete et repondre
     // let uuid_transaction = reponse_client_serialise.parsed.id.clone();
-    let mut mva = MessageValideAction::from_message_millegrille(
-        transaction_credential, TypeMessageOut::Transaction)?;
+    // let mut mva = MessageValide::from_message_millegrille(
+    //     transaction_credential, TypeMessageOut::Transaction)?;
+    //
+    // // Inserer le certificat local
+    // mva.message.certificat = Some(middleware.get_enveloppe_signature().enveloppe.clone());
+    //
+    // Ok(sauvegarder_traiter_transaction(middleware, mva, gestionnaire).await?)
 
-    // Inserer le certificat local
-    mva.message.certificat = Some(middleware.get_enveloppe_signature().enveloppe.clone());
-
-    Ok(sauvegarder_traiter_transaction(middleware, mva, gestionnaire).await?)
+    Ok(sauvegarder_traiter_transaction_serializable(
+        middleware, &credential_interne, gestionnaire, DOMAINE_NOM_MAITREDESCOMPTES, TRANSACTION_AJOUTER_CLE
+    ).await?)
 }
 
 async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, passkey_credential: Passkey, supprimer_registration: bool)
@@ -2971,15 +2974,11 @@ async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, 
     Ok(cred)
 }
 
-async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
-    -> Result<Option<MessageMilleGrille>, String>
-    where T: Transaction,
-          M: ValidateurX509 + GenerateurMessages + MongoDao,
+async fn transaction_ajouter_cle<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let certificat = match transaction.get_enveloppe_certificat() {
-        Some(inner) => inner,
-        None => Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur certificat absent - SKIP"))?
-    };
+    let certificat = transaction.certificat.as_ref();
 
     if ! certificat.verifier_exchanges(vec![Securite::L4Secure]) ||
         ! certificat.verifier_domaines(vec![DOMAINE_NOM_MAITREDESCOMPTES.to_string()]) ||
@@ -2987,7 +2986,7 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
         Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur exchanges/domaines/roles non autorise - SKIP"))?
     }
 
-    let transaction_contenu: CredentialWebauthn = match transaction.convertir() {
+    let transaction_contenu: CredentialWebauthn = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur conversion en TransactionAjouterCle : {:?}", e))?
     };
@@ -3032,7 +3031,7 @@ async fn transaction_ajouter_cle<M, T>(middleware: &M, transaction: T)
         debug!("transaction_ajouter_cle Credential existe deja - OK");
     }
 
-    middleware.reponse_ok()
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
 /// Charger un compte usager a partir du nom usager
@@ -3165,10 +3164,10 @@ pub struct TransactionAjouterCle {
     pub reset_cles: Option<bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct CommandeAjouterCle {
-    transaction: MessageMilleGrille
-}
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// struct CommandeAjouterCle {
+//     transaction: MessageMilleGrille
+// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ReponseClientAjouterCle {
@@ -3181,116 +3180,122 @@ struct ReponseClientAjouteCleReponseChallenge {
 }
 
 /// Ajoute une delegation globale a partir d'un message signe par la cle de millegrille
-async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
     // Verifier autorisation
-    let user_id = match message.get_user_id() {
-        Some(inner) => inner,
+    let user_id = match message.certificat.get_user_id()? {
+        Some(inner) => inner.to_owned(),
         None => {
             let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat sans user_id"});
             debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
-            match middleware.formatter_reponse(&err, None) {
-                Ok(m) => return Ok(Some(m)),
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
                 Err(e) => Err(format!("commande_ajouter_delegation_signee Erreur preparation reponse (1) ajouter_delegation_signee : {:?}", e))?
             }
         }
     };
 
-    // Valider contenu
-    let commande: CommandeAjouterDelegationSignee = message.message.parsed.map_contenu()?;
-    let mut message_confirmation = commande.confirmation;
-    // let user_id = commande.user_id.as_str();
-    let hostname = commande.hostname.as_str();
+    let message_id = {
+        // Valider contenu
+        let message_ref = message.message.parse()?;
+        let commande: CommandeAjouterDelegationSignee = serde_json::from_str(message_ref.contenu)?;
 
-    // S'assurer que la signature est recente (moins de 2 minutes, ajustement 10 secondes futur max)
-    let date_signature = message_confirmation.estampille.get_datetime();
-    let now = Utc::now();
-    if now - chrono::Duration::minutes(2) > *date_signature || now + chrono::Duration::seconds(10) < *date_signature {
-        warn!("ajouter_delegation_signee Commande delegation expiree - on rejette (2)");
-        let err = json!({"ok": false, "code": 2, "err": "Permission refusee, estampille invalide"});
-        match middleware.formatter_reponse(&err, None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("commande_ajouter_delegation_signee Erreur preparation reponse (2) : {:?}", e))?
-        }
-    }
+        let mut message_confirmation = commande.confirmation;
+        // let user_id = commande.user_id.as_str();
+        let hostname = commande.hostname.as_str();
 
-    // Valider la signature de la cle de millegrille
-    let (signature, hachage) = message_confirmation.verifier_contenu()?;
-    if signature != true || hachage != true {
-        let err = json!({"ok": false, "code": 3, "err": "Permission refusee, signature/hachage confirmation invalides"});
-        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err, None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse (3) ajouter_delegation_signee : {:?}", e))?
-        }
-    }
-    debug!("ajouter_delegation_signee Signature message delegation (confirmation) OK");
-
-    // Valider la pubkey, elle doit correspondre au certificat de la MilleGrille.
-    let public_key_millegrille = middleware.ca_cert().public_key()?.raw_public_key()?;
-    if hex::decode(message_confirmation.pubkey.as_str())? != public_key_millegrille {
-        let err = json!({"ok": false, "code": 4, "err": "Permission refusee, pubkey n'est pas la cle de la MilleGrille"});
-        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err, None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse (4) ajouter_delegation_signee : {:?}", e))?
-        }
-    }
-    debug!("ajouter_delegation_signee Correspondance cle publique millegrille OK");
-
-    // Valider le format du contenu (parse)
-    let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = message_confirmation.map_contenu()?;
-    if commande_ajouter_delegation.user_id.as_str() != user_id.as_str() {
-        let err = json!({"ok": false, "code": 5, "err": "Permission refusee, user_id signe et session serveur mismatch"});
-        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err, None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse (5) ajouter_delegation_signee : {:?}", e))?
-        }
-    }
-    let challenge_recu = commande_ajouter_delegation.challenge.as_str();
-    debug!("commande_ajouter_delegation_signee Commande ajouter delegation verifiee {:?}", commande_ajouter_delegation);
-
-    // Verifier que le challenge est bien associe a cet usager pour une delegation
-    let challenge = {
-        let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
-        let filtre = doc! { CHAMP_USER_ID: &user_id, "type_challenge": "delegation", "hostname": hostname, "challenge": challenge_recu};
-        let doc_challenge: DocChallenge = match collection.find_one(filtre, None).await? {
-            Some(inner) => convertir_bson_deserializable(inner)?,
-            None => {
-                let err = json!({"ok": false, "code": 6, "err": "Permission refusee, challenge delegation inconnu"});
-                debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
-                match middleware.formatter_reponse(&err, None) {
-                    Ok(m) => return Ok(Some(m)),
-                    Err(e) => Err(format!("Erreur preparation reponse (6) ajouter_delegation_signee : {:?}", e))?
-                }
+        // S'assurer que la signature est recente (moins de 2 minutes, ajustement 10 secondes futur max)
+        let date_signature = &message_confirmation.estampille;
+        let now = Utc::now();
+        if now - chrono::Duration::minutes(2) > *date_signature || now + chrono::Duration::seconds(10) < *date_signature {
+            warn!("ajouter_delegation_signee Commande delegation expiree - on rejette (2)");
+            let err = json!({"ok": false, "code": 2, "err": "Permission refusee, estampille invalide"});
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
+                Err(e) => Err(format!("commande_ajouter_delegation_signee Erreur preparation reponse (2) : {:?}", e))?
             }
+        }
+
+        // Valider la signature de la cle de millegrille
+        if let Err(e) = message_confirmation.verifier_signature() {
+            // if signature != true || hachage != true {
+            // let err = json!({"ok": false, "code": 3, "err": "Permission refusee, signature/hachage confirmation invalides"});
+            debug!("ajouter_delegation_signee autorisation acces refuse");
+            match middleware.reponse_err(3, None, Some("Permission refusee, signature/hachage confirmation invalides")) {
+                Ok(m) => return Ok(Some(m)),
+                Err(e) => Err(format!("Erreur preparation reponse (3) ajouter_delegation_signee : {:?}", e))?
+            }
+        }
+        debug!("ajouter_delegation_signee Signature message delegation (confirmation) OK");
+
+        // Valider la pubkey, elle doit correspondre au certificat de la MilleGrille.
+        let public_key_millegrille = middleware.ca_cert().public_key()?.raw_public_key()?;
+        if hex::decode(message_confirmation.pubkey)? != public_key_millegrille {
+            let err = json!({"ok": false, "code": 4, "err": "Permission refusee, pubkey n'est pas la cle de la MilleGrille"});
+            debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
+                Err(e) => Err(format!("Erreur preparation reponse (4) ajouter_delegation_signee : {:?}", e))?
+            }
+        }
+        debug!("ajouter_delegation_signee Correspondance cle publique millegrille OK");
+
+        // Valider le format du contenu (parse)
+        let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = serde_json::from_str(message_confirmation.contenu)?;
+        if commande_ajouter_delegation.user_id.as_str() != user_id.as_str() {
+            let err = json!({"ok": false, "code": 5, "err": "Permission refusee, user_id signe et session serveur mismatch"});
+            debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
+                Err(e) => Err(format!("Erreur preparation reponse (5) ajouter_delegation_signee : {:?}", e))?
+            }
+        }
+        let challenge_recu = commande_ajouter_delegation.challenge.as_str();
+        debug!("commande_ajouter_delegation_signee Commande ajouter delegation verifiee {:?}", commande_ajouter_delegation);
+
+        // Verifier que le challenge est bien associe a cet usager pour une delegation
+        let challenge = {
+            let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+            let filtre = doc! { CHAMP_USER_ID: &user_id, "type_challenge": "delegation", "hostname": hostname, "challenge": challenge_recu};
+            let doc_challenge: DocChallenge = match collection.find_one(filtre, None).await? {
+                Some(inner) => convertir_bson_deserializable(inner)?,
+                None => {
+                    let err = json!({"ok": false, "code": 6, "err": "Permission refusee, challenge delegation inconnu"});
+                    debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+                    match middleware.build_reponse(err) {
+                        Ok(m) => return Ok(Some(m.0)),
+                        Err(e) => Err(format!("Erreur preparation reponse (6) ajouter_delegation_signee : {:?}", e))?
+                    }
+                }
+            };
+            doc_challenge.challenge
         };
-        doc_challenge.challenge
+
+        if challenge == commande_ajouter_delegation.challenge {
+            // Challenge est OK, supprimer pour eviter replay attacks
+            let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+            let filtre = doc! { CHAMP_USER_ID: &user_id, "hostname": hostname, "challenge": challenge_recu};
+            collection.delete_one(filtre, None).await?;
+        } else {
+            let err = json!({"ok": false, "code": 7, "err": "Permission refusee, challenge delegation inconnu"});
+            debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
+            match middleware.build_reponse(err) {
+                Ok(m) => return Ok(Some(m.0)),
+                Err(e) => Err(format!("Erreur preparation reponse (7) ajouter_delegation_signee : {:?}", e))?
+            }
+        }
+
+        message_ref.id.to_string()
     };
 
-    if challenge == commande_ajouter_delegation.challenge {
-        // Challenge est OK, supprimer pour eviter replay attacks
-        let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
-        let filtre = doc! { CHAMP_USER_ID: &user_id, "hostname": hostname, "challenge": challenge_recu};
-        collection.delete_one(filtre, None).await?;
-    } else {
-        let err = json!({"ok": false, "code": 7, "err": "Permission refusee, challenge delegation inconnu"});
-        debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err, None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse (7) ajouter_delegation_signee : {:?}", e))?
-        }
-    }
-
     // Signature valide, on sauvegarde et traite la transaction
-    let uuid_transaction = message.message.parsed.id.clone();
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
-    let transaction: TransactionImpl = message.try_into()?;
-    let _ = transaction_ajouter_delegation_signee(middleware, transaction).await?;
-    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
+    // let transaction: TransactionImpl = message.try_into()?;
+    transaction_ajouter_delegation_signee(middleware, message.try_into()?).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &message_id, EtatTransaction::Complete).await?;
 
     // Charger le document de compte et retourner comme reponse
     let reponse = match charger_compte_user_id(middleware, &user_id).await? {
@@ -3302,29 +3307,33 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
         warn!("ajouter_delegation_signee Erreur emission evenement inscription usager : {:?}", e);
     }
 
-    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+    Ok(Some(middleware.build_reponse(reponse)?.0))
 }
 
-async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("commande_reset_webauthn_usager Consommer commande : {:?}", &message.message);
     // Verifier autorisation
-    if !message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
         let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("commande_reset_webauthn_usager autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err, None) {
-            Ok(m) => return Ok(Some(m)),
+        match middleware.build_reponse(err) {
+            Ok(m) => return Ok(Some(m.0)),
             Err(e) => Err(format!("Erreur preparation reponse (1) ajouter_delegation_signee : {:?}", e))?
         }
     }
 
     // Valider contenu en faisant le mapping
-    let commande_resultat: CommandeResetWebauthnUsager = match message.message.get_msg().map_contenu() {
-        Ok(c) => c,
-        Err(e) => {
-            let reponse = json!({"ok": false, "code": 2, "err": format!("Format de la commande invalide : {:?}", e)});
-            return Ok(Some(middleware.formatter_reponse(reponse, None)?))
+    let commande_resultat: CommandeResetWebauthnUsager = {
+        let message_ref = message.message.parse()?;
+        match serde_json::from_str(message_ref.contenu) {
+            Ok(c) => c,
+            Err(e) => {
+                let reponse = json!({"ok": false, "code": 2, "err": format!("Format de la commande invalide : {:?}", e)});
+                return Ok(Some(middleware.build_reponse(reponse)?.0))
+            }
         }
     };
 
@@ -3355,8 +3364,7 @@ async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &Gestio
         }
 
         // Emettre message pour fermer toutes les sessions en cours de l'usager
-        let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_EVICT_USAGER)
-            .exchanges(vec![L1Public])
+        let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_EVICT_USAGER, vec![Securite::L1Public])
             .build();
         let message = json!({CHAMP_USER_ID: user_id});
         middleware.emettre_evenement(routage, &message).await?;
@@ -3365,41 +3373,38 @@ async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &Gestio
     Ok(resultat_transaction)
 }
 
-async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction: T)
-    -> Result<Option<MessageMilleGrille>, String>
-    where T: Transaction,
-          M: ValidateurX509 + GenerateurMessages + MongoDao,
+async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let commande: CommandeAjouterDelegationSignee = match transaction.clone().convertir() {
+    let commande: CommandeAjouterDelegationSignee = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur conversion en CommandeAjouterCle : {:?}", e))?
     };
 
-    let user_id_option = match transaction.get_enveloppe_certificat() {
-        Some(inner) => match inner.get_user_id()? {
-            Some(inner) => Some(inner.to_owned()),
-            None => commande.user_id.clone()
-        },
+    let user_id_option = match transaction.certificat.get_user_id()? {
+        Some(inner) => Some(inner.to_owned()),
         None => commande.user_id.clone()
     };
 
     let user_id = match user_id_option.as_ref() {
         Some(inner) => inner.as_str(),
-        None => {
-            Err(format!("transaction_ajouter_delegation_signee User_id None"))?
-        }
+        None => Err(String::from("transaction_ajouter_delegation_signee User_id None"))?
     };
 
     // Valider contenu
     let mut message_confirmation = commande.confirmation;
 
     // Valider la signature de la cle de millegrille
-    let (signature, hachage) = match message_confirmation.verifier_contenu() {
-        Ok(inner) => inner,
-        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur verifier_contenu : {:?}", e))?
-    };
-    if signature != true || hachage != true {
-        Err(format!("transaction_ajouter_delegation_signee Permission refusee, signature/hachage confirmation invalides"))?
+    // let (signature, hachage) = match message_confirmation.verifier_contenu() {
+    //     Ok(inner) => inner,
+    //     Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur verifier_contenu : {:?}", e))?
+    // };
+    // if signature != true || hachage != true {
+    //     Err(format!("transaction_ajouter_delegation_signee Permission refusee, signature/hachage confirmation invalides"))?
+    // }
+    if let Err(e) = message_confirmation.verifier_signature() {
+        Err(format!("transaction_ajouter_delegation_signee Permission refusee, signature/hachage confirmation invalides : {}", e))?
     }
 
     // Valider la pubkey, elle doit correspondre au certificat de la MilleGrille.
@@ -3411,7 +3416,7 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur raw_public_key {:?}", e))?
     };
 
-    let public_key_recue = match hex::decode(message_confirmation.pubkey.as_str()) {
+    let public_key_recue = match hex::decode(message_confirmation.pubkey) {
         Ok(inner) => inner,
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur hex::decode {:?}", e))?
     } ;
@@ -3419,8 +3424,8 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
         Err(format!("transaction_ajouter_delegation_signee Permission refusee, pubkey n'est pas la cle de la MilleGrille"))?
     }
 
-    debug!("transaction_ajouter_delegation_signee {:?}", message_confirmation);
-    let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = match message_confirmation.map_contenu() {
+    debug!("transaction_ajouter_delegation_signee {:?}", message_confirmation.contenu);
+    let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = match serde_json::from_str(message_confirmation.contenu) {
         Ok(inner) => inner,
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur map_contenu : {:?}", e))?
     };
@@ -3431,8 +3436,9 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
         CHAMP_USER_ID: user_id,
         CHAMP_USAGER_NOM: commande_ajouter_delegation.nom_usager.as_str(),
     };
+    let now_epoch = Utc::now().timestamp();
     let ops = doc! {
-        "$set": {"delegation_globale": "proprietaire", "delegations_date": &DateEpochSeconds::now()},
+        "$set": {"delegation_globale": "proprietaire", "delegations_date": now_epoch},
         "$inc": {CHAMP_DELEGATION_VERSION: 1},
         "$currentDate": { CHAMP_MODIFICATION: true }
     };
@@ -3440,7 +3446,7 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
     let resultat = match collection.update_one(filtre, ops, None).await {
         Ok(r) => r,
-        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", message_confirmation, e))?
+        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", message_confirmation.contenu, e))?
     };
     debug!("transaction_ajouter_delegation_signee resultat {:?}", resultat);
     if resultat.matched_count == 1 {
@@ -3450,12 +3456,11 @@ async fn transaction_ajouter_delegation_signee<M, T>(middleware: &M, transaction
     }
 }
 
-async fn transaction_reset_webauthn_usager<M, T>(middleware: &M, transaction: T)
-    -> Result<Option<MessageMilleGrille>, String>
-    where T: Transaction,
-          M: ValidateurX509 + GenerateurMessages + MongoDao,
+async fn transaction_reset_webauthn_usager<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let commande: CommandeResetWebauthnUsager = match transaction.clone().convertir() {
+    let commande: CommandeResetWebauthnUsager = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_reset_webauthn_usager Erreur conversion en CommandeResetWebauthnUsager : {:?}", e))?
     };
@@ -3472,7 +3477,7 @@ async fn transaction_reset_webauthn_usager<M, T>(middleware: &M, transaction: T)
         }
     }
 
-    middleware.reponse_ok()
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3485,9 +3490,10 @@ struct CommandeResetWebauthnUsager {
     evict_all_sessions: Option<bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct CommandeAjouterDelegationSignee {
-    confirmation: MessageMilleGrille,
+#[derive(Clone, Serialize, Deserialize)]
+struct CommandeAjouterDelegationSignee<'a> {
+    #[serde(borrow="'a")]
+    confirmation: MessageMilleGrillesRefDefault<'a>,
     #[serde(rename="userId")]
     user_id: Option<String>,
     hostname: String,
@@ -3550,21 +3556,26 @@ struct ReponseActivationTierce {
     user_id: String,
 }
 
-pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer commande_maj_usager_delegations : {:?}", &message.message);
 
     // Valider contenu
-    let commande: TransactionMajUsagerDelegations = message.message.get_msg().map_contenu()?;
+    let (message_id, commande) = {
+        let message_ref = message.message.parse()?;
+        let commande: TransactionMajUsagerDelegations = serde_json::from_str(message_ref.contenu)?;
+        let message_id = message_ref.id.to_owned();
+        (message_id, commande)
+    };
     let user_id = commande.user_id.as_str();
 
     // Commande valide, on sauvegarde et traite la transaction
-    let uuid_transaction = message.message.parsed.id.clone();
+    // let uuid_transaction = message_ref.id;
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
-    let transaction: TransactionImpl = message.try_into()?;
-    let _ = transaction_maj_usager_delegations(middleware, transaction).await?;
-    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
+    // let transaction: TransactionImpl = message.try_into()?;
+    let _ = transaction_maj_usager_delegations(middleware, message.try_into()?).await?;
+    marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &message_id, EtatTransaction::Complete).await?;
 
     // Charger le document de compte et retourner comme reponse
     let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
@@ -3576,7 +3587,7 @@ pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: Message
         warn!("commande_maj_usager_delegations Erreur emission evenement maj : {:?}", e);
     }
 
-    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+    Ok(Some(middleware.build_reponse(&reponse)?.0))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3587,22 +3598,23 @@ struct TransactionMajUsagerDelegations {
     user_id: String,
 }
 
-pub async fn transaction_maj_usager_delegations<M, T>(middleware: &M, transaction: T)
-    -> Result<Option<MessageMilleGrille>, String>
-    where T: Transaction,
-          M: ValidateurX509 + GenerateurMessages + MongoDao,
+pub async fn transaction_maj_usager_delegations<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let commande: TransactionMajUsagerDelegations = match transaction.clone().convertir() {
+    let commande: TransactionMajUsagerDelegations = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion en CommandeAjouterDelegationSignee : {:?}", e))?
     };
     let user_id = commande.user_id.as_str();
 
+    let now_epoch = Utc::now().timestamp();
+
     let filtre = doc! {CHAMP_USER_ID: user_id};
     let set_ops = doc! {
         CHAMP_COMPTE_PRIVE: commande.compte_prive,
         CHAMP_DELEGATION_GLOBALE: commande.delegation_globale,
-        CHAMP_DELEGATION_DATE: &DateEpochSeconds::now(),
+        CHAMP_DELEGATION_DATE: now_epoch,
     };
     let ops = doc! {
         "$set": set_ops,
@@ -3623,31 +3635,32 @@ pub async fn transaction_maj_usager_delegations<M, T>(middleware: &M, transactio
     Ok(None)
 }
 
-pub async fn commande_supprimer_cles<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+pub async fn commande_supprimer_cles<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer commande_supprimer_cles : {:?}", &message.message);
 
     // Valider contenu
-    let commande: TransactionSupprimerCles = message.message.get_msg().map_contenu()?;
-    let user_id = commande.user_id.as_str();
+    let uuid_transaction = {
+        let message_ref = message.message.parse()?;
+        message_ref.id.to_owned()
+    };
+    // let commande: TransactionSupprimerCles = serde_json::from_str(message_ref.contenu)?;
+    // let user_id = commande.user_id.as_str();
 
     // Commande valide, on sauvegarde et traite la transaction
-    let uuid_transaction = message.message.parsed.id.clone();
     sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
-    let transaction: TransactionImpl = message.try_into()?;
-    let _ = transaction_supprimer_cles(middleware, transaction).await?;
+    let _ = transaction_supprimer_cles(middleware, message.try_into()?).await?;
     marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
 
-    Ok(middleware.reponse_ok()?)
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
-pub async fn transaction_supprimer_cles<M, T>(middleware: &M, transaction: T)
-    -> Result<Option<MessageMilleGrille>, String>
-    where T: Transaction,
-          M: ValidateurX509 + GenerateurMessages + MongoDao,
+pub async fn transaction_supprimer_cles<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let commande: TransactionSupprimerCles = match transaction.clone().convertir() {
+    let commande: TransactionSupprimerCles = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion en CommandeAjouterDelegationSignee : {:?}", e))?
     };
@@ -3710,7 +3723,7 @@ struct TokenUsager {
 }
 
 /// Genere un message signe avec user_id et une date d'expiration.
-fn generer_token_compte<M,S>(middleware: &M, user_id: S) -> Result<MessageMilleGrille, Box<dyn Error>>
+fn generer_token_compte<M,S>(middleware: &M, user_id: S) -> Result<MessageMilleGrillesBufferDefault, Box<dyn Error>>
     where M: GenerateurMessages, S: Into<String>
 {
     let date_expiration = Utc::now() + chrono::Duration::days(1);
@@ -3719,7 +3732,7 @@ fn generer_token_compte<M,S>(middleware: &M, user_id: S) -> Result<MessageMilleG
         date_expiration: date_expiration.timestamp(),
         autorisation_register_token: true,
     };
-    let mut token_signe = middleware.formatter_reponse(token, None)?;
+    let token_signe = middleware.build_reponse(token)?.0;
 
     // Retirer certificat
     // token_signe.certificat = None;
@@ -3761,40 +3774,38 @@ async fn emettre_maj_compte_usager<M,S>(middleware: &M, user_id: S, action: Opti
     let collection = middleware.get_collection_typed::<EvenementMajCompteUsager>(NOM_COLLECTION_USAGERS)?;
     if let Some(compte) = collection.find_one(filtre, None).await? {
         debug!("emettre_maj_compte_usager compte : {:?}", compte);
-        let routage_builder = RoutageMessageAction::builder(DOMAINE_NOM, action)
-            .exchanges(vec![Securite::L3Protege]);
-        let routage = routage_builder.build();
+        let routage = RoutageMessageAction::builder(DOMAINE_NOM, action, vec![Securite::L3Protege])
+            .build();
         middleware.emettre_evenement(routage, &compte).await?;
 
         // Emettre message pour l'usager (e.g. maitredescomptes)
-        let routage_builder = RoutageMessageAction::builder(DOMAINE_NOM, action)
+        let routage = RoutageMessageAction::builder(DOMAINE_NOM, action, vec![Securite::L2Prive])
             .partition(&compte.user_id)
-            .exchanges(vec![Securite::L2Prive]);
-        let routage = routage_builder.build();
+            .build();
         middleware.emettre_evenement(routage, &compte).await?;
     }
     Ok(())
 }
 
-#[cfg(test)]
-mod test_integration {
-    use crate::test_setup::setup;
-    use crate::validateur_pki_mongo::preparer_middleware_pki;
-    use millegrilles_common_rust::tokio as tokio;
-
-    use super::*;
-
-    // #[tokio::test]
-    // async fn test_() {
-    //     setup("test_liste_applications");
-    //     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
-    //     futures.push(spawn(async move {
-    //
-    //         todo!("Test!")
-    //
-    //     }));
-    //     // Execution async du test
-    //     futures.next().await.expect("resultat").expect("ok");
-    // }
-
-}
+// #[cfg(test)]
+// mod test_integration {
+//     use crate::test_setup::setup;
+//     use crate::validateur_pki_mongo::preparer_middleware_pki;
+//     use millegrilles_common_rust::tokio as tokio;
+//
+//     use super::*;
+//
+//     // #[tokio::test]
+//     // async fn test_() {
+//     //     setup("test_liste_applications");
+//     //     let (middleware, _, _, mut futures) = preparer_middleware_pki(Vec::new(), None);
+//     //     futures.push(spawn(async move {
+//     //
+//     //         todo!("Test!")
+//     //
+//     //     }));
+//     //     // Execution async du test
+//     //     futures.next().await.expect("resultat").expect("ok");
+//     // }
+//
+// }

@@ -13,7 +13,7 @@ use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::{EmetteurCertificat, Middleware};
 use millegrilles_common_rust::mongo_dao::MongoDao;
-use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType};
+use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::tokio::{sync::{mpsc, mpsc::{Receiver, Sender}}, time::{Duration as DurationTokio, timeout}};
 use millegrilles_common_rust::tokio::spawn;
@@ -285,25 +285,27 @@ async fn consommer(
     while let Some(message) = rx.recv().await {
         match &message {
             TypeMessage::Valide(m) => {
-                warn!("traiter_messages_valides: Message valide sans routing key/action : {:?}", m.message);
-            },
-            TypeMessage::ValideAction(m) => {
-                let contenu = &m.message;
-                let rk = m.routing_key.as_str();
-                let action = m.action.as_str();
-                let domaine = m.domaine.as_str();
-                let nom_q = m.q.as_str();
-                debug!("domaines_middleware.consommer: Traiter message valide (action: {}, rk: {}, q: {})", action, rk, nom_q);
-                trace!("domaines_middleware.consommer: Traiter message valide (action: {}, rk: {}, q: {}): {:?}", action, rk, nom_q, contenu);
+                let (domaine, queue_reception) = match &m.type_message {
+                    TypeMessageOut::Requete(r) |
+                    TypeMessageOut::Commande(r) |
+                    TypeMessageOut::Transaction(r) |
+                    TypeMessageOut::Evenement(r) => {
+                        let queue_reception = r.queue_reception.clone().unwrap_or_else(||String::from(""));
+                        (r.domaine.clone(), queue_reception)
+                    }
+                    TypeMessageOut::Reponse(r) => {
+                        ("".to_string(), "".to_string())
+                    }
+                };
 
                 // Tenter de mapper avec le nom de la Q (ne fonctionnera pas pour la Q de reponse)
-                let sender = match map_senders.get(nom_q) {
+                let sender = match map_senders.get(queue_reception.as_str()) {
                     Some(sender) => sender,
                     None => {
-                        match map_senders.get(domaine) {
+                        match map_senders.get(domaine.as_str()) {
                             Some(sender) => sender,
                             None => {
-                                error!("Message de queue ({}) et domaine ({}) inconnu, on le drop", nom_q, domaine);
+                                error!("Message de queue ({}) et domaine ({}) inconnu, on le drop", queue_reception, domaine);
                                 continue  // On skip
                             },
                         }

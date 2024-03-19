@@ -13,21 +13,21 @@ use millegrilles_common_rust::common_messages::{DataChiffre, MessageReponse, Pre
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
-use millegrilles_common_rust::formatteur_messages::{DateEpochSeconds, MessageMilleGrille};
-use millegrilles_common_rust::formatteur_messages::MessageSerialise;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse, transmettre_cle_attachee};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, EmetteurNotificationsTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, convertir_value_mongodate, filtrer_doc_id, IndexOptions, MongoDao};
-use millegrilles_common_rust::{chrono, mongodb as mongodb};
+use millegrilles_common_rust::{chrono, millegrilles_cryptographie, mongodb as mongodb};
 use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
 use millegrilles_common_rust::chiffrage_cle::CommandeSauvegarderCle;
 use millegrilles_common_rust::configuration::ConfigMessages;
+use millegrilles_common_rust::db_structs::TransactionValide;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions, ReturnDocument};
 use millegrilles_common_rust::notifications::NotificationMessageInterne;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
-use millegrilles_common_rust::recepteur_messages::{MessageValideAction, TypeMessage};
+use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::serde_json::{json, Map, Value};
 use millegrilles_common_rust::serde_json as serde_json;
@@ -36,8 +36,8 @@ use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TransactionImpl, TriggerTransaction};
-use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptions, VerificateurMessage};
+use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TriggerTransaction};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 use crate::core_maitredescomptes::NOM_COLLECTION_USAGERS;
@@ -123,8 +123,10 @@ pub struct GestionnaireDomaineTopologie {}
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomaineTopologie {
-    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionImpl) -> Result<Option<MessageMilleGrille>, String>
-        where M: ValidateurX509 + GenerateurMessages + MongoDao
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+        where
+            M: ValidateurX509 + GenerateurMessages + MongoDao,
+            T: TryInto<TransactionValide> + Send
     {
         aiguillage_transaction(middleware, transaction).await
     }
@@ -157,28 +159,28 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
-    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValideAction)
-                                  -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
+                                  -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_requete(middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValideAction)
-                                   -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
+                                   -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_commande(middleware, message, self).await  // Fonction plus bas
     }
 
-    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_transaction(self, middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValideAction)
-                                    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+    async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValide)
+                                    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
         where M: Middleware + 'static
     {
         consommer_evenement(middleware, message, self).await  // Fonction plus bas
@@ -195,12 +197,12 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-                                          -> Result<Option<MessageMilleGrille>, String>
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, String>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
-            T: Transaction
+            T: TryInto<TransactionValide> + Send
     {
-        aiguillage_transaction(middleware, transaction).await   // Fonction plus bas
+        aiguillage_transaction(middleware, transaction).await
     }
 }
 
@@ -512,7 +514,7 @@ async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<()
         return Ok(());
     }
 
-    let minutes = date_epoch.get_datetime().minute();
+    let minutes = date_epoch.minute();
 
     if minutes % 5 == 1 {
         debug!("Produire fiche publique");
@@ -531,106 +533,121 @@ async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<()
     Ok(())
 }
 
-async fn consommer_requete<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage + ChiffrageFactoryTrait
+async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
-    debug!("Consommer requete : {:?}", &message.message);
+    debug!("Consommer requete : {:?}", &m.message);
+
+    let (domaine, action, mut exchanges) = match &m.type_message {
+        TypeMessageOut::Requete(r) => {
+            (r.domaine.clone(), r.action.clone(), r.exchanges.clone())
+        }
+        _ => {
+            Err(format!("consommer_requete Mauvais type de message"))?
+        }
+    };
+
+    let exchange = match exchanges.pop() {
+        Some(inner) => inner,
+        None => Err(String::from("consommer_requete Exchange manquant"))?
+    };
 
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
-    let message_action = message.action.clone();
-    match message.exchange.as_ref() {
-        Some(e) => match e.as_str() {
-            SECURITE_1_PUBLIC => {
-                match message.domaine.as_str() {
-                    DOMAINE_NOM => {
-                        match message.action.as_str() {
-                            REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
-                            REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
-                            REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, message).await,
-                            _ => {
-                                error!("Message requete/action non autorisee sur 1.public : '{}'. Message dropped.", message_action);
-                                Ok(None)
-                            }
+    match exchange {
+        Securite::L1Public => {
+            match domaine.as_str() {
+                DOMAINE_NOM => {
+                    match action.as_str() {
+                        REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
+                        REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
+                        REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
+                        _ => {
+                            error!("Message requete/action non autorisee sur 1.public : '{:?}'. Message dropped.", m.type_message);
+                            Ok(None)
                         }
-                    },
-                    _ => {
-                        error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
-                        Ok(None)
                     }
+                },
+                _ => {
+                    error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
+                    Ok(None)
                 }
-            },
-            SECURITE_2_PRIVE => {
-                match message.domaine.as_str() {
-                    DOMAINE_NOM => {
-                        match message_action.as_str() {
-                            REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
-                            REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, message).await,
-                            REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, message).await,
-                            REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, message).await,
-                            REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, message).await,
-                            REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, message).await,
-                            REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, message).await,
-                            _ => {
-                                error!("Message requete/action inconnue : '{}'. Message dropped.", message_action);
-                                Ok(None)
-                            }
-                        }
-                    },
-                    _ => {
-                        error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
-                        Ok(None)
-                    }
-                }
-            },
-            SECURITE_3_PROTEGE | SECURITE_4_SECURE => {
-                match message.domaine.as_str() {
-                    DOMAINE_NOM => {
-                        match message_action.as_str() {
-                            REQUETE_LISTE_DOMAINES => liste_domaines(middleware, message).await,
-                            REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, message).await,
-                            REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, message).await,
-                            REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, message).await,
-                            _ => {
-                                error!("Message requete/action inconnue : '{}'. Message dropped.", message_action);
-                                Ok(None)
-                            }
-                        }
-                    },
-                    _ => {
-                        error!("Message requete/domaine inconnu : '{}'. Message dropped.", message.domaine);
-                        Ok(None)
-                    }
-                }
-            },
-            _ => {
-                error!("Message requete/action sans exchange autorise : '{}'. Message dropped.", message_action);
-                Ok(None)
             }
         },
-        None => {
-            error!("Message requete/action sans exchange : '{}'. Message dropped.", message_action);
+        Securite::L2Prive => {
+            match domaine.as_str() {
+                DOMAINE_NOM => {
+                    match action.as_str() {
+                        REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
+                        REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, m).await,
+                        REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, m).await,
+                        REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
+                        REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
+                        REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
+                        REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
+                        _ => {
+                            error!("Message requete/action inconnue : '{}'. Message dropped.", action);
+                            Ok(None)
+                        }
+                    }
+                },
+                _ => {
+                    error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
+                    Ok(None)
+                }
+            }
+        },
+        Securite::L3Protege | Securite::L4Secure => {
+            match domaine.as_str() {
+                DOMAINE_NOM => {
+                    match action.as_str() {
+                        REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
+                        REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, m).await,
+                        REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, m).await,
+                        REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
+                        _ => {
+                            error!("Message requete/action inconnue : '{}'. Message dropped.", action);
+                            Ok(None)
+                        }
+                    }
+                },
+                _ => {
+                    error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
+                    Ok(None)
+                }
+            }
+        },
+        _ => {
+            error!("Message requete/action sans exchange autorise : '{}'. Message dropped.", action);
             Ok(None)
         }
     }
-
 }
 
-async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
-                               -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+                               -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
 
+    let (domaine, action) = match &m.type_message {
+        TypeMessageOut::Commande(r) => {
+            (r.domaine.clone(), r.action.clone())
+        }
+        _ => {
+            Err(format!("consommer_commande Mauvais type de message"))?
+        }
+    };
+
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
-    match m.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
         true => Ok(()),
-        false => match m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        false => match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
             true => Ok(()),
             false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
         }
     }?;
 
-    match m.action.as_str() {
+    match action.as_str() {
         // Commandes standard
         TRANSACTION_MONITOR => traiter_commande_monitor(middleware, m, gestionnaire).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire).await,
@@ -644,26 +661,35 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValideAction, gestionna
         //     PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware.as_ref(), m).await,
         //
         //     // Commandes inconnues
-        _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, m.action))?,
+        _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAINE_NOM, action))?,
     }
 }
 
-async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where
-        M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+        M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer transaction : {:?}", &m.message);
 
+    let (domaine, action) = match &m.type_message {
+        TypeMessageOut::Transaction(r) => {
+            (r.domaine.clone(), r.action.clone())
+        }
+        _ => {
+            Err(format!("consommer_transaction Mauvais type de message"))?
+        }
+    };
+
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
+    match m.certificat.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
         true => Ok(()),
-        false => match m.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        false => match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
             true => Ok(()),
-            false => Err(format!("core_topologie.consommer_transaction Autorisation invalide (pas 4.secure) : {}", m.routing_key))
+            false => Err(format!("core_topologie.consommer_transaction Autorisation invalide (pas 4.secure) : {:?}", m.type_message))
         }
     }?;
 
-    match m.action.as_str() {
+    match action.as_str() {
         TRANSACTION_DOMAINE | TRANSACTION_MONITOR | TRANSACTION_SUPPRIMER_INSTANCE |
         TRANSACTION_SET_FICHIERS_PRIMAIRE | TRANSACTION_CONFIGURER_CONSIGNATION |
         TRANSACTION_SET_CONSIGNATION_INSTANCE => {
@@ -671,88 +697,109 @@ async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, m
             // Ok(None)
             Ok(sauvegarder_traiter_transaction(middleware, m, gestionnaire).await?)
         }
-        _ => Err(format!("core_topologie.consommer_transaction Mauvais type d'action pour une transaction : {}", m.action))?,
+        _ => Err(format!("core_topologie.consommer_transaction Mauvais type d'action pour une transaction : {}", action))?,
     }
 }
 
-async fn consommer_evenement<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait + VerificateurMessage
+async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
     debug!("Consommer evenement : {:?}", &m.message);
 
+    let (domaine, action) = match &m.type_message {
+        TypeMessageOut::Evenement(r) => {
+            (r.domaine.clone(), r.action.clone())
+        }
+        _ => {
+            Err(format!("consommer_evenement Mauvais type de message"))?
+        }
+    };
+
     // Autorisation : doit etre de niveau 4.secure
-    match m.verifier_exchanges(vec![
+    match m.certificat.verifier_exchanges(vec![
         Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure,
     ]) {
         true => Ok(()),
         false => Err(format!("Evenement autorisation invalide (pas exchange autorise)")),
     }?;
 
-    match m.action.as_str() {
+    match action.as_str() {
         EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m, gestionnaire).await,
         EVENEMENT_PRESENCE_MONITOR | EVENEMENT_PRESENCE_FICHIERS => {
-            match m.domaine.as_str() {
+            match domaine.as_str() {
                 DOMAINE_FICHIERS => traiter_presence_fichiers(middleware, m, gestionnaire).await,
                 DOMAINE_APPLICATION_INSTANCE => traiter_presence_monitor(middleware, m, gestionnaire).await,
-                _ => Err(format!("Mauvais domaine ({}) pour un evenement de presence", m.domaine))?,
+                _ => Err(format!("Mauvais domaine ({}) pour un evenement de presence", domaine))?,
             }
         },
         EVENEMENT_APPLICATION_DEMARREE => traiter_evenement_application(middleware, m).await,
         EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
-        _ => Err(format!("Mauvais type d'action pour un evenement : {}", m.action))?,
+        _ => Err(format!("Mauvais type d'action pour un evenement : {}", action))?,
     }
 }
 
-async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, String>
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     //let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
-    let trigger: TriggerTransaction = match m.message.parsed.map_contenu() {
+    let message_ref = m.message.parse()?;
+    let trigger: TriggerTransaction = match serde_json::from_str(message_ref.contenu) {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
     };
 
     let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;
-    debug!("Traitement transaction, chargee : {:?}", transaction);
+    let message_id = transaction.transaction.id.clone();
+    debug!("Traitement transaction, chargee : {}", message_id);
 
-    let uuid_transaction = transaction.get_uuid_transaction().to_owned();
     let reponse = aiguillage_transaction(middleware, transaction).await;
     if reponse.is_ok() {
         // Marquer transaction completee
-        debug!("Transaction traitee {}, marquer comme completee", uuid_transaction);
-        marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &uuid_transaction, EtatTransaction::Complete).await?;
+        debug!("Transaction traitee {}, marquer comme completee", message_id);
+        marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &message_id, EtatTransaction::Complete).await?;
     }
 
     reponse
 }
 
-async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
-        T: Transaction
+        T: TryInto<TransactionValide>
 {
-    let action = match transaction.get_routage().action.as_ref() {
-        Some(inner) => inner.as_str(),
-        None => Err(format!("Transaction {} n'a pas d'action", transaction.get_uuid_transaction()))?
+    let transaction = match transaction.try_into() {
+        Ok(inner) => inner,
+        Err(_) => Err(String::from("aiguillage_transaction Erreur try_into"))?
     };
 
-    match action {
+    let action = match transaction.transaction.routage.as_ref() {
+        Some(inner) => match inner.action.as_ref() {
+            Some(inner) => inner.to_owned(),
+            None => Err(format!("Transaction {} n'a pas d'action", transaction.transaction.id))?
+        },
+        None => Err(format!("Transaction {} n'a pas de routage", transaction.transaction.id))?
+    };
+
+    match action.as_str() {
         // TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
         TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
         TRANSACTION_SET_CONSIGNATION_INSTANCE => transaction_set_consignation_instance(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.get_uuid_transaction(), action)),
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action)),
     }
 }
 
-async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    debug!("Evenement presence domaine : {:?}", m.message.get_msg());
-    let event: PresenceDomaine = m.message.get_msg().map_contenu()?;
+    debug!("Evenement presence domaine : {:?}", m.type_message);
+    let message_ref = m.message.parse()?;
+    let event: PresenceDomaine = serde_json::from_str(message_ref.contenu)?;
     debug!("Presence domaine : {:?}", event);
 
     // let mut set_ops = m.message.get_msg().map_to_bson()?;
@@ -769,10 +816,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
         }
     };
 
-    let certificat = match m.message.certificat {
-        Some(inner) => inner,
-        None => Err(format!("core_topologie.traiter_presence_domaine Erreur reception domaine, certificat absent/invalide"))?
-    };
+    let certificat = m.certificat.as_ref();
 
     if ! certificat.verifier_domaines(vec![domaine.to_owned()]) {
         Err(format!("core_topologie.traiter_presence_domaine Erreur domaine message ({}) mismatch certificat ", domaine))?
@@ -840,11 +884,13 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValideAction, ges
     Ok(None)
 }
 
-async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let estampille = &m.message.parsed.estampille;
-    let event: PresenceMonitor = m.message.get_msg().map_contenu()?;
+    let message_ref = m.message.parse()?;
+    let estampille = message_ref.estampille;
+    let event: PresenceMonitor = serde_json::from_str(message_ref.contenu)?;
     debug!("Presence monitor : {:?}", event);
 
     // Preparer valeurs applications
@@ -923,17 +969,19 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValideAction, ges
             "instance_id": event.instance_id,
         });
 
-        let transaction = middleware.formatter_message(
-            MessageKind::Transaction, &tval,
-            Some(DOMAINE_NOM), Some(TRANSACTION_MONITOR), None::<&str>, None::<&str>,
-            None, false)?;
+        // let transaction = middleware.formatter_message(
+        //     MessageKind::Transaction, &tval,
+        //     Some(DOMAINE_NOM), Some(TRANSACTION_MONITOR), None::<&str>, None::<&str>,
+        //     None, false)?;
+        //
+        // // Sauvegarder la transation
+        // let msg = MessageSerialise::from_parsed(transaction)?;
+        // let msg_action = MessageValide::new(
+        //     msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
+        // // sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
+        // sauvegarder_traiter_transaction(middleware, msg_action, gestionnaire).await?;
 
-        // Sauvegarder la transation
-        let msg = MessageSerialise::from_parsed(transaction)?;
-        let msg_action = MessageValideAction::new(
-            msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
-        // sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
-        sauvegarder_traiter_transaction(middleware, msg_action, gestionnaire).await?;
+        sauvegarder_traiter_transaction_serializable(middleware, &tval, gestionnaire, DOMAINE_NOM, TRANSACTION_DOMAINE).await?;
 
         // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
         let filtre = doc! {"instance_id": &event.instance_id};
@@ -949,27 +997,22 @@ struct TransactionSetFichiersPrimaire {
     instance_id: String
 }
 
-async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let estampille = &m.message.parsed.estampille;
-    let event: PresenceFichiers = m.message.get_msg().map_contenu()?;
+    let message_ref = m.message.parse()?;
+    let event: PresenceFichiers = serde_json::from_str(message_ref.contenu)?;
     debug!("traiter_presence_fichiers Presence fichiers : {:?}", event);
 
-    let instance_id = match m.message.certificat.clone() {
-        Some(c) => {
-            if ! c.verifier_roles(vec![RolesCertificats::Fichiers]) {
-                Err(format!("core_topologie.traiter_presence_fichiers Certificat n'a pas le role 'fichiers'"))?
-            }
-            let subject = c.subject()?;
-            debug!("traiter_presence_fichiers Subject enveloppe : {:?}", subject);
-            match subject.get("commonName") {
-                Some(instance_id) => instance_id.clone(),
-                None => Err(format!("core_topologie.traiter_presence_fichiers organizationalUnit absent du message"))?
-            }
-        },
-        None => Err(format!("core_topologie.traiter_presence_fichiers Certificat absent du message"))?
+    if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers]) {
+        Err(format!("core_topologie.traiter_presence_fichiers Certificat n'a pas le role 'fichiers'"))?
+    }
+    let subject = m.certificat.subject()?;
+    debug!("traiter_presence_fichiers Subject enveloppe : {:?}", subject);
+    let instance_id = match subject.get("commonName") {
+        Some(instance_id) => instance_id.clone(),
+        None => Err(format!("core_topologie.traiter_presence_fichiers organizationalUnit absent du message"))?
     };
 
     debug!("traiter_presence_fichiers Presence fichiers recue pour instance_id {}", instance_id);
@@ -1020,12 +1063,11 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValideAction, ge
     Ok(None)
 }
 
-async fn traiter_evenement_application<M>(middleware: &M, m: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn traiter_evenement_application<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
-    let estampille = &m.message.parsed.estampille;
     // let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
-    debug!("Evenement application monitor : {:?}", m);
+    debug!("Evenement application monitor : {:?}", m.type_message);
 
     // Regenerer fiche publique
     produire_fiche_publique(middleware).await?;
@@ -1034,19 +1076,18 @@ async fn traiter_evenement_application<M>(middleware: &M, m: MessageValideAction
 }
 
 
-async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer traiter_commande_monitor : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err,None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-        }
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("ajouter_cle autorisation acces refuse");
+        // match middleware.formatter_reponse(&err,None) {
+        return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
     }
 
     // Sauvegarder la transaction, marquer complete et repondre
@@ -1054,19 +1095,21 @@ async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValideActio
     Ok(reponse)
 }
 
-async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer traiter_commande_supprimer_instance : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("ajouter_cle autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err,None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-        }
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("ajouter_cle autorisation acces refuse");
+        // match middleware.formatter_reponse(&err,None) {
+        //     Ok(m) => return Ok(Some(m)),
+        //     Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+        // }
+        return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
     }
 
     // Sauvegarder la transaction, marquer complete et repondre
@@ -1074,36 +1117,40 @@ async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: Message
     Ok(reponse)
 }
 
-async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("traiter_commande_configurer_consignation : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("traiter_commande_configurer_consignation autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err,None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-        }
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("traiter_commande_configurer_consignation autorisation acces refuse");
+        // match middleware.formatter_reponse(&err,None) {
+        //     Ok(m) => return Ok(Some(m)),
+        //     Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
+        // }
+        return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
     }
 
     // Valider commande
-    let commande = match message.message.get_msg().map_contenu::<TransactionConfigurerConsignation>() {
-        Ok(inner) => inner,
-        Err(e) => {
-            Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
-        }
-    };
+    {
+        let mut message_ref = message.message.parse()?;
+        let commande = match serde_json::from_str::<TransactionConfigurerConsignation>(message_ref.contenu) {
+            Ok(inner) => inner,
+            Err(e) => {
+                Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
+            }
+        };
 
-    // Traiter la cle
-    if let Some(mut attachements) = message.message.parsed.attachements.take() {
-        if let Some(cle) = attachements.remove("cle") {
-            if let Some(reponse) = transmettre_cle_attachee(middleware, cle).await? {
-                error!("Erreur sauvegarde cle : {:?}", reponse);
-                return Ok(Some(reponse));
+        // Traiter la cle
+        if let Some(mut attachements) = message_ref.attachements.take() {
+            if let Some(cle) = attachements.remove("cle") {
+                if let Some(reponse) = transmettre_cle_attachee(middleware, cle).await? {
+                    error!("Erreur sauvegarde cle : {:?}", reponse);
+                    return Ok(Some(reponse));
+                }
             }
         }
     }
@@ -1113,84 +1160,95 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message
     Ok(reponse)
 }
 
-// async fn transmettre_cle_attachee<M,V>(middleware: &M, cle: V) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-//     where M: ValidateurX509 + GenerateurMessages + MongoDao,
-//           V: Serialize
-// {
-//     let ser_value = serde_json::to_value(cle)?;
-//     debug!("Reception commande MaitreDesCles : {:?}", ser_value);
-//     let mut message_cle = MessageSerialise::from_serializable(ser_value)?;
-//
-//     // Extraire partition pour le routage
-//     let routage = match message_cle.parsed.attachements.take() {
-//         Some(mut attachments_cle) => match attachments_cle.remove("partition") {
-//             Some(partition) => match partition.as_str() {
-//                 Some(partition) => {
-//                     RoutageMessageAction::builder(DOMAINE_NOM_MAITREDESCLES, COMMANDE_SAUVEGARDER_CLE)
-//                         .exchanges(vec![Securite::L3Protege])
-//                         .partition(partition)
-//                         .build()
-//                 },
-//                 None => {
-//                     error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : partition n'est pas str");
-//                     return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (1)"}), None)?));
-//                 }
-//             },
-//             None => {
-//                 error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : partition manquante");
-//                 return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (2)"}), None)?));
-//             }
-//         },
-//         None => {
-//             error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : attachements.partition manquant");
-//             return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (3)"}), None)?));
-//         }
-//     };
-//
-//     // match middleware.transmettre_commande(routage, &message_cle.parsed, true).await {
-//     match middleware.emettre_message_millegrille(routage, true, TypeMessageOut::Commande, message_cle.parsed).await {
-//         Ok(inner) => {
-//             if let Some(TypeMessage::Valide(reponse)) = inner {
-//                 let reponse_contenu: MessageReponse = reponse.message.parsed.map_contenu()?;
-//                 if let Some(true) = reponse_contenu.ok {
-//                     debug!("Cle sauvegardee OK");
-//                 } else {
-//                     error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : reponse ok == false");
-//                     return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (4)"}), None)?));
-//                 }
-//             } else {
-//                 error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : mauvais type reponse");
-//                 return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (5)"}), None)?));
-//             }
-//         },
-//         Err(e) => {
-//             error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : {:?}", e);
-//             return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (6)"}), None)?));
-//         }
-//     }
-//
-//     Ok(None)
-// }
+async fn transmettre_cle_attachee<M,V>(middleware: &M, cle: V) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+          V: Serialize
+{
+    todo!("fix me")
+    // let ser_value = serde_json::to_value(cle)?;
+    // debug!("Reception commande MaitreDesCles : {:?}", ser_value);
+    // let mut message_cle = MessageSerialise::from_serializable(ser_value)?;
+    //
+    // // Extraire partition pour le routage
+    // let routage = match message_cle.parsed.attachements.take() {
+    //     Some(mut attachments_cle) => match attachments_cle.remove("partition") {
+    //         Some(partition) => match partition.as_str() {
+    //             Some(partition) => {
+    //                 RoutageMessageAction::builder(DOMAINE_NOM_MAITREDESCLES, COMMANDE_SAUVEGARDER_CLE, vec![Securite::L3Protege])
+    //                     .partition(partition)
+    //                     .build()
+    //             },
+    //             None => {
+    //                 error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : partition n'est pas str");
+    //                 // return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (1)"}), None)?));
+    //                 return Ok(Some(middleware.reponse_err(None, None, Some("Erreur sauvegarde cle (1)"))?))
+    //             }
+    //         },
+    //         None => {
+    //             error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : partition manquante");
+    //             // return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (2)"}), None)?));
+    //             return Ok(Some(middleware.reponse_err(None, None, Some("Erreur sauvegarde cle (2)"))?))
+    //         }
+    //     },
+    //     None => {
+    //         error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : attachements.partition manquant");
+    //         // return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (3)"}), None)?));
+    //         return Ok(Some(middleware.reponse_err(None, None, Some("Erreur sauvegarde cle (3)"))?))
+    //     }
+    // };
+    //
+    // // match middleware.transmettre_commande(routage, &message_cle.parsed, true).await {
+    // match middleware.emettre_message_millegrille(routage, true, TypeMessageOut::Commande, message_cle.parsed).await {
+    //     Ok(inner) => {
+    //         if let Some(TypeMessage::Valide(reponse)) = inner {
+    //             let reponse_contenu: MessageReponse = reponse.message.parsed.map_contenu()?;
+    //             if let Some(true) = reponse_contenu.ok {
+    //                 debug!("Cle sauvegardee OK");
+    //             } else {
+    //                 error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : reponse ok == false");
+    //                 // return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (4)"}), None)?));
+    //                 return Ok(Some(middleware.reponse_err(None, None, Some("Erreur sauvegarde cle (4)"))?))
+    //             }
+    //         } else {
+    //             error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : mauvais type reponse");
+    //             // return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (5)"}), None)?));
+    //             return Ok(Some(middleware.reponse_err(None, None, Some("Erreur sauvegarde cle (5)"))?))
+    //         }
+    //     },
+    //     Err(e) => {
+    //         error!("traiter_commande_configurer_consignation Erreur sauvegarde cle : {:?}", e);
+    //         // return Ok(Some(middleware.formatter_reponse(json!({"ok": false, "err": "Erreur sauvegarde cle (6)"}), None)?));
+    //         return Ok(Some(middleware.reponse_err(None, None, Some("Erreur sauvegarde cle (6)"))?))
+    //     }
+    // }
+    //
+    // Ok(None)
+}
 
-async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("traiter_commande_set_fichiers_primaire : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("traiter_commande_set_fichiers_primaire autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err,None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("core_topologie.traiter_commande_set_fichiers_primaire Erreur preparation reponse  : {:?}", e))?
-        }
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("traiter_commande_set_fichiers_primaire autorisation acces refuse");
+        // match middleware.formatter_reponse(&err,None) {
+        //     Ok(m) => return Ok(Some(m)),
+        //     Err(e) => Err(format!("core_topologie.traiter_commande_set_fichiers_primaire Erreur preparation reponse  : {:?}", e))?
+        // }
+        return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
     }
 
     // Valider commande
-    if let Err(e) = message.message.get_msg().map_contenu::<TransactionSetFichiersPrimaire>() {
-        Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?;
-    };
+    {
+        let message_ref = message.message.parse()?;
+        if let Err(e) = serde_json::from_str::<TransactionSetFichiersPrimaire>(message_ref.contenu) {
+            Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?;
+        };
+    }
 
     // Sauvegarder la transaction, marquer complete et repondre
     let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
@@ -1203,37 +1261,41 @@ struct TransactionSetConsignationInstance {
     consignation_id: Option<String>,
 }
 
-async fn traiter_commande_set_consignation_instance<M>(middleware: &M, message: MessageValideAction, gestionnaire: &GestionnaireDomaineTopologie) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn traiter_commande_set_consignation_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("traiter_commande_set_consignation_instance : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
-        let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("traiter_commande_set_consignation_instance autorisation acces refuse : {:?}", err);
-        match middleware.formatter_reponse(&err,None) {
-            Ok(m) => return Ok(Some(m)),
-            Err(e) => Err(format!("core_topologie.traiter_commande_set_fichiers_primaire Erreur preparation reponse  : {:?}", e))?
-        }
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+        debug!("traiter_commande_set_consignation_instance autorisation acces refuse");
+        // match middleware.formatter_reponse(&err,None) {
+        //     Ok(m) => return Ok(Some(m)),
+        //     Err(e) => Err(format!("core_topologie.traiter_commande_set_fichiers_primaire Erreur preparation reponse  : {:?}", e))?
+        // }
+        return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
     }
 
     // Valider commande
-    if let Err(e) = message.message.get_msg().map_contenu::<TransactionSetConsignationInstance>() {
-        Err(format!("traiter_commande_set_consignation_instance Erreur convertir {:?}", e))?;
-    };
+    {
+        let message_ref = message.message.parse()?;
+        if let Err(e) = serde_json::from_str::<TransactionSetConsignationInstance>(message_ref.contenu) {
+            Err(format!("traiter_commande_set_consignation_instance Erreur convertir {:?}", e))?;
+        };
+    }
 
     // Sauvegarder la transaction, marquer complete et repondre
     let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
     Ok(reponse)
 }
 
-async fn transaction_set_fichiers_primaire<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
-    where
-        M: ValidateurX509 + GenerateurMessages + MongoDao,
-        T: Transaction
+async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let transaction = match transaction.convertir::<TransactionSetFichiersPrimaire>() {
+    let transaction = match serde_json::from_str::<TransactionSetFichiersPrimaire>(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_set_fichiers_primaire Erreur convertir {:?}", e))?
     };
@@ -1262,12 +1324,11 @@ async fn transaction_set_fichiers_primaire<M, T>(middleware: &M, transaction: T)
     }
 
     // Emettre evenement de changement de consignation primaire
-    let routage = RoutageMessageAction::builder(DOMAINE_NOM, "changementConsignationPrimaire")
-        .exchanges(vec![Securite::L2Prive])
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM, "changementConsignationPrimaire", vec![Securite::L2Prive])
         .build();
     middleware.emettre_evenement(routage, &transaction).await?;
 
-    middleware.reponse_ok()
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1304,12 +1365,11 @@ struct TransactionConfigurerConsignation {
     backup_limit_bytes: Option<i64>,
 }
 
-async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
-    where
-        M: ValidateurX509 + GenerateurMessages + MongoDao,
-        T: Transaction
+async fn transaction_configurer_consignation<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let transaction = match transaction.convertir::<TransactionConfigurerConsignation>() {
+    let transaction = match serde_json::from_str::<TransactionConfigurerConsignation>(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
     };
@@ -1405,17 +1465,16 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
     };
 
     // Emettre commande de modification de configuration pour fichiers
-    let routage = RoutageMessageAction::builder("fichiers", "modifierConfiguration")
-        .exchanges(vec![Securite::L2Prive])
+    let routage = RoutageMessageAction::builder("fichiers", "modifierConfiguration", vec![Securite::L2Prive])
         .partition(transaction.instance_id.as_str())
+        .blocking(false)
         .build();
 
     // Transmettre commande non-blocking
-    middleware.transmettre_commande(routage, &configuration, false).await?;
+    middleware.transmettre_commande(routage, &configuration).await?;
 
     // Emettre evenement changement de consignation
-    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_MODIFICATION_CONSIGNATION)
-        .exchanges(vec![Securite::L1Public])
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_MODIFICATION_CONSIGNATION, vec![Securite::L1Public])
         .build();
     let evenement = json!({
         CHAMP_INSTANCE_ID: transaction.instance_id,
@@ -1423,15 +1482,14 @@ async fn transaction_configurer_consignation<M, T>(middleware: &M, transaction: 
     });
     middleware.emettre_evenement(routage, &evenement).await?;
 
-    middleware.reponse_ok()
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
-async fn transaction_set_consignation_instance<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
-    where
-        M: ValidateurX509 + GenerateurMessages + MongoDao,
-        T: Transaction
+async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let transaction = match transaction.convertir::<TransactionSetConsignationInstance>() {
+    let transaction = match serde_json::from_str::<TransactionSetConsignationInstance>(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_set_consignation_instance Erreur convertir {:?}", e))?
     };
@@ -1451,18 +1509,17 @@ async fn transaction_set_consignation_instance<M, T>(middleware: &M, transaction
     }
 
     // Emettre evenement changement de consignation
-    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_MODIFICATION_CONSIGNATION)
-        .exchanges(vec![Securite::L1Public])
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_MODIFICATION_CONSIGNATION, vec![Securite::L1Public])
         .build();
     let evenement = json!({
         CHAMP_INSTANCE_ID: transaction.instance_id
     });
     middleware.emettre_evenement(routage, &evenement).await?;
 
-    middleware.reponse_ok()
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
-async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
+async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
     where
         M: GenerateurMessages + MongoDao,
         T: Transaction
@@ -1494,13 +1551,12 @@ async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Re
     // Ok(Some(reponse))
 }
 
-async fn traiter_transaction_monitor<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
-    where
-        M: GenerateurMessages + MongoDao,
-        T: Transaction
+async fn traiter_transaction_monitor<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: GenerateurMessages + MongoDao
 {
     // let mut doc = transaction.contenu();
-    let mut doc_transaction: PresenceMonitor = match transaction.convertir() {
+    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(d) => d,
         Err(e) => Err(format!("core_topologie.traiter_transaction_monitor Erreur conversion transaction monitor : {:?}", e))?
     };
@@ -1521,19 +1577,19 @@ async fn traiter_transaction_monitor<M, T>(middleware: &M, transaction: T) -> Re
         Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
     }
 
-    let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
-        Ok(r) => r,
-        Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
-    };
+    let reponse = middleware.reponse_ok(None, None)?;
+    // let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
+    //     Ok(r) => r,
+    //     Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
+    // };
     Ok(Some(reponse))
 }
 
-async fn traiter_transaction_supprimer_instance<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrille>, String>
-    where
-        M: GenerateurMessages + MongoDao,
-        T: Transaction
+async fn traiter_transaction_supprimer_instance<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    where M: GenerateurMessages + MongoDao
 {
-    let mut doc_transaction: PresenceMonitor = match transaction.convertir() {
+    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(d) => d,
         Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_instance Erreur conversion transaction monitor : {:?}", e))?
     };
@@ -1549,15 +1605,15 @@ async fn traiter_transaction_supprimer_instance<M, T>(middleware: &M, transactio
 
     // Emettre evenement d'instance supprimee
     let evenement_supprimee = json!({"instance_id": &instance_id});
-    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_INSTANCE_SUPPRIMEE)
-        .exchanges(vec![L3Protege])
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM, EVENEMENT_INSTANCE_SUPPRIMEE, vec![Securite::L3Protege])
         .build();
     middleware.emettre_evenement(routage, &evenement_supprimee).await?;
 
-    let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
-        Ok(r) => r,
-        Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
-    };
+    let reponse = middleware.reponse_ok(None, None)?;
+    // let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
+    //     Ok(r) => r,
+    //     Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
+    // };
     Ok(Some(reponse))
 }
 
@@ -1628,19 +1684,12 @@ struct ReponseListeApplicationsDeployees {
     resultats: Vec<ReponseApplicationDeployee>,
 }
 
-async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideAction)
-                                         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
+                                         -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     // Recuperer instance_id
-    let certificat = match message.message.certificat {
-        Some(inner) => inner,
-        None => {
-            warn!("liste_applications_deployees Certificat absent du message");
-            let reponse = json!({"ok": false, "err": "Certificat absent du message"});
-            return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
-        }
-    };
+    let certificat = message.certificat.as_ref();
     let instance_id = certificat.get_common_name()?;
     let exchanges = certificat.get_exchanges()?;
     debug!("liste_applications_deployees Instance_id {}, exchanges : {:?}", instance_id, exchanges);
@@ -1655,8 +1704,9 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
         Securite::L2Prive
     } else {
         warn!("liste_applications_deployees Acces refuse, aucunes conditions d'acces du certificat pour liste apps");
-        let reponse = json!({"ok": false, "err": "Acces refuse"});
-        return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+        // let reponse = json!({"ok": false, "err": "Acces refuse"});
+        // return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+        return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
     };
     debug!("liste_applications_deployees Niveau de securite : {:?}", niveau_securite);
 
@@ -1739,8 +1789,8 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValideA
         resultats,
     };
 
-    let reponse = match middleware.formatter_reponse(&liste, None) {
-        Ok(m) => m,
+    let reponse = match middleware.build_reponse(liste) {
+        Ok(m) => m.0,
         Err(e) => Err(format!("core_topologie.liste_applications_deployees  Erreur preparation reponse applications : {:?}", e))?
     };
     Ok(Some(reponse))
@@ -1754,7 +1804,8 @@ struct InformationMonitor {
     onion: Option<String>,
     applications: Option<Vec<InformationApplication>>,
     applications_configurees: Option<Vec<ApplicationConfiguree>>,
-    date_presence: Option<DateEpochSeconds>,
+    #[serde(with = "optionepochseconds")]
+    date_presence: Option<chrono::DateTime<Utc>>,
 }
 
 impl InformationMonitor {
@@ -1784,25 +1835,27 @@ struct MessageInstanceId {
     instance_id: Option<String>
 }
 
-async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
-                         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+async fn liste_noeuds<M>(middleware: &M, message: MessageValide)
+                         -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_noeuds");
-    if !message.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
-        if !message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
-            let refus = json!({"ok": false, "err": "Acces refuse"});
-            let reponse = match middleware.formatter_reponse(&refus, None) {
-                Ok(m) => m,
-                Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse applications : {:?}", e))?
-            };
-            return Ok(Some(reponse));
+    if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+        if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+            // let refus = json!({"ok": false, "err": "Acces refuse"});
+            // let reponse = match middleware.formatter_reponse(&refus, None) {
+            //     Ok(m) => m,
+            //     Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse applications : {:?}", e))?
+            // };
+            // return Ok(Some(reponse));
+            return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
         }
     }
 
     let mut curseur = {
         let mut filtre = doc! {};
-        let message_instance_id: MessageInstanceId = message.message.parsed.map_contenu()?;
+        let message_ref = message.message.parse()?;
+        let message_instance_id: MessageInstanceId = serde_json::from_str(message_ref.contenu)?;
         if let Some(inner) = message_instance_id.instance_id.as_ref() {
             filtre.insert("instance_id", inner.to_owned());
         }
@@ -1835,8 +1888,8 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValideAction)
 
     debug!("Noeuds : {:?}", noeuds);
     let liste = json!({"resultats": noeuds});
-    let reponse = match middleware.formatter_reponse(&liste, None) {
-        Ok(m) => m,
+    let reponse = match middleware.build_reponse(liste) {
+        Ok(m) => m.0,
         Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse noeuds : {:?}", e))?
     };
     Ok(Some(reponse))
@@ -1847,15 +1900,28 @@ struct RequeteListeDomaines {
     reclame_fuuids: Option<bool>,
 }
 
-async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
-                           -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+#[derive(Serialize, Deserialize)]
+struct DomaineRowBorrow<'a> {
+    instance_id: &'a str,
+    domaine: &'a str,
+    #[serde(rename = "_mg-creation", serialize_with="optionepochseconds::serialize")]
+    creation: Option<chrono::DateTime<Utc>>,
+    #[serde(rename = "_mg-derniere-modification", serialize_with="optionepochseconds::serialize")]
+    presence: Option<chrono::DateTime<Utc>>,
+    dirty: Option<bool>,
+    reclame_fuuids: Option<bool>,
+}
+
+async fn liste_domaines<M>(middleware: &M, message: MessageValide)
+                           -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_domaines {:?}", message);
-    if !message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
-        if message.get_user_id().is_some() && !message.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+        if message.certificat.get_user_id()?.is_some() && !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
             let refus = json!({"ok": false, "err": "Acces refuse"});
-            let reponse = match middleware.formatter_reponse(&refus, None) {
+            // let reponse = match middleware.formatter_reponse(&refus, None) {
+            let reponse = match middleware.reponse_err(None, None, Some("Acces refuse")) {
                 Ok(m) => m,
                 Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse applications : {:?}", e))?
             };
@@ -1863,11 +1929,12 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
         }
     }
 
-    let requete: RequeteListeDomaines = message.message.parsed.map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteListeDomaines = serde_json::from_str(message_ref.contenu)?;
 
     let mut curseur = {
         let projection = doc! {"instance_id": true, "domaine": true, CHAMP_MODIFICATION: true};
-        let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
+        let collection = middleware.get_collection_typed::<DomaineRowBorrow>(NOM_COLLECTION_DOMAINES)?;
         let ops = FindOptions::builder().projection(Some(projection)).build();
 
         let mut filtre = doc!{};
@@ -1881,51 +1948,68 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValideAction)
         }
     };
 
+    // let mut domaines = Vec::new();
+    // while let Some(r) = curseur.next().await {
+    //     match r {
+    //         Ok(mut d) => {
+    //             // Convertir date bson en DateTimeEpochSeconds
+    //             let date_presence = d.remove(CHAMP_MODIFICATION);
+    //             if let Some(date) = date_presence {
+    //                 if let Some(date) = date.as_datetime() {
+    //                     let date = DateEpochSeconds::from(date.to_chrono());
+    //                     d.insert("date_presence", date);
+    //                 }
+    //             }
+    //             filtrer_doc_id(&mut d);
+    //             domaines.push(d);
+    //         }
+    //         Err(e) => warn!("core_topologie.liste_domaines Erreur lecture document sous liste_noeuds() : {:?}", e)
+    //     }
+    // }
+
     let mut domaines = Vec::new();
-    while let Some(r) = curseur.next().await {
-        match r {
-            Ok(mut d) => {
-                // Convertir date bson en DateTimeEpochSeconds
-                let date_presence = d.remove(CHAMP_MODIFICATION);
-                if let Some(date) = date_presence {
-                    if let Some(date) = date.as_datetime() {
-                        let date = DateEpochSeconds::from(date.to_chrono());
-                        d.insert("date_presence", date);
-                    }
-                }
-                filtrer_doc_id(&mut d);
-                domaines.push(d);
+    while curseur.advance().await? {
+        match curseur.deserialize_current() {
+            Ok(inner) => {
+                // Serialiser sous forme de value json
+                domaines.push(serde_json::to_value(inner)?)
+            },
+            Err(e) => {
+                error!("Erreur deserialize valeur Domaine : {:?}", e);
+                continue
             }
-            Err(e) => warn!("core_topologie.liste_domaines Erreur lecture document sous liste_noeuds() : {:?}", e)
-        }
+        };
     }
 
     debug!("Domaines : {:?}", domaines);
     let liste = json!({"ok": true, "resultats": domaines});
-    let reponse = match middleware.formatter_reponse(&liste, None) {
-        Ok(m) => m,
+    // let reponse = match middleware.formatter_reponse(&liste, None) {
+    let reponse = match middleware.build_reponse(liste) {
+        Ok(m) => m.0,
         Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse domaines : {:?}", e))?
     };
     Ok(Some(reponse))
 }
 
-async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
-                         -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn resolve_idmg<M>(middleware: &M, message: MessageValide)
+                         -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("resolve_idmg");
-    if !message.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
-        let refus = json!({"ok": false, "err": "Acces refuse"});
-        let reponse = match middleware.formatter_reponse(&refus, None) {
-            Ok(m) => m,
-            Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse applications : {:?}", e))?
-        };
-        return Ok(Some(reponse));
+    if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+        // let refus = json!({"ok": false, "err": "Acces refuse"});
+        // let reponse = match middleware.formatter_reponse(&refus, None) {
+        //     Ok(m) => m,
+        //     Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse applications : {:?}", e))?
+        // };
+        // return Ok(Some(reponse));
+        return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
     }
 
     let idmg_local = middleware.get_enveloppe_signature().idmg()?;
 
-    let requete: RequeteResolveIdmg = message.message.parsed.map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteResolveIdmg = serde_json::from_str(message_ref.contenu)?;
     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
 
     // Map reponse, associe toutes les adresses dans la requete aux idmg trouves
@@ -2015,8 +2099,8 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValideAction)
     }
 
     let liste = json!({"dns": resolved_dns});
-    let reponse = match middleware.formatter_reponse(&liste, None) {
-        Ok(m) => m,
+    let reponse = match middleware.build_reponse(liste) {
+        Ok(m) => m.0,
         Err(e) => Err(format!("core_topologie.resolve_idmg Erreur preparation reponse resolve idmg : {:?}", e))?
     };
 
@@ -2039,12 +2123,11 @@ struct AdresseIdmg {
 
 async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
                          -> Result<Option<String>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("resoudre_url {}", hostname);
 
-    let routage = RoutageMessageAction::builder(DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET)
-        .exchanges(vec![L1Public])
+    let routage = RoutageMessageAction::builder(DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET, vec![Securite::L1Public])
         .build();
 
     let url_fiche = format!("https://{}/fiche.json", hostname);
@@ -2057,7 +2140,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     });
 
     let reponse = {
-        let reponse_http = middleware.transmettre_commande(routage, &requete, true).await?;
+        let reponse_http = middleware.transmettre_commande(routage, &requete).await?;
         debug!("Reponse http : {:?}", reponse_http);
         match reponse_http {
             Some(reponse) => match reponse {
@@ -2069,7 +2152,8 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     }?;
 
     // Mapper message avec la fiche
-    let reponse_fiche: ReponseFichePubliqueTierce = reponse.message.get_msg().map_contenu()?;
+    let message_ref = reponse.message.parse()?;
+    let reponse_fiche: ReponseFichePubliqueTierce = serde_json::from_str(message_ref.contenu)?;
     debug!("Reponse fiche : {:?}", reponse);
 
     // Verifier code reponse HTTP
@@ -2097,94 +2181,95 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
         Some(f) => Ok(f),
         None => Err(format!("core_topologie.resoudre_url Fiche publique manquante"))
     }?;
-    debug!("resoudre_url Message json string : {}", fiche_json_value);
-    let mut fiche_publique_message = MessageSerialise::from_serializable(fiche_json_value)?;
-    debug!("resoudre_url Fiche publique message serialize : {:?}", fiche_publique_message);
-    let validation_option = ValidationOptions::new(true, true, true);
-    let resultat_validation = fiche_publique_message.valider(middleware, Some(&validation_option)).await?;
-    if ! resultat_validation.valide() {
-        Err(format!("core_topologie.resoudre_url Erreur validation fiche publique : {:?}", resultat_validation))?
-    }
-
-    let idmg_tiers = match &fiche_publique_message.certificat {
-        Some(c) => c.idmg(),
-        None => Err(format!("core_topologie.resoudre_url Erreur chargement certificat de fiche publique, certificat manquant"))
-    }?;
-
-    let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu()?;
-    debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
-
-    // Sauvegarder/mettre a jour fiche publique
-    {
-        let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
-        let filtre = doc! {"idmg": &idmg_tiers};
-        let apps = match &fiche_publique.applications {
-            Some(a) => {
-                let mut map = Map::new();
-                for (key, value) in a.iter() {
-                    let value_serde = serde_json::to_value(value)?;
-                    map.insert(key.into(), value_serde);
-                }
-                Some(map)
-            }
-            None => None
-        };
-        let set_json = json!({
-            // "adresses": &fiche_publique.adresses,
-            "applications": apps,
-            "chiffrage": &fiche_publique.chiffrage,
-            "ca": &fiche_publique.ca,
-        });
-        let set_bson = convertir_to_bson(set_json)?;
-        let ops = doc! {
-            "$set": set_bson,
-            "$setOnInsert": {
-                "idmg": &idmg_tiers,
-                CHAMP_CREATION: Utc::now(),
-            },
-            "$currentDate": {CHAMP_MODIFICATION: true},
-        };
-        let options = UpdateOptions::builder()
-            .upsert(true)
-            .build();
-        let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
-        if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
-            error!("resoudre_url Erreur, fiche publique idmg {} n'a pas ete sauvegardee", idmg_tiers);
-        }
-    }
-
-    // // Sauvegarder adresses
+    todo!("fix me")
+    // debug!("resoudre_url Message json string : {}", fiche_json_value);
+    // let mut fiche_publique_message = MessageSerialise::from_serializable(fiche_json_value)?;
+    // debug!("resoudre_url Fiche publique message serialize : {:?}", fiche_publique_message);
+    // let validation_option = ValidationOptions::new(true, true, true);
+    // let resultat_validation = fiche_publique_message.valider(middleware, Some(&validation_option)).await?;
+    // if ! resultat_validation.valide() {
+    //     Err(format!("core_topologie.resoudre_url Erreur validation fiche publique : {:?}", resultat_validation))?
+    // }
+    //
+    // let idmg_tiers = match &fiche_publique_message.certificat {
+    //     Some(c) => c.idmg(),
+    //     None => Err(format!("core_topologie.resoudre_url Erreur chargement certificat de fiche publique, certificat manquant"))
+    // }?;
+    //
+    // let fiche_publique: FichePubliqueReception = fiche_publique_message.get_msg().map_contenu()?;
+    // debug!("resoudre_url Fiche publique mappee : {:?}", fiche_publique);
+    //
+    // // Sauvegarder/mettre a jour fiche publique
     // {
-    //     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
-    //     debug!("Verification headers : {:?}", reponse_fiche.headers);
-    //     let etag = match reponse_fiche.headers.as_ref() {
-    //         Some(e) => e.get("ETag").cloned(),
+    //     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
+    //     let filtre = doc! {"idmg": &idmg_tiers};
+    //     let apps = match &fiche_publique.applications {
+    //         Some(a) => {
+    //             let mut map = Map::new();
+    //             for (key, value) in a.iter() {
+    //                 let value_serde = serde_json::to_value(value)?;
+    //                 map.insert(key.into(), value_serde);
+    //             }
+    //             Some(map)
+    //         }
     //         None => None
     //     };
-    //     if let Some(adresses) = fiche_publique.adresses.as_ref() {
-    //         for adresse in adresses {
-    //             let filtre = doc! { "adresse": adresse };
-    //             let ops = doc! {
-    //                 "$set": {
-    //                     "idmg": &idmg_tiers,
-    //                     "etag": &etag,
-    //                 },
-    //                 "$setOnInsert": {
-    //                     "adresse": adresse,
-    //                     CHAMP_CREATION: Utc::now(),
-    //                 },
-    //                 "$currentDate": {CHAMP_MODIFICATION: true},
-    //             };
-    //             let options = UpdateOptions::builder().upsert(true).build();
-    //             let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
-    //             if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
-    //                 error!("resoudre_url Erreur, adresse {} pour idmg {} n'a pas ete sauvegardee", adresse, idmg_tiers);
-    //             }
-    //         }
+    //     let set_json = json!({
+    //         // "adresses": &fiche_publique.adresses,
+    //         "applications": apps,
+    //         "chiffrage": &fiche_publique.chiffrage,
+    //         "ca": &fiche_publique.ca,
+    //     });
+    //     let set_bson = convertir_to_bson(set_json)?;
+    //     let ops = doc! {
+    //         "$set": set_bson,
+    //         "$setOnInsert": {
+    //             "idmg": &idmg_tiers,
+    //             CHAMP_CREATION: Utc::now(),
+    //         },
+    //         "$currentDate": {CHAMP_MODIFICATION: true},
+    //     };
+    //     let options = UpdateOptions::builder()
+    //         .upsert(true)
+    //         .build();
+    //     let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
+    //     if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
+    //         error!("resoudre_url Erreur, fiche publique idmg {} n'a pas ete sauvegardee", idmg_tiers);
     //     }
     // }
-
-    Ok(Some(idmg_tiers))
+    //
+    // // // Sauvegarder adresses
+    // // {
+    // //     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
+    // //     debug!("Verification headers : {:?}", reponse_fiche.headers);
+    // //     let etag = match reponse_fiche.headers.as_ref() {
+    // //         Some(e) => e.get("ETag").cloned(),
+    // //         None => None
+    // //     };
+    // //     if let Some(adresses) = fiche_publique.adresses.as_ref() {
+    // //         for adresse in adresses {
+    // //             let filtre = doc! { "adresse": adresse };
+    // //             let ops = doc! {
+    // //                 "$set": {
+    // //                     "idmg": &idmg_tiers,
+    // //                     "etag": &etag,
+    // //                 },
+    // //                 "$setOnInsert": {
+    // //                     "adresse": adresse,
+    // //                     CHAMP_CREATION: Utc::now(),
+    // //                 },
+    // //                 "$currentDate": {CHAMP_MODIFICATION: true},
+    // //             };
+    // //             let options = UpdateOptions::builder().upsert(true).build();
+    // //             let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
+    // //             if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
+    // //                 error!("resoudre_url Erreur, adresse {} pour idmg {} n'a pas ete sauvegardee", adresse, idmg_tiers);
+    // //             }
+    // //         }
+    // //     }
+    // // }
+    //
+    // Ok(Some(idmg_tiers))
 }
 
 struct ResultatValidationTierce {
@@ -2292,8 +2377,7 @@ async fn produire_fiche_publique<M>(middleware: &M)
     let fiche = generer_contenu_fiche_publique(middleware).await?;
 
     let routage = RoutageMessageAction::builder(
-        DOMAINE_NOM, EVENEMENT_FICHE_PUBLIQUE)
-        .exchanges(vec![Securite::L1Public])
+        DOMAINE_NOM, EVENEMENT_FICHE_PUBLIQUE, vec![Securite::L1Public])
         .ajouter_ca(true)
         .build();
     middleware.emettre_evenement(routage, &fiche).await?;
@@ -2363,7 +2447,7 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
         let presence_expiree = Utc::now() - Duration::from_secs(3600);
         match info_instance.date_presence {
             Some(inner) => {
-                if inner.get_datetime() < &presence_expiree {
+                if inner < presence_expiree {
                     info!("generer_contenu_fiche_publique Instance {} expiree, skip", info_instance.instance_id);
                     continue;
                 }
@@ -2743,12 +2827,13 @@ impl TryInto<ApplicationPublique> for InformationApplication {
     }
 }
 
-async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideAction)
-                                      -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage + ChiffrageFactoryTrait
+async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValide)
+                                      -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
 {
     debug!("requete_fiche_millegrille");
-    let requete: RequeteFicheMillegrille = message.message.parsed.map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteFicheMillegrille = serde_json::from_str(message_ref.contenu)?;
     debug!("requete_fiche_millegrille Parsed : {:?}", requete);
 
     let enveloppe_locale = middleware.get_enveloppe_signature();
@@ -2778,14 +2863,19 @@ async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValideActi
     let reponse = match fiche {
         Some(r) => {
             // middleware.formatter_reponse(fiche, None)
-            middleware.formatter_message(
-                MessageKind::Commande, &r, Some(DOMAINE_TOPOLOGIE), Some("fichePublique"),
-                None::<&str>, None::<&str>,Some(1), true)
+            let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "fichePublique", vec![])
+                .build();
+            middleware.build_message_action(
+                millegrilles_cryptographie::messages_structs::MessageKind::Commande, routage, r)?.0
+            // middleware.formatter_message(
+            //     MessageKind::Commande, &r, Some(DOMAINE_TOPOLOGIE), Some("fichePublique"),
+            //     None::<&str>, None::<&str>,Some(1), true)
         }
         None => {
-            middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)
+            // middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)
+            middleware.reponse_err(404, None, Some("Non trouve"))?
         }
-    }?;
+    };
 
     Ok(Some(reponse))
 }
@@ -2795,11 +2885,12 @@ struct RequeteFicheMillegrille {
     idmg: String,
 }
 
-async fn requete_applications_tiers<M>(middleware: &M, message: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn requete_applications_tiers<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let requete: RequeteApplicationsTiers = message.message.parsed.map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteApplicationsTiers = serde_json::from_str(message_ref.contenu)?;
     debug!("requete_applications_tiers Parsed : {:?}", requete);
 
     let projection = doc! {
@@ -2825,7 +2916,8 @@ async fn requete_applications_tiers<M>(middleware: &M, message: MessageValideAct
         let reponse_applications: ReponseApplicationsTiers = document_applications.try_into()?;
         fiches.push(reponse_applications);
     }
-    let reponse = middleware.formatter_reponse(&json!({"fiches": fiches}), None)?;
+    // let reponse = middleware.formatter_reponse(&json!({"fiches": fiches}), None)?;
+    let reponse = middleware.build_reponse(json!({"fiches": fiches}))?.0;
 
     // let reponse = match collection.find_one(filtre, Some(options)).await? {
     //     Some(d) => {
@@ -2841,19 +2933,17 @@ async fn requete_applications_tiers<M>(middleware: &M, message: MessageValideAct
     Ok(Some(reponse))
 }
 
-async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let requete: RequeteConsignationFichiers = message.message.parsed.map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteConsignationFichiers = serde_json::from_str(message_ref.contenu)?;
     debug!("requete_consignation_fichiers Parsed : {:?}", requete);
 
-    let instance_id = match message.message.certificat {
-        Some(inner) => match inner.subject()?.get("commonName") {
-            Some(inner) => inner.clone(),
-            None => Err(format!("requete_consignation_fichiers Erreur chargement, certificat sans commonName"))?
-        },
-        None => Err(format!("requete_consignation_fichiers Erreur chargement, certificat absent"))?
+    let instance_id = match message.certificat.subject()?.get("commonName") {
+        Some(inner) => inner.clone(),
+        None => Err(format!("requete_consignation_fichiers Erreur chargement, certificat sans commonName"))?
     };
 
     let mut projection = doc! {
@@ -2908,8 +2998,9 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
                         doc! { "instance_id": info_instance.instance_id }
                     },
                     None => {
-                        let reponse = json!({"ok": false});
-                        return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+                        //let reponse = json!({"ok": false});
+                        //return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+                        return Ok(Some(middleware.reponse_err(None, None, None)?))
                     }
                 }
             }
@@ -2992,10 +3083,11 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
                 fiche_reponse.hostnames = Some(domaines);
             }
 
-            middleware.formatter_reponse(&fiche_reponse, None)
+            // middleware.formatter_reponse(&fiche_reponse, None)
+            middleware.build_reponse(fiche_reponse)?.0
         },
-        None => middleware.formatter_reponse(&json!({"ok": false}), None)
-    }?;
+        None => middleware.reponse_err(None, None, None)?
+    };
 
     Ok(Some(reponse))
 }
@@ -3005,27 +3097,24 @@ struct ParametresGetCleConfiguration {
     ref_hachage_bytes: String,
 }
 
-async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: GenerateurMessages + MongoDao + VerificateurMessage
+async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: GenerateurMessages + MongoDao
 {
     debug!("requete_get_cle_configuration Message : {:?}", &m.message);
-    let requete: ParametresGetCleConfiguration = m.message.get_msg().map_contenu()?;
+    let message_ref = m.message.parse()?;
+    let requete: ParametresGetCleConfiguration = serde_json::from_str(message_ref.contenu)?;
     debug!("requete_get_cle_configuration cle parsed : {:?}", requete);
 
-    if ! m.verifier_roles(vec![RolesCertificats::Fichiers]) {
-        let reponse = json!({"err": true, "message": "certificat doit etre de role fichiers"});
-        return Ok(Some(middleware.formatter_reponse(reponse, None)?));
+    if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers]) {
+        // let reponse = json!({"err": true, "message": "certificat doit etre de role fichiers"});
+        // return Ok(Some(middleware.formatter_reponse(reponse, None)?));
+        return Ok(Some(middleware.reponse_err(None, Some("Certificat doit etre de role fichiers"), None)?))
     }
 
     // Utiliser certificat du message client (requete) pour demande de rechiffrage
-    let pem_rechiffrage: Vec<String> = match &m.message.certificat {
-        Some(c) => {
-            let fp_certs = c.get_pem_vec();
-            fp_certs.into_iter().map(|cert| cert.pem).collect()
-        },
-        None => Err(format!(""))?
-    };
+    let fp_certs = m.certificat.get_pem_vec();
+    let pem_rechiffrage: Vec<String> = fp_certs.into_iter().map(|cert| cert.pem).collect();
 
     let permission = RequeteDechiffrage {
         domaine: DOMAINE_NOM.to_string(),
@@ -3038,17 +3127,31 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValideAction
     //     "certificat_rechiffrage": pem_rechiffrage,
     // });
 
+    let (reply_to, correlation_id) = match &m.type_message {
+        TypeMessageOut::Requete(r) => {
+            let reply_q = match r.reply_to.as_ref() {
+                Some(inner) => inner.as_str(),
+                None => Err(String::from("requete_get_cle_configuration Reply to manquant"))?
+            };
+            let correlation_id = match r.correlation_id.as_ref() {
+                Some(inner) => inner.as_str(),
+                None => Err(String::from("requete_get_cle_configuration Correlation id manquant"))?
+            };
+            (reply_q, correlation_id)
+        }
+        _ => Err(String::from("requete_get_cle_configuration Mauvais type de message"))?
+    };
+
     // Emettre requete de rechiffrage de cle, reponse acheminee directement au demandeur
-    let reply_to = match m.reply_q {
-        Some(r) => r,
-        None => Err(format!("requetes.requete_get_cle_configuration Pas de reply q pour message"))?
-    };
-    let correlation_id = match m.correlation_id {
-        Some(r) => r,
-        None => Err(format!("requetes.requete_get_cle_configuration Pas de correlation_id pour message"))?
-    };
-    let routage = RoutageMessageAction::builder(DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE)
-        .exchanges(vec![Securite::L4Secure])
+    // let reply_to = match m.reply_q {
+    //     Some(r) => r,
+    //     None => Err(format!("requetes.requete_get_cle_configuration Pas de reply q pour message"))?
+    // };
+    // let correlation_id = match m.correlation_id {
+    //     Some(r) => r,
+    //     None => Err(format!("requetes.requete_get_cle_configuration Pas de correlation_id pour message"))?
+    // };
+    let routage = RoutageMessageAction::builder(DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE, vec![Securite::L4Secure])
         .reply_to(reply_to)
         .correlation_id(correlation_id)
         .blocking(false)
@@ -3134,8 +3237,8 @@ pub struct ReponseConsignationSatellite {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub espace_disponible: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub derniere_modification: Option<DateEpochSeconds>,
+    #[serde(with = "optionepochseconds", skip_serializing_if = "Option::is_none")]
+    pub derniere_modification: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -3144,35 +3247,37 @@ pub struct ReponseConfigurationFichiers {
     ok: bool,
 }
 
-async fn requete_configuration_fichiers<M>(middleware: &M, message: MessageValideAction)
-    -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + VerificateurMessage
+async fn requete_configuration_fichiers<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let requete: RequeteConfigurationFichiers = message.message.parsed.map_contenu()?;
+    let message_ref = message.message.parse()?;
+    let requete: RequeteConfigurationFichiers = serde_json::from_str(message_ref.contenu)?;
     debug!("requete_configuration_fichiers Parsed : {:?}", requete);
 
     let mut liste = Vec::new();
 
     let filtre = doc! {};
-    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+    let collection = middleware.get_collection_typed::<ReponseConsignationSatellite>(NOM_COLLECTION_FICHIERS)?;
     let mut curseur = collection.find(filtre, None).await?;
-    while let Some(inner) = curseur.next().await {
-        let doc_inner = inner?;
+    while let Some(fiche) = curseur.next().await {
+        // let doc_inner = inner?;
+        let fiche = fiche?;
 
         // Extraire date BSON separement
-        let date_modif = match doc_inner.get(CHAMP_MODIFICATION) {
-            Some(inner) => Some(DateEpochSeconds::try_from(inner.to_owned())?),
-            None => None
-        };
+        // let date_modif = match doc_inner.get(CHAMP_MODIFICATION) {
+        //     Some(inner) => Some(DateEpochSeconds::try_from(inner.to_owned())?),
+        //     None => None
+        // };
 
-        let mut fiche: ReponseConsignationSatellite = convertir_bson_deserializable(doc_inner)?;
-        fiche.derniere_modification = date_modif;  // Re-injecter date
+        // let fiche: ReponseConsignationSatellite = convertir_bson_deserializable(doc_inner)?;
+        // fiche.derniere_modification = date_modif;  // Re-injecter date
 
         liste.push(fiche);
     }
 
     let reponse = ReponseConfigurationFichiers { liste, ok: true };
-    Ok(Some(middleware.formatter_reponse(&reponse, None)?))
+    Ok(Some(middleware.build_reponse(reponse)?.0))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

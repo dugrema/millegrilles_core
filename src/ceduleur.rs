@@ -67,8 +67,7 @@ where M: GenerateurMessages
         Securite::L4Secure
     ];
 
-    let routage = RoutageMessageAction::builder("global", "cedule")
-        .exchanges(exchanges)
+    let routage = RoutageMessageAction::builder("global", "cedule", exchanges)
         .build();
 
     middleware.emettre_evenement(routage, &message).await?;

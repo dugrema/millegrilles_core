@@ -9,17 +9,17 @@ use millegrilles_common_rust::backup::{BackupStarter, CommandeBackup, thread_bac
 use millegrilles_common_rust::bson::{doc, Document};
 use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, EnveloppeCertificat, EnveloppePrivee, FingerprintCertPublicKey, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
 use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur, MgsCipherData, CleChiffrageHandler, ChiffrageFactory, ChiffrageFactoryImpl};
-use millegrilles_common_rust::chiffrage_aesgcm::CipherMgs2;
 use millegrilles_common_rust::chiffrage_cle::CleDechiffree;
 use millegrilles_common_rust::chiffrage_streamxchacha20poly1305::CipherMgs4;
 // use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, DecipherMgs3, Mgs3CipherData, Mgs3CipherKeys};
 use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMessagesDb, ConfigurationMq, ConfigurationNoeud, ConfigurationPki, IsConfigNoeud};
 use millegrilles_common_rust::constantes::*;
-use millegrilles_common_rust::formatteur_messages::{FormatteurMessage, MessageMilleGrille, MessageSerialise};
+use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, ChiffrageFactoryTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait, repondre_certificat};
 use millegrilles_common_rust::middleware_db::MiddlewareDb;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao, MongoDaoImpl, initialiser as initialiser_mongodb};
 use millegrilles_common_rust::mongodb::Database;
 use millegrilles_common_rust::mongodb::options::FindOptions;
@@ -34,7 +34,6 @@ use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio as tokio;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::Receiver, Notify};
 use millegrilles_common_rust::tokio::task::JoinHandle;
-use millegrilles_common_rust::verificateur::{ResultatValidation, ValidationOptions, VerificateurMessage, verifier_message};
 use millegrilles_common_rust::redis_dao::RedisDao;
 use millegrilles_common_rust::tokio::sync::mpsc::Sender;
 use millegrilles_common_rust::tokio_stream::StreamExt;
@@ -103,9 +102,9 @@ impl ChiffrageFactory for MiddlewareDbPki {
         self.chiffrage_factory.get_chiffreur()
     }
 
-    fn get_chiffreur_mgs2(&self) -> Result<CipherMgs2, String> {
-        self.chiffrage_factory.get_chiffreur_mgs2()
-    }
+    // fn get_chiffreur_mgs2(&self) -> Result<CipherMgs2, String> {
+    //     self.chiffrage_factory.get_chiffreur_mgs2()
+    // }
 
     // fn get_chiffreur_mgs3(&self) -> Result<CipherMgs3, String> {
     //     self.chiffrage_factory.get_chiffreur_mgs3()
@@ -170,10 +169,10 @@ impl ValidateurX509Database {
                 //     None
                 // );
 
-                let routage = RoutageMessageAction::builder(PKI_DOMAINE_NOM,PKI_TRANSACTION_NOUVEAU_CERTIFICAT)
-                    .exchanges(vec![Securite::L4Secure])
+                let routage = RoutageMessageAction::builder(PKI_DOMAINE_NOM,PKI_TRANSACTION_NOUVEAU_CERTIFICAT, vec![Securite::L4Secure])
+                    .blocking(false)
                     .build();
-                match self.generateur_messages.soumettre_transaction(routage, &contenu,false).await {
+                match self.generateur_messages.soumettre_transaction(routage, &contenu).await {
                     Ok(_) => (),
                     Err(e) => error!("Erreur soumission transaction pour nouveau certificat : {}", e),
                 };
@@ -336,6 +335,10 @@ impl ValidateurX509 for ValidateurX509Database {
                 }
             }
         }
+    }
+
+    fn est_cache(&self, fingerprint: &str) -> bool {
+        self.validateur.est_cache(fingerprint)
     }
 
     fn certificats_persister(&self) -> Vec<Arc<EnveloppeCertificat>> {
@@ -724,6 +727,10 @@ impl ValidateurX509 for MiddlewareDbPki {
         }
     }
 
+    fn est_cache(&self, fingerprint: &str) -> bool {
+        self.validateur.est_cache(fingerprint)
+    }
+
     fn certificats_persister(&self) -> Vec<Arc<EnveloppeCertificat>> {
         self.validateur.certificats_persister()
     }
@@ -757,48 +764,44 @@ impl ValidateurX509 for MiddlewareDbPki {
 #[async_trait]
 impl GenerateurMessages for MiddlewareDbPki {
 
-    async fn emettre_evenement<M>(&self, routage: RoutageMessageAction, message: &M)
-        -> Result<(), String>
-        where M: Serialize + Send + Sync
+    async fn emettre_evenement<R,M>(&self, routage: R, message: M)
+                                    -> Result<(), String>
+        where R: Into<RoutageMessageAction> + Send, M: Serialize + Send + Sync
     {
-        self.ressources.generateur_messages.emettre_evenement( routage, message).await
+        self.ressources.generateur_messages.emettre_evenement(routage, message).await
     }
 
-    async fn transmettre_requete<M>(&self, routage: RoutageMessageAction, message: &M)
-        -> Result<TypeMessage, String>
-        where M: Serialize + Send + Sync
+    async fn transmettre_requete<R,M>(&self, routage: R, message: M)
+                                      -> Result<TypeMessage, String>
+        where R: Into<RoutageMessageAction> + Send, M: Serialize + Send + Sync
     {
         self.ressources.generateur_messages.transmettre_requete(routage, message).await
     }
 
-    async fn soumettre_transaction<M>(&self, routage: RoutageMessageAction, message: &M, blocking: bool)
-        -> Result<Option<TypeMessage>, String>
-        where M: Serialize + Send + Sync
+    async fn soumettre_transaction<R,M>(&self, routage: R, message: M)
+                                        -> Result<Option<TypeMessage>, String>
+        where R: Into<RoutageMessageAction> + Send, M: Serialize + Send + Sync
     {
-        self.ressources.generateur_messages.soumettre_transaction(routage, message, blocking).await
+        self.ressources.generateur_messages.soumettre_transaction(routage, message).await
     }
 
-    async fn transmettre_commande<M>(&self, routage: RoutageMessageAction, message: &M, blocking: bool)
-        -> Result<Option<TypeMessage>, String>
-        where M: Serialize + Send + Sync
+    async fn transmettre_commande<R,M>(&self, routage: R, message: M)
+                                       -> Result<Option<TypeMessage>, String>
+        where R: Into<RoutageMessageAction> + Send, M: Serialize + Send + Sync
     {
-        self.ressources.generateur_messages.transmettre_commande(routage, message, blocking).await
+        self.ressources.generateur_messages.transmettre_commande(routage, message).await
     }
 
-    async fn repondre(&self, routage: RoutageMessageReponse, message: MessageMilleGrille) -> Result<(), String> {
+    async fn repondre<R,M>(&self, routage: R, message: M) -> Result<(), String>
+        where R: Into<RoutageMessageReponse> + Send, M: Serialize + Send + Sync {
         self.ressources.generateur_messages.repondre(routage, message).await
     }
 
-    async fn emettre_message(&self, routage: RoutageMessageAction, type_message: TypeMessageOut, message: &str, blocking: bool)
-        -> Result<Option<TypeMessage>, String>
+    async fn emettre_message<M>(&self, type_message: TypeMessageOut, message: M)
+                                -> Result<Option<TypeMessage>, String>
+        where M: Into<MessageMilleGrillesBufferDefault> + Send
     {
-        self.ressources.generateur_messages.emettre_message(routage, type_message, message,  blocking).await
-    }
-
-    async fn emettre_message_millegrille(&self, routage: RoutageMessageAction, blocking: bool, type_message: TypeMessageOut, message: MessageMilleGrille)
-        -> Result<Option<TypeMessage>, String>
-    {
-        self.ressources.generateur_messages.emettre_message_millegrille(routage, blocking, type_message, message).await
+        self.ressources.generateur_messages.emettre_message(type_message, message).await
     }
 
     fn mq_disponible(&self) -> bool {
@@ -881,7 +884,7 @@ impl CleChiffrageHandler for MiddlewareDbPki {
         Ok(self.chiffrage_factory.charger_certificats_chiffrage(middleware).await?)
     }
 
-    async fn recevoir_certificat_chiffrage<M>(&self, middleware: &M, message: &MessageSerialise) -> Result<(), String>
+    async fn recevoir_certificat_chiffrage<M>(&self, middleware: &M, message: &TypeMessage) -> Result<(), String>
         where M: ConfigMessages
     {
         self.chiffrage_factory.recevoir_certificat_chiffrage(middleware, message).await
@@ -941,11 +944,11 @@ impl CleChiffrageHandler for MiddlewareDbPki {
 
 }
 
-impl VerificateurMessage for MiddlewareDbPki {
-    fn verifier_message(&self, message: &mut MessageSerialise, options: Option<&ValidationOptions>) -> Result<ResultatValidation, Box<dyn Error>> {
-        verifier_message(message, self, options)
-    }
-}
+// impl VerificateurMessage for MiddlewareDbPki {
+//     fn verifier_message(&self, message: &mut MessageSerialise, options: Option<&ValidationOptions>) -> Result<ResultatValidation, Box<dyn Error>> {
+//         verifier_message(message, self, options)
+//     }
+// }
 
 #[async_trait]
 impl EmetteurCertificat for MiddlewareDbPki {
@@ -955,8 +958,7 @@ impl EmetteurCertificat for MiddlewareDbPki {
         let message = formatter_message_certificat(enveloppe_certificat)?;
         let exchanges = vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege);
 
-        let routage = RoutageMessageAction::builder("certificat", "infoCertificat")
-            .exchanges(exchanges)
+        let routage = RoutageMessageAction::builder("certificat", "infoCertificat", exchanges)
             .build();
 
         // Sauvegarder dans redis
