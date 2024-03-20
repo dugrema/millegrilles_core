@@ -3697,7 +3697,8 @@ pub async fn transaction_supprimer_cles<M>(middleware: &M, transaction: Transact
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let commande: TransactionSupprimerCles = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let commande: TransactionSupprimerCles = match serde_json::from_str(escaped_contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion en CommandeAjouterDelegationSignee : {:?}", e))?
     };

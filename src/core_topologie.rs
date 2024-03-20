@@ -1309,7 +1309,8 @@ async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: Trans
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let transaction = match serde_json::from_str::<TransactionSetFichiersPrimaire>(transaction.transaction.contenu.as_str()) {
+    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let transaction = match serde_json::from_str::<TransactionSetFichiersPrimaire>(escaped_contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_set_fichiers_primaire Erreur convertir {:?}", e))?
     };
@@ -1383,7 +1384,8 @@ async fn transaction_configurer_consignation<M>(middleware: &M, transaction: Tra
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let transaction = match serde_json::from_str::<TransactionConfigurerConsignation>(transaction.transaction.contenu.as_str()) {
+    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let transaction = match serde_json::from_str::<TransactionConfigurerConsignation>(escaped_contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
     };
@@ -1503,7 +1505,8 @@ async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: T
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let transaction = match serde_json::from_str::<TransactionSetConsignationInstance>(transaction.transaction.contenu.as_str()) {
+    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let transaction = match serde_json::from_str::<TransactionSetConsignationInstance>(escaped_contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_set_consignation_instance Erreur convertir {:?}", e))?
     };
@@ -1569,8 +1572,8 @@ async fn traiter_transaction_monitor<M>(middleware: &M, transaction: Transaction
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: GenerateurMessages + MongoDao
 {
-    // let mut doc = transaction.contenu();
-    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(escaped_contenu.as_str()) {
         Ok(d) => d,
         Err(e) => Err(format!("core_topologie.traiter_transaction_monitor Erreur conversion transaction monitor : {:?}", e))?
     };
@@ -1603,7 +1606,8 @@ async fn traiter_transaction_supprimer_instance<M>(middleware: &M, transaction: 
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: GenerateurMessages + MongoDao
 {
-    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(escaped_contenu.as_str()) {
         Ok(d) => d,
         Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_instance Erreur conversion transaction monitor : {:?}", e))?
     };
