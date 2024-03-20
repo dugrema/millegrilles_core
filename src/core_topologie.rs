@@ -1638,6 +1638,9 @@ struct PresenceDomaine {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceMonitor {
+    #[serde(serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
+    #[serde(default)]
+    date_presence: Option<chrono::DateTime<Utc>>,
     domaine: Option<String>,
     domaines: Option<Vec<String>>,
     instance_id: String,
@@ -1868,7 +1871,7 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValide)
         if let Some(inner) = message_instance_id.instance_id.as_ref() {
             filtre.insert("instance_id", inner.to_owned());
         }
-        let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
+        let collection = middleware.get_collection_typed::<PresenceMonitor>(NOM_COLLECTION_NOEUDS)?;
         match collection.find(filtre, None).await {
             Ok(c) => c,
             Err(e) => Err(format!("core_topologie.liste_noeuds Erreur chargement applications : {:?}", e))?
