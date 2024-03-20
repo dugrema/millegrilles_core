@@ -19,6 +19,7 @@ use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, EmetteurNotificationsTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, convertir_value_mongodate, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, millegrilles_cryptographie, mongodb as mongodb};
+use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
 use millegrilles_common_rust::chiffrage_cle::CommandeSauvegarderCle;
 use millegrilles_common_rust::configuration::ConfigMessages;
@@ -31,6 +32,7 @@ use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::serde_json::{json, Map, Value};
 use millegrilles_common_rust::serde_json as serde_json;
+use millegrilles_common_rust::serde_helpers as serde_helpers;
 use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
@@ -38,8 +40,8 @@ use millegrilles_common_rust::tokio::time::{Duration, sleep};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TriggerTransaction};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
+use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use mongodb::options::{FindOptions, UpdateOptions};
-use serde::{Deserialize, Serialize};
 use crate::core_maitredescomptes::NOM_COLLECTION_USAGERS;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
@@ -1726,7 +1728,7 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
     let mut curseur = {
         let filtre = doc! {};
         let projection = doc! {"instance_id": true, "domaine": true, "securite": true, "applications": true, "onion": true};
-        let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+        let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
         let ops = FindOptions::builder().projection(Some(projection)).build();
         match collection.find(filtre, Some(ops)).await {
             Ok(c) => c,
@@ -1736,61 +1738,56 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
 
     // Extraire liste d'applications
     let mut resultats = Vec::new();
-    while let Some(d) = curseur.next().await {
-        match d {
-            Ok(mut doc) => {
-                let info_monitor: InformationMonitor = serde_json::from_value(serde_json::to_value(doc)?)?;
-                let instance_id = info_monitor.instance_id.as_str();
+    while let Some(row) = curseur.next().await {
+        let info_monitor = row?;
+        let instance_id = info_monitor.instance_id.as_str();
 
-                if let Some(applications) = info_monitor.applications {
-                    for app in applications {
-                        let securite = match app.securite {
-                            Some(s) => match securite_enum(s.as_str()) {
-                                Ok(s) => s,
-                                Err(e) => continue   // Skip
+        if let Some(applications) = info_monitor.applications {
+            for app in applications {
+                let securite = match app.securite {
+                    Some(s) => match securite_enum(s.as_str()) {
+                        Ok(s) => s,
+                        Err(e) => continue   // Skip
+                    },
+                    None => continue  // Skip
+                };
+
+                // Verifier si le demandeur a le niveau de securite approprie
+                if sec_cascade.contains(&securite) {
+
+                    if let Some(url) = app.url.as_ref() {
+                        // Preparer la valeur a exporter pour les applications
+                        let onion = match info_monitor.onion.as_ref() {
+                            Some(onion) => {
+                                let mut url_onion = Url::parse(url.as_str())?;
+                                url_onion.set_host(Some(onion.as_str()));
+                                Some(url_onion.as_str().to_owned())
                             },
-                            None => continue  // Skip
+                            None => None
                         };
 
-                        // Verifier si le demandeur a le niveau de securite approprie
-                        if sec_cascade.contains(&securite) {
+                        let mut info_app = ReponseApplicationDeployee {
+                            instance_id: instance_id.to_owned(),
+                            application: app.application.clone(),
+                            securite: securite.get_str().to_owned(),
+                            url: Some(url.to_owned()),
+                            onion: onion.to_owned(),
+                            name_property: None,
+                            supporte_usagers: None,
+                        };
 
-                            if let Some(url) = app.url.as_ref() {
-                                // Preparer la valeur a exporter pour les applications
-                                let onion = match info_monitor.onion.as_ref() {
-                                    Some(onion) => {
-                                        let mut url_onion = Url::parse(url.as_str())?;
-                                        url_onion.set_host(Some(onion.as_str()));
-                                        Some(url_onion.as_str().to_owned())
-                                    },
-                                    None => None
-                                };
-
-                                let mut info_app = ReponseApplicationDeployee {
-                                    instance_id: instance_id.to_owned(),
-                                    application: app.application.clone(),
-                                    securite: securite.get_str().to_owned(),
-                                    url: Some(url.to_owned()),
-                                    onion: onion.to_owned(),
-                                    name_property: None,
-                                    supporte_usagers: None,
-                                };
-
-                                if let Some(p) = app.name_property.as_ref() {
-                                    info_app.name_property = Some(p.to_string());
-                                }
-
-                                if let Some(p) = app.supporte_usagers.as_ref() {
-                                    info_app.supporte_usagers = Some(p.to_owned());
-                                }
-
-                                resultats.push(info_app);
-                            }
+                        if let Some(p) = app.name_property.as_ref() {
+                            info_app.name_property = Some(p.to_string());
                         }
+
+                        if let Some(p) = app.supporte_usagers.as_ref() {
+                            info_app.supporte_usagers = Some(p.to_owned());
+                        }
+
+                        resultats.push(info_app);
                     }
                 }
             }
-            Err(e) => warn!("core_topologie.liste_applications_deployees  Erreur chargement document : {:?}", e)
         }
     }
 
@@ -1814,7 +1811,8 @@ struct InformationMonitor {
     onion: Option<String>,
     applications: Option<Vec<InformationApplication>>,
     applications_configurees: Option<Vec<ApplicationConfiguree>>,
-    #[serde(with = "optionepochseconds")]
+    #[serde(serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
+    #[serde(default)]
     date_presence: Option<chrono::DateTime<Utc>>,
 }
 
@@ -1870,16 +1868,7 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValide)
         if let Some(inner) = message_instance_id.instance_id.as_ref() {
             filtre.insert("instance_id", inner.to_owned());
         }
-        // let msg = message.message.get_msg();
-        // if let Some(instance_id) = msg.contenu.get("instance_id") {
-        //     if let Some(instance_id) = instance_id.as_str() {
-        //         filtre.insert("instance_id", millegrilles_common_rust::bson::Bson::String(instance_id.into()));
-        //     }
-        // }
-
-        // let projection = doc! {"instance_id": true, "domaine": true, "securite": true};
-        let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
-        // let ops = FindOptions::builder().projection(Some(projection)).build();
+        let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
         match collection.find(filtre, None).await {
             Ok(c) => c,
             Err(e) => Err(format!("core_topologie.liste_noeuds Erreur chargement applications : {:?}", e))?
@@ -1889,10 +1878,7 @@ async fn liste_noeuds<M>(middleware: &M, message: MessageValide)
     let mut noeuds = Vec::new();
     while let Some(r) = curseur.next().await {
         match r {
-            Ok(mut d) => {
-                filtrer_doc_id(&mut d);
-                noeuds.push(d);
-            }
+            Ok(d) => noeuds.push(d),
             Err(e) => warn!("core_topologie.liste_noeuds Erreur lecture document sous liste_noeuds() : {:?}", e)
         }
     }
@@ -1915,9 +1901,11 @@ struct RequeteListeDomaines {
 struct DomaineRowBorrow<'a> {
     instance_id: &'a str,
     domaine: &'a str,
-    #[serde(rename = "_mg-creation", serialize_with="optionepochseconds::serialize")]
+    #[serde(rename = "_mg-creation", serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
+    #[serde(default)]
     creation: Option<chrono::DateTime<Utc>>,
-    #[serde(rename = "_mg-derniere-modification", serialize_with="optionepochseconds::serialize")]
+    #[serde(rename = "_mg-derniere-modification", serialize_with="optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
+    #[serde(default)]
     presence: Option<chrono::DateTime<Utc>>,
     dirty: Option<bool>,
     reclame_fuuids: Option<bool>,
@@ -3084,9 +3072,10 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
 
             // Recuperer info instance pour domaine et onion
             let filtre = doc! {"instance_id": &fiche_reponse.instance_id};
-            let collection = middleware.get_collection(NOM_COLLECTION_INSTANCES)?;
-            if let Some(doc_instance) = collection.find_one(filtre, None).await? {
-                let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
+            let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_INSTANCES)?;
+            if let Some(info_instance) = collection.find_one(filtre, None).await? {
+                // let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
+                debug!("requete_consignation_fichiers Info instance chargee {:?}", info_instance);
                 let mut domaines = match info_instance.domaines {
                     Some(inner) => inner.clone(),
                     None => Vec::new()
@@ -3255,7 +3244,8 @@ pub struct ReponseConsignationSatellite {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub espace_disponible: Option<usize>,
-    #[serde(with = "optionepochseconds", skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "_mg-derniere-modification", skip_serializing_if = "Option::is_none", serialize_with="optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
+    #[serde(default)]
     pub derniere_modification: Option<chrono::DateTime<Utc>>,
 }
 

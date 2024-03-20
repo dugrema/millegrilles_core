@@ -452,6 +452,7 @@ async fn synchroniser_certificats<M>(validateur: &ValidateurX509Database, redis:
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[serde(crate = "millegrilles_common_rust::serde")]
 struct RowFingerprint {
     fingerprint: String,
 }

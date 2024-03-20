@@ -143,6 +143,7 @@ struct CompteUsager {
     compte_prive: Option<bool>,
 
     delegation_globale: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", with="optionepochseconds")]
     delegations_date: Option<DateTime<Utc>>,
     delegations_version: Option<usize>,
 }
@@ -3716,34 +3717,34 @@ struct TransactionSupprimerCles {
     user_id: String,
 }
 
-fn lire_date_valbson(date: Option<&Value>) -> Result<Option<DateTime<Utc>>, Box<dyn Error>> {
-    let mut date_extraite = None;
-    if let Some(a) = date {
-        if let Some(b) = a.as_object() {
-            if let Some(c) = b.get("$date") {
-                if let Some(d) = c.as_object() {
-                    if let Some(e) = d.get("$numberLong") {
-                        if let Some(f) = e.as_str() {
-                            let date_usize: i64 = f.parse::<i64>()?;
-                            debug!("Date activation : {}", date_usize);
-                            date_extraite = Some(date_usize);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    match date_extraite {
-        Some(d) => {
-            let date_secondes = d / 1000;
-            let naive_datetime = NaiveDateTime::from_timestamp(date_secondes, 0);
-            let datetime_again: DateTime<Utc> = DateTime::from_utc(naive_datetime, Utc);
-            Ok(Some(datetime_again))
-        },
-        None => Ok(None)
-    }
-}
+// fn lire_date_valbson(date: Option<&Value>) -> Result<Option<DateTime<Utc>>, Box<dyn Error>> {
+//     let mut date_extraite = None;
+//     if let Some(a) = date {
+//         if let Some(b) = a.as_object() {
+//             if let Some(c) = b.get("$date") {
+//                 if let Some(d) = c.as_object() {
+//                     if let Some(e) = d.get("$numberLong") {
+//                         if let Some(f) = e.as_str() {
+//                             let date_usize: i64 = f.parse::<i64>()?;
+//                             debug!("Date activation : {}", date_usize);
+//                             date_extraite = Some(date_usize);
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//
+//     match date_extraite {
+//         Some(d) => {
+//             let date_secondes = d / 1000;
+//             let naive_datetime = NaiveDateTime::from_timestamp(date_secondes, 0);
+//             let datetime_again: DateTime<Utc> = DateTime::from_utc(naive_datetime, Utc);
+//             Ok(Some(datetime_again))
+//         },
+//         None => Ok(None)
+//     }
+// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct TokenUsager {
