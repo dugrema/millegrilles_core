@@ -41,6 +41,8 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TriggerTransaction};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
+use millegrilles_common_rust::error::Error as CommonError;
+
 use mongodb::options::{FindOptions, UpdateOptions};
 use crate::core_maitredescomptes::NOM_COLLECTION_USAGERS;
 
@@ -125,7 +127,7 @@ pub struct GestionnaireDomaineTopologie {}
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomaineTopologie {
-    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
             T: TryInto<TransactionValide> + Send
@@ -199,7 +201,7 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-                                          -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
             T: TryInto<TransactionValide> + Send
@@ -741,7 +743,7 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: 
     }
 }
 
-async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -770,7 +772,7 @@ async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide
     reponse
 }
 
-async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
         T: TryInto<TransactionValide>
@@ -795,7 +797,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
         TRANSACTION_SET_CONSIGNATION_INSTANCE => transaction_set_consignation_instance(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action)),
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
 
@@ -1304,7 +1306,7 @@ async fn traiter_commande_set_consignation_instance<M>(middleware: &M, message: 
 }
 
 async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let transaction = match serde_json::from_str::<TransactionSetFichiersPrimaire>(transaction.transaction.contenu.as_str()) {
@@ -1378,7 +1380,7 @@ struct TransactionConfigurerConsignation {
 }
 
 async fn transaction_configurer_consignation<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let transaction = match serde_json::from_str::<TransactionConfigurerConsignation>(transaction.transaction.contenu.as_str()) {
@@ -1498,7 +1500,7 @@ async fn transaction_configurer_consignation<M>(middleware: &M, transaction: Tra
 }
 
 async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let transaction = match serde_json::from_str::<TransactionSetConsignationInstance>(transaction.transaction.contenu.as_str()) {
@@ -1564,7 +1566,7 @@ async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Re
 }
 
 async fn traiter_transaction_monitor<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: GenerateurMessages + MongoDao
 {
     // let mut doc = transaction.contenu();
@@ -1598,7 +1600,7 @@ async fn traiter_transaction_monitor<M>(middleware: &M, transaction: Transaction
 }
 
 async fn traiter_transaction_supprimer_instance<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: GenerateurMessages + MongoDao
 {
     let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {

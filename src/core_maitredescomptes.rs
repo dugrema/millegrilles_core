@@ -39,6 +39,7 @@ use millegrilles_common_rust::{reqwest, reqwest::Url};
 use millegrilles_common_rust::common_messages::{MessageConfirmation, ReponseSignatureCertificat};
 use millegrilles_common_rust::constantes::MessageKind::Reponse;
 use millegrilles_common_rust::db_structs::TransactionValide;
+use millegrilles_common_rust::error::Error as CommonError;
 use mongodb::options::{FindOptions, UpdateOptions};
 use serde::{Deserialize, Serialize};
 
@@ -150,7 +151,7 @@ struct CompteUsager {
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomaineMaitreDesComptes {
-    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
             T: TryInto<TransactionValide> + Send
@@ -223,7 +224,7 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-                                          -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
             T: TryInto<TransactionValide> + Send
@@ -822,7 +823,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     }
 }
 
-async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -851,7 +852,7 @@ where
 }
 
 async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T)
-                                      -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+                                      -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao,
         T: TryInto<TransactionValide>
@@ -876,7 +877,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T)
         TRANSACTION_MAJ_USAGER_DELEGATIONS => transaction_maj_usager_delegations(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_CLES => transaction_supprimer_cles(middleware, transaction).await,
         TRANSACTION_RESET_WEBAUTHN_USAGER => transaction_reset_webauthn_usager(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action)),
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
 
@@ -1982,7 +1983,7 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValide, gestionnaire
 }
 
 async fn sauvegarder_inscrire_usager<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("sauvegarder_inscrire_usager {:?}", transaction.transaction.id);
@@ -2998,7 +2999,7 @@ async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, 
 }
 
 async fn transaction_ajouter_cle<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let certificat = transaction.certificat.as_ref();
@@ -3400,7 +3401,7 @@ async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &Gestio
 }
 
 async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     let commande: CommandeAjouterDelegationSignee = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
@@ -3482,12 +3483,12 @@ async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: T
     if resultat.matched_count == 1 {
         Ok(None)
     } else {
-        Err(format!("transaction_ajouter_delegation_signee Aucun match pour usager {:?}", user_id))
+        Err(format!("transaction_ajouter_delegation_signee Aucun match pour usager {:?}", user_id))?
     }
 }
 
 async fn transaction_reset_webauthn_usager<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let commande: CommandeResetWebauthnUsager = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
@@ -3630,7 +3631,7 @@ struct TransactionMajUsagerDelegations {
 }
 
 pub async fn transaction_maj_usager_delegations<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     let commande: TransactionMajUsagerDelegations = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
@@ -3688,7 +3689,7 @@ pub async fn commande_supprimer_cles<M>(middleware: &M, message: MessageValide) 
 }
 
 pub async fn transaction_supprimer_cles<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     let commande: TransactionSupprimerCles = match serde_json::from_str(transaction.transaction.contenu.as_str()) {

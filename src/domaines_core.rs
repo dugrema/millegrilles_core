@@ -25,7 +25,7 @@ use millegrilles_common_rust::transactions::resoumettre_transactions;
 // use crate::ceduleur::preparer_threads as preparer_threads_ceduleur;
 // use crate::core_backup::GESTIONNAIRE_BACKUP;
 // use crate::core_catalogues::{NOM_COLLECTION_TRANSACTIONS as CATALOGUES_NOM_COLLECTION_TRANSACTIONS, preparer_queues as preparer_q_catalogues, preparer_threads as preparer_threads_corecatalogues};
-use crate::core_catalogues::{GESTIONNAIRE_CATALOGUES, init_regles_validation as init_validation_catalogues};
+use crate::core_catalogues::{GESTIONNAIRE_CATALOGUES};
 use crate::core_maitredescomptes::GESTIONNAIRE_MAITREDESCOMPTES;
 use crate::core_pki::GESTIONNAIRE_PKI;
 use crate::core_topologie::GESTIONNAIRE_TOPOLOGIE;
@@ -34,8 +34,6 @@ use crate::validateur_pki_mongo::preparer_middleware_pki;
 const DUREE_ATTENTE: u64 = 20000;
 
 pub async fn build() -> FuturesUnordered<JoinHandle<()>> {
-
-    init_validation_catalogues();
 
     let middleware_hooks = preparer_middleware_pki();
     let middleware = middleware_hooks.middleware;

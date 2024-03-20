@@ -29,6 +29,7 @@ use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::{Receiver, Sender}};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::transactions::{charger_transaction, EtatTransaction, marquer_transaction, TraiterTransaction, Transaction, TriggerTransaction};
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
+use millegrilles_common_rust::error::Error as CommonError;
 
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 
@@ -70,7 +71,7 @@ pub struct GestionnaireDomainePki {}
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomainePki {
-    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
             T: TryInto<TransactionValide> + Send
@@ -143,7 +144,7 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-                                          -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
             T: TryInto<TransactionValide> + Send
@@ -840,7 +841,7 @@ struct ReponseCertificatSigne {
     certificat: Vec<String>,
 }
 
-async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -873,7 +874,7 @@ where
 }
 
 async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T)
-                                      -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+                                      -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
         T: TryInto<TransactionValide>
@@ -896,12 +897,12 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T)
 
     match action.as_str() {
         PKI_TRANSACTION_NOUVEAU_CERTIFICAT => sauvegarder_certificat(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action)),
+        _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
 
 async fn sauvegarder_certificat<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Sauvegarder certificat recu via transaction");

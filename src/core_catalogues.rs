@@ -6,7 +6,7 @@ use log::{debug, error, info, warn};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::bson::Document;
-use millegrilles_common_rust::certificats::{RegleValidationIdmg, ValidateurX509, VerificateurPermissions, VerificateurRegles};
+use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::constantes::*;
@@ -32,7 +32,9 @@ use serde::{Serialize, Deserialize};
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesRefDefault, RoutageMessageOwned};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageMilleGrillesRefDefault, RoutageMessageOwned};
+
+use millegrilles_common_rust::error::Error as CommonError;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreCatalogues";
@@ -56,23 +58,23 @@ const CHAMP_VERSION: &str = "version";
 /// Instance statique du gestionnaire de catalogues
 pub const GESTIONNAIRE_CATALOGUES: GestionnaireDomaineCatalogues = GestionnaireDomaineCatalogues {};
 
-static mut REGLES_VALIDATION_CATALOGUE: VerificateurRegles = VerificateurRegles { regles_disjointes: None, regles_conjointes: None };
+// static mut REGLES_VALIDATION_CATALOGUE: VerificateurRegles = VerificateurRegles { regles_disjointes: None, regles_conjointes: None };
 
 /// Initialise les regles de validation pour le catalogue
-pub fn init_regles_validation() {
-    let regle_idmg = RegleValidationIdmg { idmg: String::from("zeYncRqEqZ6eTEmUZ8whJFuHG796eSvCTWE4M432izXrp22bAtwGm7Jf") };
-    unsafe {
-        REGLES_VALIDATION_CATALOGUE.ajouter_disjointe(regle_idmg);
-        debug!("init_regles_validation Regles de validation catalogue chargees : {:?}", REGLES_VALIDATION_CATALOGUE);
-    }
-}
+// pub fn init_regles_validation() {
+//     let regle_idmg = RegleValidationIdmg { idmg: String::from("zeYncRqEqZ6eTEmUZ8whJFuHG796eSvCTWE4M432izXrp22bAtwGm7Jf") };
+//     unsafe {
+//         REGLES_VALIDATION_CATALOGUE.ajouter_disjointe(regle_idmg);
+//         debug!("init_regles_validation Regles de validation catalogue chargees : {:?}", REGLES_VALIDATION_CATALOGUE);
+//     }
+// }
 
 #[derive(Clone)]
 pub struct GestionnaireDomaineCatalogues {}
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomaineCatalogues {
-    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
             T: TryInto<TransactionValide> + Send
@@ -145,7 +147,7 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-                                          -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
             T: TryInto<TransactionValide> + Send
@@ -483,17 +485,17 @@ impl ProcesseurTransactions {
 
 #[async_trait]
 impl TraiterTransaction for ProcesseurTransactions {
-    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao,
             T: TryInto<TransactionValide> + Send
     {
-        aiguillage_transaction(middleware, transaction).await
+        Ok(aiguillage_transaction(middleware, transaction).await?)
     }
 }
 
 async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T)
-                                      -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+                                      -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
         T: TryInto<TransactionValide>
@@ -515,11 +517,11 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T)
 
     match action.as_str() {
         TRANSACTION_APPLICATION => maj_catalogue(middleware, transaction).await,
-        _ => Err(format!("Transaction {} est de type non gere : {}", message_id, action)),
+        _ => Err(format!("Transaction {} est de type non gere : {}", message_id, action))?,
     }
 }
 
-async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -558,30 +560,28 @@ where M: ValidateurX509 {
 }
 
 #[derive(Clone, Deserialize)]
-struct MessageCatalogue<'a> {
-    #[serde(borrow="'a")]
-    catalogue: MessageMilleGrillesRefDefault<'a>,
+struct MessageCatalogue {
+    catalogue: MessageMilleGrillesOwned,
 }
 
 async fn traiter_commande_application<M>(middleware: &M, commande: MessageValide, gestionnaire: &GestionnaireDomaineCatalogues) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
 where M: ValidateurX509 + MongoDao + GenerateurMessages
 {
-    // let message = commande.message.get_msg();
-    debug!("traiter_commande_application Traitement catalogue application {:?}", commande);
+    debug!("traiter_commande_application Traitement catalogue application {:?}", commande.type_message);
 
-    // let value_catalogue: MessageMilleGrille = match commande.message.parsed.contenu.get("catalogue") {
-    let message_ref = commande.message.parse()?;
-    let message_contenu = message_ref.contenu()?;
-    let message_catalogue: MessageCatalogue = message_contenu.deserialize()?;
-    // let value_catalogue = message_catalogue.catalogue;
+    let mut message_catalogue: MessageCatalogue = {
+        let message_ref = commande.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        message_contenu.deserialize()?
+    };
 
-    // let mut catalogue = MessageSerialise::from_parsed(value_catalogue)?;
-    // debug!("traiter_commande_application Catalogue charge : {:?}", catalogue);
-
-    // let info_catalogue: CatalogueApplication = serde_json::from_value(Value::Object(catalogue.get_msg().contenu.to_owned()))?;
-    let catalogue_contenu = message_catalogue.catalogue.contenu()?;
-    let info_catalogue: CatalogueApplication = catalogue_contenu.deserialize()?;
+    let info_catalogue: CatalogueApplication = message_catalogue.catalogue.deserialize()?;
     debug!("traiter_commande_application Information catalogue charge : {:?}", info_catalogue);
+
+    // Verifier la signature du catalogue (ne verifie pas le certificat)
+    let catalogue_buffer: MessageMilleGrillesBufferDefault = message_catalogue.catalogue.try_into()?;
+    let mut catalogue_ref = catalogue_buffer.parse()?;
+    catalogue_ref.verifier_signature()?;
 
     let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES_VERSIONS)?;
     let version = info_catalogue.version.as_str();
@@ -589,53 +589,42 @@ where M: ValidateurX509 + MongoDao + GenerateurMessages
         CHAMP_NOM_CATALOGUE: info_catalogue.nom.as_str(),
         CHAMP_VERSION: version,
     };
+
     let doc_catalogue = collection_catalogues.find_one(filtre, None).await?;
     if doc_catalogue.is_some() {
         debug!("traiter_commande_application Catalogue {} version {} deja dans DB, skip.", info_catalogue.nom, info_catalogue.version);
         return Ok(None)
     }
-    // let version = match &doc_catalogue {
-    //     Some(d) => {
-    //         let version = d.get_str(CHAMP_VERSION)?;
-    //         // Verifier si la version recue est plus grande que celle sauvegardee
-    //         debug!("Version recue : {}, dans DB : {}", info_catalogue.version, version);
-    //
-    //         // Si version moins grande, on skip
-    //         if version == info_catalogue.version {
-    //             debug!("Meme version de catalogue, on skip");
-    //             return Ok(None)
-    //         }
-    //
-    //         Some(version)
-    //     },
-    //     None => None,
-    // };
 
-    todo!("fix me")
-    // // Valider le catalogue
-    // let resultat_validation = unsafe {
-    //     let mut opts = ValidationOptions::new(true, true, true);
-    //     opts.verificateur = Some(&REGLES_VALIDATION_CATALOGUE);
-    //     catalogue.valider(middleware, Some(&opts)).await?
-    // };
-    //
-    // if resultat_validation.valide() {
-    //     debug!("traiter_commande_application Catalogue accepte - certificat valide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
-    //     // Conserver la transaction et la traiter immediatement
-    //     // let mva = MessageValideAction::new(
-    //     //     commande.message,
-    //     //     commande.q,
-    //     //     commande.routing_key,
-    //     //     DOMAINE_NOM.into(),
-    //     //     TRANSACTION_APPLICATION.into(),
-    //     //     TypeMessageOut::Transaction
-    //     // );
-    //     sauvegarder_traiter_transaction(middleware, commande, gestionnaire).await?;
-    // } else {
-    //     error!("traiter_commande_application Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, resultat_validation);
-    // }
-    //
-    // Ok(None)
+    match &doc_catalogue {
+        Some(d) => {
+            let version = d.get_str(CHAMP_VERSION)?;
+            // Verifier si la version recue est plus grande que celle sauvegardee
+            debug!("Version recue : {}, dans DB : {}", info_catalogue.version, version);
+
+            // Si version moins grande, on skip
+            if version == info_catalogue.version {
+                debug!("Meme version de catalogue, on skip");
+                return Ok(None)
+            }
+        },
+        None => (),
+    };
+
+    // Valider le certificat et regles du catalogues.
+    match middleware.valider_certificat_idmg(&catalogue_ref, "catalogues").await {
+        Ok(inner) => {
+            debug!("traiter_commande_application Catalogue accepte - certificat valide : {}/{}",
+                &info_catalogue.nom, &info_catalogue.version);
+            // Conserver la transaction et la traiter immediatement
+            sauvegarder_traiter_transaction(middleware, commande, gestionnaire).await?;
+        },
+        Err(e) => {
+            error!("traiter_commande_application Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, e);
+        }
+    }
+
+    Ok(None)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -655,7 +644,7 @@ struct Catalogue {
 }
 
 async fn maj_catalogue<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, String>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("maj_catalogue Sauvegarder application recu via catalogue (transaction)");
@@ -665,16 +654,15 @@ async fn maj_catalogue<M>(middleware: &M, transaction: TransactionValide)
     //     Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur transaction.convertir {:?}", e))?
     // };
 
-    let transaction_catalogue: MessageCatalogue = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+    debug!("maj_catalogue Parse catalogue\n{}", transaction.transaction.contenu);
+    let escaped_catalogue: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+
+    let transaction_catalogue: MessageCatalogue = match serde_json::from_str(escaped_catalogue.as_str()) {
         Ok(inner) => inner,
         Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur transaction.convertir {:?}", e))?
     };
 
-    let message_contenu = match transaction_catalogue.catalogue.contenu() {
-        Ok(inner) => inner,
-        Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur catalogue contenu() {:?}", e))?
-    };
-    let catalogue: Catalogue = match message_contenu.deserialize() {
+    let catalogue: Catalogue = match transaction_catalogue.catalogue.deserialize() {
         Ok(inner) => inner,
         Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur catalogue map_contenu vers Catalogue {:?}", e))?
     };
