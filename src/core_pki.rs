@@ -156,37 +156,36 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
 pub fn preparer_queues() -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
-    let niveaux_securite_public = vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege);
-    let niveaux_securite_prive = vec!(Securite::L2Prive, Securite::L3Protege);
+    let niveaux_securite_public = vec!(Securite::L1Public);  //, Securite::L2Prive, Securite::L3Protege);
+    let niveaux_securite_prive = vec!(Securite::L2Prive);  //, Securite::L3Protege);
 
     // RK 1.public (inclus 2.prive et 3.protege)
     for niveau in niveaux_securite_public {
         // rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Pki.infoCertificat"), exchange: niveau.clone()});
         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.infoCertificat"), exchange: niveau.clone()});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.certificat.*"), exchange: niveau.clone()});
+        // rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.certificat.*"), exchange: niveau.clone()});
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.CorePki.{}", PKI_COMMANDE_SIGNER_CSR), exchange: niveau.clone()});
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", PKI_DOMAINE_CERTIFICAT_NOM, PKI_REQUETE_CERTIFICAT), exchange: niveau.clone()});
         rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.certificatParPk"), exchange: niveau.clone()});
+        // rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_NOM_MAITREDESCLES, EVENEMENT_CERTIFICAT_MAITREDESCLES), exchange: niveau.clone()});
     }
 
     // Ajout evenement certificat pour 4.secure
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", PKI_DOMAINE_CERTIFICAT_NOM, PKI_REQUETE_CERTIFICAT), exchange: Securite::L4Secure});
+    // rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", PKI_DOMAINE_CERTIFICAT_NOM, PKI_REQUETE_CERTIFICAT), exchange: Securite::L4Secure});
 
-    // RK 2.prive (inclus 3.protege)
-    for niveau in niveaux_securite_prive {
-        // rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Pki.certificatParPk"), exchange: niveau.clone()});
-        rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.certificatParPk"), exchange: niveau.clone()});
-    }
+    // RK 2.prive
+    // for niveau in niveaux_securite_prive {
+    //     // rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.Pki.certificatParPk"), exchange: niveau.clone()});
+    //     rk_volatils.push(ConfigRoutingExchange {routing_key: String::from("requete.CorePki.certificatParPk"), exchange: niveau.clone()});
+    // }
 
     // RK 3.protege seulement
     // rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.Pki.certificat".into(), exchange: Securite::L3Protege});
-    rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.CorePki.certificat".into(), exchange: Securite::L3Protege});
+    // rk_volatils.push(ConfigRoutingExchange {routing_key: "commande.CorePki.certificat".into(), exchange: Securite::L3Protege});
     // rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.Pki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
     rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.CorePki.{}", PKI_COMMANDE_NOUVEAU_CERTIFICAT), exchange: Securite::L3Protege});
 
     // rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_FICHIERS, EVENEMENT_BACKUP_DECLENCHER), exchange: Securite::L2Prive});
-
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("evenement.{}.{}", DOMAINE_NOM_MAITREDESCLES, EVENEMENT_CERTIFICAT_MAITREDESCLES), exchange: Securite::L4Secure});
 
     let mut queues = Vec::new();
 
@@ -441,11 +440,6 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValide) -> Result<Opti
             Err(format!("consommer_evenement Mauvais type de message"))?
         }
     };
-    // // Autorisation : doit etre de niveau 4.secure
-    // match m.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
-    //     true => Ok(()),
-    //     false => Err(format!("Trigger cedule autorisation invalide (pas 4.secure)")),
-    // }?;
 
     match action.as_str() {
         EVENEMENT_CERTIFICAT_MAITREDESCLES => evenement_certificat_maitredescles(middleware, m).await,
@@ -604,10 +598,11 @@ async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageVa
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let domaine = match &m.type_message {
+        TypeMessageOut::Evenement(r) |
         TypeMessageOut::Commande(r) => {
             r.domaine.clone()
         }
-        _ => Err("requete_certificat Mauvais type de message")?
+        _ => Err("traiter_commande_sauvegarder_certificat Mauvais type de message (doit etre Evenement ou Commande)")?
     };
 
     let message_ref = m.message.parse()?;
@@ -619,9 +614,9 @@ async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageVa
         None => None
     };
     let enveloppe = middleware.charger_enveloppe(&commande.chaine_pem, None, ca_pem).await?;
-    debug!("Commande de sauvegarde de certificat {} traitee", enveloppe.fingerprint);
+    debug!("traiter_commande_sauvegarder_certificat Certificat {} traite", enveloppe.fingerprint);
 
-    if domaine.as_str() == PKI_DOMAINE_CERTIFICAT_NOM {
+    if let TypeMessageOut::Evenement(_) = m.type_message {
         // Sauvegarde de l'evenement de certificat - aucune reponse
         Ok(None)
     } else {
