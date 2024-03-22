@@ -13,7 +13,7 @@ use millegrilles_common_rust::common_messages::DemandeSignature;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, emettre_presence_domaine, formatter_message_certificat, Middleware, sauvegarder_traiter_transaction, thread_emettre_presence_domaine, upsert_certificat};
+use millegrilles_common_rust::middleware::{emettre_presence_domaine, formatter_message_certificat, Middleware, sauvegarder_traiter_transaction, thread_emettre_presence_domaine, upsert_certificat};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
@@ -102,32 +102,35 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao + ConfigMessages {
+    async fn preparer_database<M>(&self, middleware: &M)
+        -> Result<(), millegrilles_common_rust::error::Error> where M: MongoDao + ConfigMessages
+    {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
     async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_requete(middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_commande(middleware, message).await  // Fonction plus bas
     }
 
-    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_transaction(self, middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_evenement(middleware, message).await  // Fonction plus bas
@@ -139,7 +142,9 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
         entretien(middleware).await  // Fonction plus bas
     }
 
-    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
+    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule)
+        -> Result<(), millegrilles_common_rust::error::Error> where M: Middleware + 'static
+    {
         traiter_cedule(middleware, trigger).await
     }
 
@@ -224,7 +229,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 }
 
 /// Creer index MongoDB
-async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
+async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
 where M: MongoDao + ConfigMessages
 {
 
@@ -325,7 +330,8 @@ async fn entretien<M>(middleware: Arc<M>)
     }
 }
 
-async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn consommer_requete<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -358,7 +364,8 @@ where
     }
 }
 
-async fn consommer_commande<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn consommer_commande<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
@@ -374,10 +381,10 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide) -> Result<Optio
     };
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.certificat.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
+    match m.certificat.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure))? {
         true => Ok(()),
         false => {
-            match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+            match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
                 true => Ok(()),
                 false => Err(String::from("core_pki.consommer_commande Autorisation invalide (aucun exchange, pas delegation globale)"))
             }
@@ -399,7 +406,8 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide) -> Result<Optio
     }
 }
 
-async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomainePki, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomainePki, middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -413,7 +421,7 @@ where
         }
     };
     // Autorisation : doit etre de niveau 4.secure
-    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE)))? {
         true => Ok(()),
         false => Err(format!("core_pki.consommer_transaction Autorisation invalide (pas 4.secure) : {}", action)),
     }?;
@@ -427,8 +435,9 @@ where
     }
 }
 
-async fn consommer_evenement<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
-    where M: GenerateurMessages + ConfigMessages + ChiffrageFactoryTrait + ValidateurX509 + MongoDao
+async fn consommer_evenement<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: GenerateurMessages + ConfigMessages + ValidateurX509 + MongoDao /* + ChiffrageFactoryTrait */
 {
     debug!("Consommer evenement : {:?}", &m.message);
 
@@ -437,7 +446,7 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValide) -> Result<Opti
             (r.domaine.clone(), r.action.clone())
         }
         _ => {
-            Err(format!("consommer_evenement Mauvais type de message"))?
+            Err(String::from("consommer_evenement Mauvais type de message"))?
         }
     };
 
@@ -458,7 +467,7 @@ struct MessageFingerprintPublicKey {
     fingerprint_pk: String
 }
 
-async fn requete_certificat<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn requete_certificat<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -538,7 +547,7 @@ where
     Ok(Some(middleware.build_reponse(reponse_value)?.0))
 }
 
-async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn requete_certificat_par_pk<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -594,7 +603,7 @@ where
 }
 
 async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let domaine = match &m.type_message {
@@ -614,7 +623,7 @@ async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageVa
         None => None
     };
     let enveloppe = middleware.charger_enveloppe(&commande.chaine_pem, None, ca_pem).await?;
-    debug!("traiter_commande_sauvegarder_certificat Certificat {} traite", enveloppe.fingerprint);
+    debug!("traiter_commande_sauvegarder_certificat Certificat {} traite", enveloppe.fingerprint()?);
 
     if let TypeMessageOut::Evenement(_) = m.type_message {
         // Sauvegarde de l'evenement de certificat - aucune reponse
@@ -635,7 +644,7 @@ struct CommandeSauvegarderCertificat {
 /// * signee par une delegation globale (e.g. proprietaire), ou
 /// * signee par un monitor du meme niveau pour un role (e.g. monitor prive pour messagerie ou postmaster), ou
 /// * etre un renouvellement pour les memes roles.
-async fn commande_signer_csr<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn commande_signer_csr<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: GenerateurMessages + IsConfigNoeud
 {
     if let Err(e) = valider_demande_signature_csr(middleware, &m).await {
@@ -724,7 +733,7 @@ async fn commande_signer_csr<M>(middleware: &M, m: MessageValide) -> Result<Opti
 }
 
 async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageValide)
-    -> Result<(), Box<dyn Error>>
+    -> Result<(), millegrilles_common_rust::error::Error>
     where M: GenerateurMessages + IsConfigNoeud
 {
     // let mut message = None;
@@ -735,24 +744,24 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
     let message_parsed: DemandeSignature = message_contenu.deserialize()?;
     let certificat = m.certificat.as_ref();
 
-    if certificat.verifier_roles(vec![RolesCertificats::Instance]) {
-        if certificat.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
+    if certificat.verifier_roles(vec![RolesCertificats::Instance])? {
+        if certificat.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure])? {
             debug!("valider_demande_signature_csr Demande de CSR signee par une instance 3.protege ou 4.secure, demande approuvee");
             // message = Some(Cow::Borrowed(&m.message.parsed));
             return Ok(())
-        } else if certificat.verifier_exchanges(vec![Securite::L2Prive]) {
+        } else if certificat.verifier_exchanges(vec![Securite::L2Prive])? {
             debug!("valider_demande_signature_csr Demande de CSR signee par une instance 2.prive");
             // message = Some(Cow::Borrowed(&m.message.parsed));
             return Ok(())
-        } else if certificat.verifier_exchanges(vec![Securite::L1Public]) {
+        } else if certificat.verifier_exchanges(vec![Securite::L1Public])? {
             debug!("valider_demande_signature_csr Demande de CSR signee par une instance 1.public, demande approuvee");
             // message = Some(Cow::Borrowed(&m.message.parsed));
             return Ok(())
         } else {
             error!("valider_demande_signature_csr Demande de CSR signee par une instance sans exchanges, REFUSE");
         }
-    } else if certificat.verifier_roles(vec![RolesCertificats::MaitreDesClesConnexion]) {
-        if certificat.verifier_exchanges(vec![Securite::L4Secure]) {
+    } else if certificat.verifier_roles(vec![RolesCertificats::MaitreDesClesConnexion])? {
+        if certificat.verifier_exchanges(vec![Securite::L4Secure])? {
             // Un certificat de maitre des cles connexion (4.secure) supporte une cle volatile
 
             // Validation des valeurs
@@ -788,17 +797,18 @@ async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageVali
             // return Ok(Some(Cow::Owned(middleware.formatter_reponse(e, None)?)));
             Err("niveau != 4.secure")?
         }
-    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         debug!("valider_demande_signature_csr Demande de CSR signee par une delegation globale (proprietaire), demande approuvee");
         // message = Some(Cow::Borrowed(&m.message.parsed));
         return Ok(())
-    } else if certificat.verifier_exchanges(vec![Securite::L4Secure]) {
+    } else if certificat.verifier_exchanges(vec![Securite::L4Secure])? {
         debug!("valider_demande_signature_csr Demande de CSR signee pour un domaine");
         if message_parsed.domaines.is_some() || message_parsed.exchanges.is_some() {
             Err(String::from("domaines/exchanges/roles doivent etre vide"))?;
         }
 
-        let domaines = match certificat.get_domaines()? {
+        let extensions = certificat.extensions()?;
+        let domaines = match &extensions.domaines {
             Some(d) => d,
             None => {
                 Err(format!("valider_demande_signature_csr Demande de signature de CSR refusee, demandeur sans domaines : {:?}", certificat))?
@@ -931,22 +941,23 @@ struct TransactionCertificat {
     ca: Option<String>
 }
 
-async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
-where M: ValidateurX509 {
-    //let message = trigger.message;
-
+async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule)
+    -> Result<(), millegrilles_common_rust::error::Error>
+    where M: ValidateurX509
+{
     debug!("traiter_cedule corepki");
-
     Ok(())
 }
 
-async fn evenement_certificat_maitredescles<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
-    where M: ValidateurX509 + ConfigMessages + ChiffrageFactoryTrait
+async fn evenement_certificat_maitredescles<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + ConfigMessages /*+ ChiffrageFactoryTrait*/
 {
-    info!("Recevoir certificat maitre des cles {:?}", m);
-    let type_message = TypeMessage::Valide(m);
-    middleware.recevoir_certificat_chiffrage(middleware, &type_message).await?;
-    Ok(None)
+    todo!("fix me")
+    // info!("Recevoir certificat maitre des cles {:?}", m);
+    // let type_message = TypeMessage::Valide(m);
+    // middleware.recevoir_certificat_chiffrage(middleware, &type_message).await?;
+    // Ok(None)
 }
 
 #[cfg(test)]

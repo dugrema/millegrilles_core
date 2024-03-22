@@ -7,19 +7,16 @@ use log::{debug, info, warn, error};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::{BackupStarter, CommandeBackup, thread_backup};
 use millegrilles_common_rust::bson::{doc, Document};
-use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, EnveloppeCertificat, EnveloppePrivee, FingerprintCertPublicKey, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
-use millegrilles_common_rust::chiffrage::{Chiffreur, Dechiffreur, MgsCipherData, CleChiffrageHandler, ChiffrageFactory, ChiffrageFactoryImpl};
-use millegrilles_common_rust::chiffrage_cle::CleDechiffree;
-use millegrilles_common_rust::chiffrage_streamxchacha20poly1305::CipherMgs4;
-// use millegrilles_common_rust::chiffrage_chacha20poly1305::{CipherMgs3, DecipherMgs3, Mgs3CipherData, Mgs3CipherKeys};
+use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
 use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMessagesDb, ConfigurationMq, ConfigurationNoeud, ConfigurationPki, IsConfigNoeud};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
-use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, ChiffrageFactoryTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait, repondre_certificat};
+use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait, repondre_certificat};
 use millegrilles_common_rust::middleware_db::MiddlewareDb;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
+use millegrilles_common_rust::millegrilles_cryptographie::x509::{EnveloppeCertificat, EnveloppePrivee};
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao, MongoDaoImpl, initialiser as initialiser_mongodb};
 use millegrilles_common_rust::mongodb::Database;
 use millegrilles_common_rust::mongodb::options::FindOptions;
@@ -47,7 +44,7 @@ pub struct MiddlewareDbPki {
     pub redis: Option<RedisDao>,
     validateur: Arc<ValidateurX509Database>,
     tx_backup: Sender<CommandeBackup>,
-    chiffrage_factory: Arc<ChiffrageFactoryImpl>,
+    // chiffrage_factory: Arc<ChiffrageFactoryImpl>,
 }
 
 impl MiddlewareDbPki {}
@@ -61,21 +58,20 @@ impl EmetteurNotificationsTrait for MiddlewareDbPki {
     async fn emettre_notification_proprietaire(
         &self, contenu: NotificationMessageInterne, niveau: &str, expiration: Option<i64>, destinataires: Option<Vec<String>>
     )
-        -> Result<(), Box<dyn Error>>
+        -> Result<(), millegrilles_common_rust::error::Error>
     {
         self.ressources.emetteur_notifications.emettre_notification_proprietaire(
             self, contenu, niveau, expiration, destinataires).await
     }
 
-    async fn emettre_notification_usager<D,S,N>(
-        &self, user_id: S, contenu: NotificationMessageInterne,
-        niveau: N, domaine: D, expiration: Option<i64>, cle_dechiffree: Option<CleDechiffree>
-    )
-        -> Result<String, Box<dyn Error>>
+    async fn emettre_notification_usager<D, S, N>(
+        &self, user_id: S, contenu: NotificationMessageInterne, niveau: N, domaine: D, expiration: Option<i64>)
+        -> Result<String, millegrilles_common_rust::error::Error>
         where D: AsRef<str> + Send, S: AsRef<str> + Send, N: AsRef<str> + Send
     {
-        self.ressources.emetteur_notifications.emettre_notification_usager(
-            self, user_id, contenu, niveau, domaine, expiration, cle_dechiffree).await
+        todo!()
+        //     self.ressources.emetteur_notifications.emettre_notification_usager(
+        //         self, user_id, contenu, niveau, domaine, expiration, cle_dechiffree).await
     }
 }
 
@@ -91,29 +87,29 @@ impl RabbitMqTrait for MiddlewareDbPki {
     fn notify_attendre_connexion(&self) -> Arc<Notify> { self.ressources.rabbitmq.notify_attendre_connexion() }
 }
 
-impl ChiffrageFactoryTrait for MiddlewareDbPki {
-    fn get_chiffrage_factory(&self) -> &ChiffrageFactoryImpl {
-        self.chiffrage_factory.as_ref()
-    }
-}
-
-impl ChiffrageFactory for MiddlewareDbPki {
-    fn get_chiffreur(&self) -> Result<CipherMgs4, String> {
-        self.chiffrage_factory.get_chiffreur()
-    }
-
-    // fn get_chiffreur_mgs2(&self) -> Result<CipherMgs2, String> {
-    //     self.chiffrage_factory.get_chiffreur_mgs2()
-    // }
-
-    // fn get_chiffreur_mgs3(&self) -> Result<CipherMgs3, String> {
-    //     self.chiffrage_factory.get_chiffreur_mgs3()
-    // }
-
-    fn get_chiffreur_mgs4(&self) -> Result<CipherMgs4, String> {
-        self.chiffrage_factory.get_chiffreur_mgs4()
-    }
-}
+// impl ChiffrageFactoryTrait for MiddlewareDbPki {
+//     fn get_chiffrage_factory(&self) -> &ChiffrageFactoryImpl {
+//         self.chiffrage_factory.as_ref()
+//     }
+// }
+//
+// impl ChiffrageFactory for MiddlewareDbPki {
+//     fn get_chiffreur(&self) -> Result<CipherMgs4, String> {
+//         self.chiffrage_factory.get_chiffreur()
+//     }
+//
+//     // fn get_chiffreur_mgs2(&self) -> Result<CipherMgs2, String> {
+//     //     self.chiffrage_factory.get_chiffreur_mgs2()
+//     // }
+//
+//     // fn get_chiffreur_mgs3(&self) -> Result<CipherMgs3, String> {
+//     //     self.chiffrage_factory.get_chiffreur_mgs3()
+//     // }
+//
+//     fn get_chiffreur_mgs4(&self) -> Result<CipherMgs4, String> {
+//         self.chiffrage_factory.get_chiffreur_mgs4()
+//     }
+// }
 
 /// Validateur X509 backe par une base de donnees (Mongo)
 /// Permet de charger les certificats et generer les transactions pour les certificats inconnus.
@@ -140,8 +136,10 @@ impl ValidateurX509Database {
         self.validateur.entretien_validateur().await;
     }
 
-    async fn upsert_enveloppe(&self, enveloppe: &EnveloppeCertificat) -> Result<(), String> {
-        debug!("Upserting enveloppe {:?}, CA: {:?}", enveloppe.get_pem_vec(), enveloppe.get_pem_ca());
+    async fn upsert_enveloppe(&self, enveloppe: &EnveloppeCertificat)
+        -> Result<(), millegrilles_common_rust::error::Error>
+    {
+        debug!("Upserting enveloppe {:?}, CA: {:?}", enveloppe.chaine_pem()?, enveloppe.ca_pem()?);
 
         let db = self.mongo_dao.get_database()?;
         let collection = db.collection(COLLECTION_CERTIFICAT_NOM);
@@ -151,13 +149,13 @@ impl ValidateurX509Database {
                 debug!("Certificat upserted, creer transaction pour sauvegarde permanente");
                 // let domaine_action = format!("{}.{}", PKI_DOMAINE_NOM, PKI_TRANSACTION_NOUVEAU_CERTIFICAT);
 
-                let fingerprint_certs = enveloppe.get_pem_vec();
+                let fingerprint_certs = enveloppe.chaine_fingerprint_pem()?;
                 let mut pem_vec = Vec::new();
                 for fp_cert in fingerprint_certs {
                     pem_vec.push(fp_cert.pem);
                 }
                 let pems = pem_vec.join("\n");
-                let ca = enveloppe.get_pem_ca()?;
+                let ca = enveloppe.ca_pem()?;
 
                 let contenu = json!({
                     "pem": pems,
@@ -189,7 +187,8 @@ impl ValidateurX509Database {
 #[async_trait]
 impl ValidateurX509 for ValidateurX509Database {
 
-    async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>, ca_pem: Option<&str>) -> Result<Arc<EnveloppeCertificat>, String> {
+    async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>, ca_pem: Option<&str>)
+        -> Result<Arc<EnveloppeCertificat>, millegrilles_common_rust::error::Error> {
         debug!("ValidateurX509Database: charger_enveloppe!");
         // let resultat = self.charger_cert_db();
 
@@ -201,14 +200,16 @@ impl ValidateurX509 for ValidateurX509Database {
         Ok(enveloppe)
     }
 
-    async fn cacher(&self, certificat: EnveloppeCertificat) -> (Arc<EnveloppeCertificat>, bool) {
-        let (enveloppe, persiste) = self.validateur.cacher(certificat).await;
+    async fn cacher(&self, certificat: EnveloppeCertificat)
+        -> Result<(Arc<EnveloppeCertificat>, bool), millegrilles_common_rust::error::Error>
+    {
+        let (enveloppe, persiste) = self.validateur.cacher(certificat).await?;
 
         let persiste = if ! persiste {
             // Conserver dans MongoDB
             let persiste = match self.upsert_enveloppe(enveloppe.as_ref()).await {
                 Ok(()) => {
-                    self.validateur.set_flag_persiste(enveloppe.fingerprint.as_str());
+                    self.validateur.set_flag_persiste(enveloppe.fingerprint()?.as_str());
                     true
                 },
                 Err(e) => {
@@ -220,9 +221,10 @@ impl ValidateurX509 for ValidateurX509Database {
             // Cacher dans redis (utilise par tous les autres services)
             match self.redis_dao.as_ref() {
                 Some(redis) => {
+                    let fingerprint = enveloppe.fingerprint()?;
                     match redis.save_certificat(enveloppe.as_ref()).await {
-                        Ok(()) => debug!("Certificat {} sauvegarde dans redis", enveloppe.fingerprint),
-                        Err(e) => warn!("Erreur cache certificat {} dans redis : {:?}", enveloppe.fingerprint, e)
+                        Ok(()) => debug!("Certificat {} sauvegarde dans redis", fingerprint),
+                        Err(e) => warn!("Erreur cache certificat {} dans redis : {:?}", fingerprint, e)
                     }
                 },
                 None => ()
@@ -235,7 +237,7 @@ impl ValidateurX509 for ValidateurX509Database {
         };
 
         /// Retourne le certificat et indicateur qu'il a ete persiste
-        (enveloppe, persiste)
+        Ok((enveloppe, persiste))
     }
 
     fn set_flag_persiste(&self, fingerprint: &str) {
@@ -373,11 +375,18 @@ impl ValidateurX509 for ValidateurX509Database {
         if let Some(redis) = self.redis_dao.as_ref() {
             // Conserver les certificats qui n'ont pas encore ete persistes
             for certificat in self.validateur.certificats_persister().iter() {
-                debug!("entretien_validateur Persister certificat {}", certificat.fingerprint);
+                let fingerprint = match certificat.fingerprint() {
+                    Ok(inner) => inner,
+                    Err(e) => {
+                        error!("Erreur fingerprint() durant entretien certificat - SKIP");
+                        continue  // Skip le certificat
+                    }
+                };
+                debug!("entretien_validateur Persister certificat {}", fingerprint);
 
                 // Sauvegarder dans MongoDB
                 match self.upsert_enveloppe(certificat.as_ref()).await {
-                    Ok(()) => self.validateur.set_flag_persiste(certificat.fingerprint.as_str()),
+                    Ok(()) => self.validateur.set_flag_persiste(fingerprint.as_str()),
                     Err(e) => {
                         error!("Erreur sauvegarde certificat dans MongoDB : {:?}", e);
                     }
@@ -481,22 +490,22 @@ pub fn preparer_middleware_pki() -> MiddlewareHooks {
     let configuration = ressources_messages.configuration.clone();
 
     // Extraire le cert millegrille comme base pour chiffrer les cles secretes
-    let chiffrage_factory = {
-        let env_privee = configuration.get_configuration_pki().get_enveloppe_privee();
-        let cert_local = env_privee.enveloppe.as_ref();
-        let mut fp_certs = cert_local.fingerprint_cert_publickeys().expect("public keys");
-        let list_fp_ca = env_privee.enveloppe_ca.fingerprint_cert_publickeys().expect("public keys CA");
-        fp_certs.extend(list_fp_ca);
-
-        let mut map: HashMap<String, FingerprintCertPublicKey> = HashMap::new();
-        for f in fp_certs.iter().filter(|c| c.est_cle_millegrille).map(|c| c.to_owned()) {
-            map.insert(f.fingerprint.clone(), f);
-        }
-
-        debug!("Map cles chiffrage : {:?}", map);
-
-        Arc::new(ChiffrageFactoryImpl::new(map, env_privee))
-    };
+    // let chiffrage_factory = {
+    //     let env_privee = configuration.get_configuration_pki().get_enveloppe_privee();
+    //     let cert_local = env_privee.enveloppe.as_ref();
+    //     let mut fp_certs = cert_local.fingerprint_cert_publickeys().expect("public keys");
+    //     let list_fp_ca = env_privee.enveloppe_ca.fingerprint_cert_publickeys().expect("public keys CA");
+    //     fp_certs.extend(list_fp_ca);
+    //
+    //     let mut map: HashMap<String, FingerprintCertPublicKey> = HashMap::new();
+    //     for f in fp_certs.iter().filter(|c| c.est_cle_millegrille).map(|c| c.to_owned()) {
+    //         map.insert(f.fingerprint.clone(), f);
+    //     }
+    //
+    //     debug!("Map cles chiffrage : {:?}", map);
+    //
+    //     Arc::new(ChiffrageFactoryImpl::new(map, env_privee))
+    // };
 
     let mongo = Arc::new(initialiser_mongodb(configuration.as_ref().as_ref()).expect("initialiser_mongodb"));
 
@@ -523,7 +532,7 @@ pub fn preparer_middleware_pki() -> MiddlewareHooks {
         redis: redis_dao,
         validateur: validateur_db,
         tx_backup,
-        chiffrage_factory,
+        // chiffrage_factory,
     });
 
     // Preparer threads execution
@@ -647,7 +656,9 @@ pub fn preparer_middleware_pki() -> MiddlewareHooks {
 
 #[async_trait]
 impl ValidateurX509 for MiddlewareDbPki {
-    async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>, ca_pem: Option<&str>) -> Result<Arc<EnveloppeCertificat>, String> {
+    async fn charger_enveloppe(&self, chaine_pem: &Vec<String>, fingerprint: Option<&str>, ca_pem: Option<&str>)
+        -> Result<Arc<EnveloppeCertificat>, millegrilles_common_rust::error::Error>
+    {
         let enveloppe = self.validateur.charger_enveloppe(chaine_pem, fingerprint, ca_pem).await?;
 
         // Conserver dans redis (reset TTL)
@@ -661,20 +672,23 @@ impl ValidateurX509 for MiddlewareDbPki {
         Ok(enveloppe)
     }
 
-    async fn cacher(&self, certificat: EnveloppeCertificat) -> (Arc<EnveloppeCertificat>, bool) {
-        let (enveloppe, persiste) = self.validateur.cacher(certificat).await;
+    async fn cacher(&self, certificat: EnveloppeCertificat)
+        -> Result<(Arc<EnveloppeCertificat>, bool), millegrilles_common_rust::error::Error>
+    {
+        let (enveloppe, persiste) = self.validateur.cacher(certificat).await?;
 
         let persiste = if ! persiste {
             match self.redis.as_ref() {
                 Some(redis) => {
                     match redis.save_certificat(enveloppe.as_ref()).await {
                         Ok(()) => {
-                            debug!("Certificat {} sauvegarde dans redis", enveloppe.fingerprint);
-                            self.validateur.set_flag_persiste(enveloppe.fingerprint.as_str());
+                            let fingerprint = enveloppe.fingerprint()?;
+                            debug!("Certificat {} sauvegarde dans redis", fingerprint);
+                            self.validateur.set_flag_persiste(fingerprint.as_str());
                             true
                         },
                         Err(e) => {
-                            warn!("Erreur cache certificat {} dans redis : {:?}", enveloppe.fingerprint, e);
+                            warn!("Erreur cache certificat {} dans redis : {:?}", enveloppe.fingerprint()?, e);
                             false
                         }
                     }
@@ -686,7 +700,7 @@ impl ValidateurX509 for MiddlewareDbPki {
         };
 
         /// Retourne le certificat et indicateur qu'il a ete persiste
-        (enveloppe, persiste)
+        Ok((enveloppe, persiste))
     }
 
     fn set_flag_persiste(&self, fingerprint: &str) {
@@ -865,85 +879,85 @@ impl IsConfigNoeud for MiddlewareDbPki {
     }
 }
 
-#[async_trait]
-impl CleChiffrageHandler for MiddlewareDbPki {
-
-    fn get_publickeys_chiffrage(&self) -> Vec<FingerprintCertPublicKey> {
-        let guard = self.chiffrage_factory.cles_chiffrage.lock().expect("lock");
-
-        // Copier les cles (extraire du mutex), retourner dans un vecteur
-        let vals: Vec<FingerprintCertPublicKey> = guard.iter().map(|v| v.1.to_owned()).collect();
-
-        vals
-    }
-
-    async fn charger_certificats_chiffrage<M>(&self, middleware: &M)
-        -> Result<(), Box<dyn Error>>
-        where M: GenerateurMessages + ValidateurX509 + ConfigMessages
-    {
-        debug!("Charger les certificats de maitre des cles pour chiffrage");
-        Ok(self.chiffrage_factory.charger_certificats_chiffrage(middleware).await?)
-    }
-
-    async fn recevoir_certificat_chiffrage<M>(&self, middleware: &M, message: &TypeMessage) -> Result<(), String>
-        where M: ValidateurX509 + ConfigMessages
-    {
-        self.chiffrage_factory.recevoir_certificat_chiffrage(middleware, message).await
-
-        // let cert_chiffrage = match &message.certificat {
-        //     Some(c) => c.clone(),
-        //     None => {
-        //         error!("recevoir_certificat_chiffrage Message de certificat de MilleGrille recu, certificat n'est pas extrait");
-        //         Err(format!("recevoir_certificat_chiffrage Message de certificat de MilleGrille recu, certificat n'est pas extrait"))?
-        //     }
-        // };
-        //
-        // // Valider le certificat
-        // if ! cert_chiffrage.presentement_valide {
-        //     error!("recevoir_certificat_chiffrage Certificat de maitre des cles recu n'est pas presentement valide - rejete");
-        //     Err(format!("middleware_db.recevoir_certificat_chiffrage Certificat de maitre des cles recu n'est pas presentement valide - rejete"))?;
-        // }
-        //
-        // if ! cert_chiffrage.verifier_roles(vec![RolesCertificats::MaitreDesCles]) {
-        //     format!("recevoir_certificat_chiffrage Certificat de maitre des cles recu n'a pas le role MaitreCles' - rejete");
-        //     Err(format!("middleware_db.recevoir_certificat_chiffrage Certificat de maitre des cles recu n'a pas le role MaitreCles' - rejete"))?;
-        // }
-        //
-        // info!("Certificat maitre des cles accepte {}", cert_chiffrage.fingerprint());
-        // self.chiffrage_factory.recevoir_certificat_chiffrage(middleware, message).await
-
-        // Stocker cles chiffrage du maitre des cles
-        // {
-        //     let fps = match cert_chiffrage.fingerprint_cert_publickeys() {
-        //         Ok(f) => f,
-        //         Err(e) => Err(format!("middleware_db.recevoir_certificat_chiffrage cert_chiffrage.fingerprint_cert_publickeys : {:?}", e))?
-        //     };
-        //     let mut guard = match self.chiffrage_factory.cles_chiffrage.lock() {
-        //         Ok(g) => g,
-        //         Err(e) => Err(format!("middleware_db.recevoir_certificat_chiffrage Erreur cles_chiffrage.lock() : {:?}", e))?
-        //     };
-        //     for fp in fps.iter().filter(|f| ! f.est_cle_millegrille) {
-        //         guard.insert(fp.fingerprint.clone(), fp.clone());
-        //     }
-        //
-        //     // S'assurer d'avoir le certificat de millegrille local
-        //     let enveloppe_privee = middleware.get_configuration_pki().get_enveloppe_privee();
-        //     let enveloppe_ca = &enveloppe_privee.enveloppe_ca;
-        //     let public_keys_ca = match enveloppe_ca.fingerprint_cert_publickeys() {
-        //         Ok(p) => p,
-        //         Err(e) => Err(format!("middleware_db.recevoir_certificat_chiffrage enveloppe_ca.fingerprint_cert_publickeys : {:?}", e))?
-        //     }.pop();
-        //     if let Some(pk_ca) = public_keys_ca {
-        //         guard.insert(pk_ca.fingerprint.clone(), pk_ca);
-        //     }
-        //
-        //     info!("Certificats chiffrage maj {:?}", guard);
-        // }
-        //
-        // Ok(())
-    }
-
-}
+// #[async_trait]
+// impl CleChiffrageHandler for MiddlewareDbPki {
+//
+//     fn get_publickeys_chiffrage(&self) -> Vec<FingerprintCertPublicKey> {
+//         let guard = self.chiffrage_factory.cles_chiffrage.lock().expect("lock");
+//
+//         // Copier les cles (extraire du mutex), retourner dans un vecteur
+//         let vals: Vec<FingerprintCertPublicKey> = guard.iter().map(|v| v.1.to_owned()).collect();
+//
+//         vals
+//     }
+//
+//     async fn charger_certificats_chiffrage<M>(&self, middleware: &M)
+//         -> Result<(), Box<dyn Error>>
+//         where M: GenerateurMessages + ValidateurX509 + ConfigMessages
+//     {
+//         debug!("Charger les certificats de maitre des cles pour chiffrage");
+//         Ok(self.chiffrage_factory.charger_certificats_chiffrage(middleware).await?)
+//     }
+//
+//     async fn recevoir_certificat_chiffrage<M>(&self, middleware: &M, message: &TypeMessage) -> Result<(), String>
+//         where M: ValidateurX509 + ConfigMessages
+//     {
+//         self.chiffrage_factory.recevoir_certificat_chiffrage(middleware, message).await
+//
+//         // let cert_chiffrage = match &message.certificat {
+//         //     Some(c) => c.clone(),
+//         //     None => {
+//         //         error!("recevoir_certificat_chiffrage Message de certificat de MilleGrille recu, certificat n'est pas extrait");
+//         //         Err(format!("recevoir_certificat_chiffrage Message de certificat de MilleGrille recu, certificat n'est pas extrait"))?
+//         //     }
+//         // };
+//         //
+//         // // Valider le certificat
+//         // if ! cert_chiffrage.presentement_valide {
+//         //     error!("recevoir_certificat_chiffrage Certificat de maitre des cles recu n'est pas presentement valide - rejete");
+//         //     Err(format!("middleware_db.recevoir_certificat_chiffrage Certificat de maitre des cles recu n'est pas presentement valide - rejete"))?;
+//         // }
+//         //
+//         // if ! cert_chiffrage.verifier_roles(vec![RolesCertificats::MaitreDesCles]) {
+//         //     format!("recevoir_certificat_chiffrage Certificat de maitre des cles recu n'a pas le role MaitreCles' - rejete");
+//         //     Err(format!("middleware_db.recevoir_certificat_chiffrage Certificat de maitre des cles recu n'a pas le role MaitreCles' - rejete"))?;
+//         // }
+//         //
+//         // info!("Certificat maitre des cles accepte {}", cert_chiffrage.fingerprint());
+//         // self.chiffrage_factory.recevoir_certificat_chiffrage(middleware, message).await
+//
+//         // Stocker cles chiffrage du maitre des cles
+//         // {
+//         //     let fps = match cert_chiffrage.fingerprint_cert_publickeys() {
+//         //         Ok(f) => f,
+//         //         Err(e) => Err(format!("middleware_db.recevoir_certificat_chiffrage cert_chiffrage.fingerprint_cert_publickeys : {:?}", e))?
+//         //     };
+//         //     let mut guard = match self.chiffrage_factory.cles_chiffrage.lock() {
+//         //         Ok(g) => g,
+//         //         Err(e) => Err(format!("middleware_db.recevoir_certificat_chiffrage Erreur cles_chiffrage.lock() : {:?}", e))?
+//         //     };
+//         //     for fp in fps.iter().filter(|f| ! f.est_cle_millegrille) {
+//         //         guard.insert(fp.fingerprint.clone(), fp.clone());
+//         //     }
+//         //
+//         //     // S'assurer d'avoir le certificat de millegrille local
+//         //     let enveloppe_privee = middleware.get_configuration_pki().get_enveloppe_privee();
+//         //     let enveloppe_ca = &enveloppe_privee.enveloppe_ca;
+//         //     let public_keys_ca = match enveloppe_ca.fingerprint_cert_publickeys() {
+//         //         Ok(p) => p,
+//         //         Err(e) => Err(format!("middleware_db.recevoir_certificat_chiffrage enveloppe_ca.fingerprint_cert_publickeys : {:?}", e))?
+//         //     }.pop();
+//         //     if let Some(pk_ca) = public_keys_ca {
+//         //         guard.insert(pk_ca.fingerprint.clone(), pk_ca);
+//         //     }
+//         //
+//         //     info!("Certificats chiffrage maj {:?}", guard);
+//         // }
+//         //
+//         // Ok(())
+//     }
+//
+// }
 
 // impl VerificateurMessage for MiddlewareDbPki {
 //     fn verifier_message(&self, message: &mut MessageSerialise, options: Option<&ValidationOptions>) -> Result<ResultatValidation, Box<dyn Error>> {
@@ -953,9 +967,11 @@ impl CleChiffrageHandler for MiddlewareDbPki {
 
 #[async_trait]
 impl EmetteurCertificat for MiddlewareDbPki {
-    async fn emettre_certificat(&self, generateur_message: &impl GenerateurMessages) -> Result<(), String> {
+    async fn emettre_certificat(&self, generateur_message: &impl GenerateurMessages)
+        -> Result<(), millegrilles_common_rust::error::Error>
+    {
         let enveloppe_privee = self.ressources.configuration.get_configuration_pki().get_enveloppe_privee();
-        let enveloppe_certificat = enveloppe_privee.enveloppe.as_ref();
+        let enveloppe_certificat = enveloppe_privee.enveloppe_pub.as_ref();
         let message = formatter_message_certificat(enveloppe_certificat)?;
         let exchanges = vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege);
 
@@ -972,12 +988,12 @@ impl EmetteurCertificat for MiddlewareDbPki {
 
         match generateur_message.emettre_evenement(routage, &message).await {
             Ok(_) => Ok(()),
-            Err(e) => Err(format!("Erreur emettre_certificat: {:?}", e)),
+            Err(e) => Err(format!("Erreur emettre_certificat: {:?}", e))?
         }
     }
 
     async fn repondre_certificat<S, T>(&self, reply_q: S, correlation_id: T)
-        -> Result<(), String>
+        -> Result<(), millegrilles_common_rust::error::Error>
         where S: AsRef<str> + Send, T: AsRef<str> + Send
     {
         repondre_certificat(self, reply_q, correlation_id).await

@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::certificats::ValidateurX509;
-use millegrilles_common_rust::chiffrage::Chiffreur;
+// use millegrilles_common_rust::chiffrage::Chiffreur;
 use millegrilles_common_rust::chrono as chrono;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
@@ -229,13 +229,15 @@ async fn entretien<M>(middleware: Arc<M>)
         }
 
         if prochain_chargement_certificats_maitredescles < maintenant {
-            match middleware.charger_certificats_chiffrage(middleware.as_ref()).await {
-                Ok(()) => {
-                    prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
-                    debug!("Prochain chargement cert maitredescles: {:?}", prochain_chargement_certificats_maitredescles);
-                },
-                Err(e) => warn!("Erreur chargement certificats de maitre des cles : {:?}", e)
-            }
+            error!("Fix me - charger certificats maitre des cles **TODO**");
+            prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
+            // match middleware.charger_certificats_chiffrage(middleware.as_ref()).await {
+            //     Ok(()) => {
+            //         // prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
+            //         // debug!("Prochain chargement cert maitredescles: {:?}", prochain_chargement_certificats_maitredescles);
+            //     },
+            //     Err(e) => warn!("Erreur chargement certificats de maitre des cles : {:?}", e)
+            // }
         }
 
         if prochain_entretien_transactions < maintenant {

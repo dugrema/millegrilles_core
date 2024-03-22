@@ -57,6 +57,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epo
 
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use crate::core_pki::COLLECTION_CERTIFICAT_NOM;
+use crate::error::Error as CoreError;
 
 // Constantes
 pub const DOMAINE_NOM: &str = "CoreMaitreDesComptes";
@@ -182,32 +183,36 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao + ConfigMessages {
+    async fn preparer_database<M>(&self, middleware: &M)
+        -> Result<(), millegrilles_common_rust::error::Error>
+        where M: MongoDao + ConfigMessages
+    {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
     async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_requete(middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_commande(middleware, &self,message).await  // Fonction plus bas
     }
 
-    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_transaction(middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_evenement(middleware, message).await  // Fonction plus bas
@@ -219,7 +224,9 @@ impl GestionnaireDomaine for GestionnaireDomaineMaitreDesComptes {
         entretien(middleware).await  // Fonction plus bas
     }
 
-    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
+    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule)
+        -> Result<(), millegrilles_common_rust::error::Error> where M: Middleware + 'static
+    {
         traiter_cedule(middleware, trigger).await
     }
 
@@ -347,7 +354,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 }
 
 /// Creer index MongoDB
-async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
+async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
 where M: MongoDao + ConfigMessages
 {
 
@@ -500,7 +507,7 @@ where M: MongoDao + ConfigMessages
 }
 
 /// Supprime les state de registration ou authentication expires
-async fn supprimer_webauthn_expire<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+async fn supprimer_webauthn_expire<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
     where M: MongoDao
 {
     // Supprimer registration expires
@@ -529,7 +536,7 @@ async fn supprimer_webauthn_expire<M>(middleware: &M) -> Result<(), Box<dyn Erro
 }
 
 /// Supprime les state de recovery expires
-async fn supprimer_recovery_expire<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+async fn supprimer_recovery_expire<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
     where M: MongoDao
 {
     // Supprimer codes recovery expires
@@ -548,7 +555,7 @@ async fn supprimer_recovery_expire<M>(middleware: &M) -> Result<(), Box<dyn Erro
     Ok(())
 }
 
-async fn supprimer_activations_expirees<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+async fn supprimer_activations_expirees<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
     where M: MongoDao
 {
     // Supprimer codes recovery expires
@@ -567,7 +574,7 @@ async fn supprimer_activations_expirees<M>(middleware: &M) -> Result<(), Box<dyn
     Ok(())
 }
 
-async fn supprimer_cookies_expires<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+async fn supprimer_cookies_expires<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
     where M: MongoDao
 {
     // Supprimer codes recovery expires
@@ -598,8 +605,10 @@ async fn entretien<M>(_middleware: Arc<M>)
     }
 }
 
-async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
-where M: MongoDao + GenerateurMessages {
+async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule)
+    -> Result<(), millegrilles_common_rust::error::Error>
+    where M: MongoDao + GenerateurMessages
+{
     // let message = trigger.message;
 
     debug!("Traiter cedule {}", DOMAINE_NOM);
@@ -633,7 +642,8 @@ where M: MongoDao + GenerateurMessages {
     Ok(())
 }
 
-async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn consommer_requete<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer requete : {:?}", &m.message);
@@ -647,7 +657,7 @@ async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
     let user_id = m.certificat.get_user_id()?;
-    match m.certificat.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure)) {
+    match m.certificat.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure))? {
         true => Ok(()),
         false => match user_id {
             Some(u) => Ok(()),
@@ -659,7 +669,12 @@ async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option
         DOMAINE_NOM => {
             match action.as_str() {
                 // liste_applications_deployees(middleware, message).await,
-                REQUETE_CHARGER_USAGER => charger_usager(middleware, m).await,
+                REQUETE_CHARGER_USAGER => {
+                    match charger_usager(middleware, m).await {
+                        Ok(inner) => Ok(inner),
+                        Err(e) => Err(millegrilles_common_rust::error::Error::String(format!("consommer_requete Erreur : {:?}", e)))?
+                    }
+                },
                 REQUETE_LISTE_USAGERS => liste_usagers(middleware, m).await,
                 REQUETE_USERID_PAR_NOMUSAGER => get_userid_par_nomusager(middleware, m).await,
                 REQUETE_GET_CSR_RECOVERY_PARCODE => get_csr_recovery_parcode(middleware, m).await,
@@ -682,7 +697,8 @@ async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option
 
 /// Consomme une commande
 /// Verifie le niveau de securite approprie avant d'executer la commande
-async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
@@ -695,7 +711,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
     };
 
     // Autorisation : doit etre de niveau 2.prive, 3.protege ou 4.secure
-    if m.certificat.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege)) {
+    if m.certificat.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege))? {
         // Actions autorisees pour echanges prives
         match action.as_str() {
             TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m, gestionnaire).await,
@@ -711,7 +727,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: exchange L2/L3) : {}, message dropped", DOMAINE_NOM, action))?,
         }
-    } else if m.certificat.verifier_exchanges(vec!(Securite::L1Public)) {
+    } else if m.certificat.verifier_exchanges(vec!(Securite::L1Public))? {
         match action.as_str() {
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m).await,
             COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m).await,
@@ -719,7 +735,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: exchange L1) : {}, message dropped", DOMAINE_NOM, action))?,
         }
-    } else if m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    } else if m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         // Commande proprietaire (administrateur)
         match action.as_str() {
             // Commandes delegation globale uniquement
@@ -770,7 +786,7 @@ fn acces_refuse<M>(middleware: &M, code: u32) -> Result<Option<MessageMilleGrill
 }
 
 async fn consommer_transaction<M>(middleware: &M, m: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -784,7 +800,7 @@ where
     };
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.certificat.verifier_exchanges(vec!(Securite::L4Secure)) {
+    match m.certificat.verifier_exchanges(vec!(Securite::L4Secure))? {
         true => Ok(()),
         false => Err(format!("core_maitredescomptes.consommer_transaction Trigger cedule autorisation invalide (pas 4.secure) : {}", action)),
     }?;
@@ -802,7 +818,8 @@ where
     }
 }
 
-async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>> {
+async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error> {
     debug!("Consommer evenement : {:?}", &m.message);
 
     let action = match &m.type_message {
@@ -813,7 +830,7 @@ async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessa
     };
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.certificat.verifier_exchanges(vec!(Securite::L4Secure)) {
+    match m.certificat.verifier_exchanges(vec!(Securite::L4Secure))? {
         true => Ok(()),
         false => Err(format!("core_maitredescomptes.consommer_evenement Autorisation invalide (pas 4.secure) : {}", action)),
     }?;
@@ -991,7 +1008,7 @@ impl DocChallenge {
 // }
 
 async fn preparer_registration_webauthn<M,S>(middleware: &M, compte: &CompteUsager, hostname: S)
-    -> Result<DocChallenge, Box<dyn Error>>
+    -> Result<DocChallenge, CoreError>
     where M: MongoDao + ValidateurX509, S: AsRef<str>
 {
     let hostname = hostname.as_ref();
@@ -1041,7 +1058,7 @@ struct PasskeyAuthenticationAjuste {
 }
 
 impl TryInto<PasskeyAuthentication> for PasskeyAuthenticationAjuste {
-    type Error = Box<dyn Error>;
+    type Error = millegrilles_common_rust::error::Error;
 
     fn try_into(self) -> Result<PasskeyAuthentication, Self::Error> {
         let value = serde_json::to_value(self)?;
@@ -1050,7 +1067,7 @@ impl TryInto<PasskeyAuthentication> for PasskeyAuthenticationAjuste {
 }
 
 impl TryFrom<PasskeyAuthentication> for PasskeyAuthenticationAjuste {
-    type Error = Box<dyn Error>;
+    type Error = millegrilles_common_rust::error::Error;
 
     fn try_from(value: PasskeyAuthentication) -> Result<Self, Self::Error> {
         let value_conv = serde_json::to_value(value)?;
@@ -1069,7 +1086,7 @@ struct DocPasskeyAuthentication {
 }
 
 async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &CompteUsager, hostname: S)
-    -> Result<Option<DocChallenge>, Box<dyn Error>>
+    -> Result<Option<DocChallenge>, millegrilles_common_rust::error::Error>
     where M: MongoDao + ValidateurX509, S: AsRef<str>
 {
     let hostname = hostname.as_ref();
@@ -1097,8 +1114,11 @@ async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &Compte
         DocChallenge::new_challenge_generique(user_id, hostname, valeur_challenge, "generique")
 
     } else {
-        let (challenge, passkey_authentication) = generer_challenge_authentification(
-            hostname, idmg, credentials)?;
+        let (challenge, passkey_authentication) = match generer_challenge_authentification(
+            hostname, idmg, credentials) {
+            Ok(inner) => inner,
+            Err(e) => Err(millegrilles_common_rust::error::Error::String(format!("preparer_authentification_webauthn Erreur {:?}", e)))?
+        };
 
         DocChallenge::new_challenge_authentication(user_id, hostname, challenge, passkey_authentication)
     };
@@ -1112,7 +1132,7 @@ async fn preparer_authentification_webauthn<M,S>(middleware: &M, compte: &Compte
 }
 
 async fn preparer_challenge_generique<M,S,C>(middleware: &M, compte: &CompteUsager, hostname: S, type_challenge: C)
-    -> Result<DocChallenge, Box<dyn Error>>
+    -> Result<DocChallenge, millegrilles_common_rust::error::Error>
     where M: MongoDao + ValidateurX509, S: AsRef<str>, C: Into<String>
 {
     let hostname = hostname.as_ref();
@@ -1218,11 +1238,12 @@ struct DocActivationFingerprintPkUsager {
     certificat: Option<Vec<String>>,
 }
 
-async fn charger_usager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn charger_usager<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CoreError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("charger_usager : {:?}", &message.message);
-    let est_delegation_globale = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
+    let est_delegation_globale = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
 
     let message_ref = message.message.parse()?;
     let message_contenu = message_ref.contenu()?;
@@ -1232,7 +1253,7 @@ async fn charger_usager<M>(middleware: &M, message: MessageValide) -> Result<Opt
 
     // Le filtre utilise le user_id du certificat de preference (et ignore les parametres).
     // Pour un certificat de service (1.public), va utiliser les parametres.
-    if message.certificat.verifier_exchanges(vec![L1Public]) || est_delegation_globale {
+    if message.certificat.verifier_exchanges(vec![L1Public])? || est_delegation_globale {
         if let Some(nom_usager) = requete.nom_usager.as_ref() {
             filtre.insert(CHAMP_USAGER_NOM, nom_usager);
         }
@@ -1246,7 +1267,7 @@ async fn charger_usager<M>(middleware: &M, message: MessageValide) -> Result<Opt
             Some(u) => {
                 filtre.insert(CHAMP_USER_ID, u);
             },
-            None => match message.certificat.verifier_exchanges(vec![L1Public]) {
+            None => match message.certificat.verifier_exchanges(vec![L1Public])? {
                 true => {
                     if let Some(nom_usager) = requete.nom_usager.as_ref() {
                         filtre.insert(CHAMP_USAGER_NOM, nom_usager);
@@ -1303,7 +1324,9 @@ async fn charger_usager<M>(middleware: &M, message: MessageValide) -> Result<Opt
                 None => Err(format!("core_maitredescomptes.charger_usager Mauvais format de challenge (registration_challenge=None"))?
             };
 
-            let (generic, challenge, passkey_authentication) = match preparer_authentification_webauthn(middleware, compte, hostname).await? {
+            let (generic, challenge, passkey_authentication) =
+                match preparer_authentification_webauthn(middleware, compte, hostname).await?
+            {
                 Some(doc_challenge) => {
                     match doc_challenge.webauthn_authentication {
                         Some(inner) => {
@@ -1379,7 +1402,8 @@ struct RequeteListeUsagers {
     nom_masque_debut: Option<String>,
 }
 
-async fn liste_usagers<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn liste_usagers<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("liste_usagers : {:?}", &message.message);
@@ -1426,7 +1450,8 @@ async fn liste_usagers<M>(middleware: &M, message: MessageValide) -> Result<Opti
     }
 }
 
-async fn get_liste_proprietaires<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn get_liste_proprietaires<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_liste_proprietaires : {:?}", &message.message);
@@ -1480,13 +1505,14 @@ struct RowNomUsager {
     nom_usager: String,
 }
 
-async fn get_cookie_usager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn get_cookie_usager<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_cookie_usager Requete : {:?}", &message.message);
 
-    if ! message.certificat.verifier_exchanges(vec![Securite::L1Public, Securite::L2Prive]) ||
-        ! message.certificat.verifier_roles(vec![RolesCertificats::MaitreComptes, RolesCertificats::WebAuth]) {
+    if ! message.certificat.verifier_exchanges(vec![Securite::L1Public, Securite::L2Prive])? ||
+        ! message.certificat.verifier_roles(vec![RolesCertificats::MaitreComptes, RolesCertificats::WebAuth])? {
         info!("get_cookie_usager Mauvais certificat (doit avoir securite L2Prive, role MaitreComptes");
         let reponse = json!({"ok": false, "err": "Mauvais certificat pour requete"});
         match middleware.build_reponse(&reponse) {
@@ -1664,7 +1690,8 @@ struct GetPasskeysResponse {
     cookies: Vec<CookieReponse>
 }
 
-async fn get_passkeys_usager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn get_passkeys_usager<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_passkeys_usager Requete : {:?}", &message.message);
@@ -1685,7 +1712,7 @@ async fn get_passkeys_usager<M>(middleware: &M, message: MessageValide) -> Resul
     let requete: RequeteGetPasskeysUsager = message_contenu.deserialize()?;
 
     // Si l'usager est un propritaire, permettre de fournir le user_id
-    let user_id = match message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    let user_id = match message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         true => match requete.user_id {
             Some(inner) => inner,
             None => user_id.to_owned()
@@ -1741,7 +1768,8 @@ async fn get_passkeys_usager<M>(middleware: &M, message: MessageValide) -> Resul
     Ok(Some(middleware.build_reponse(&reponse)?.0))
 }
 
-async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn get_userid_par_nomusager<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_userid_par_nomusager : {:?}", &message.message);
@@ -1794,7 +1822,8 @@ struct ReponseUserIdParNomUsager {
     usagers: HashMap<String, Option<String>>,
 }
 
-async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("get_userid_par_nomusager : {:?}", &message.message);
@@ -1805,7 +1834,7 @@ async fn get_csr_recovery_parcode<M>(middleware: &M, message: MessageValide) -> 
     let collection_usagers = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
 
     // Verifier si on a un usager avec delegation globale (permet d'utiliser le parametre nom_usager)
-    let nom_usager_param = match message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    let nom_usager_param = match message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         true => requete.nom_usager,
         false => None,
     };
@@ -1876,7 +1905,8 @@ struct ReponseCsrRecovery {
     csr: String,
 }
 
-async fn ajouter_fingerprint_pk_usager<M,S,T>(middleware: &M, user_id: S, fingerprint_pk: T) -> Result<(), Box<dyn Error>>
+async fn ajouter_fingerprint_pk_usager<M,S,T>(middleware: &M, user_id: S, fingerprint_pk: T)
+    -> Result<(), millegrilles_common_rust::error::Error>
     where M: MongoDao, S: AsRef<str>, T: AsRef<str>
 {
     let user_id = user_id.as_ref();
@@ -1900,7 +1930,7 @@ async fn ajouter_fingerprint_pk_usager<M,S,T>(middleware: &M, user_id: S, finger
 }
 
 async fn inscrire_usager<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineMaitreDesComptes)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("inscrire_usager Consommer inscrire_usager : {:?}", &message.message);
@@ -2103,7 +2133,7 @@ struct DemandeSignatureCertificatWebauthn {
 
 impl DemandeSignatureCertificatWebauthn {
     /// Valide le message et retourne un hachage du contenu.
-    fn valider(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn valider(&self) -> Result<Vec<u8>, millegrilles_common_rust::error::Error> {
 
         // Le message recu est valide pour 5 minutes
         // (aussi 1 minute dans l'autre sens si clock mal ajustee)
@@ -2118,7 +2148,7 @@ impl DemandeSignatureCertificatWebauthn {
         self.hacher()
     }
 
-    fn hacher(&self) -> Result<Vec<u8>, Box<dyn Error>> {
+    fn hacher(&self) -> Result<Vec<u8>, millegrilles_common_rust::error::Error> {
         let map = serde_json::to_value(&self)?.as_object().expect("value map").to_owned();
         let value_ordered = preparer_btree_recursif(map)?;
         let value_serialisee = serde_json::to_string(&value_ordered)?;
@@ -2146,7 +2176,8 @@ struct CommandeAuthentificationUsager {
     commande_webauthn: CommandeClientAuthentificationWebauthn,
 }
 
-async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("commande_authentifier_usager : {:?}", message);
@@ -2318,7 +2349,7 @@ impl CookieSession {
 }
 
 async fn creer_session_cookie<M,U,H>(middleware: &M, user_id: U, hostname: H, duree_session: i64)
-    -> Result<CookieSession, Box<dyn Error>>
+    -> Result<CookieSession, millegrilles_common_rust::error::Error>
     where M: MongoDao, U: AsRef<str>, H: AsRef<str>
 {
     let cookie = CookieSession::new(user_id.as_ref(), hostname.as_ref(), duree_session);
@@ -2336,7 +2367,7 @@ async fn creer_session_cookie<M,U,H>(middleware: &M, user_id: U, hostname: H, du
 }
 
 async fn charger_challenge_authentification<M,U,H,C>(middleware: &M, user_id: U, hostname: H, challenge: C)
-    -> Result<ChallengeAuthenticationWebauthn, Box<dyn Error>>
+    -> Result<ChallengeAuthenticationWebauthn, millegrilles_common_rust::error::Error>
     where M: MongoDao, U: AsRef<str>, H: AsRef<str>, C: AsRef<str>
 {
     // Charger challenge correspondant
@@ -2364,7 +2395,8 @@ async fn charger_challenge_authentification<M,U,H,C>(middleware: &M, user_id: U,
 
 /// Verifie une demande de signature de certificat pour un compte usager
 /// Emet une commande autorisant la signature lorsque c'est approprie
-async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     // Utiliser user_id du cert.
@@ -2444,11 +2476,12 @@ async fn commande_signer_compte_par_usager<M>(middleware: &M, message: MessageVa
     signer_demande_certificat_usager(middleware, compte_usager, demande_certificat).await
 }
 
-async fn commande_signer_compte_par_proprietaire<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn commande_signer_compte_par_proprietaire<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     // Verifier autorisation, pour certificats systemes (Prive), charger param user_id.
-    let est_delegation_proprietaire = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE);
+    let est_delegation_proprietaire = message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?;
     if ! est_delegation_proprietaire {
         error!("commande_signer_compte_par_proprietaire Doit etre signe par un certificat avec delegation globale 'proprietaire'");
         let reponse_ok = json!({"ok": false, "err": "Certificat invalide, doit etre proprietaire", "code": 1});
@@ -2481,7 +2514,7 @@ async fn commande_signer_compte_par_proprietaire<M>(middleware: &M, message: Mes
 
 async fn signer_demande_certificat_usager<M>(middleware: &M, compte_usager: CompteUsager,
                                              demande_certificat: DemandeSignatureCertificatWebauthn)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     let nom_usager = &compte_usager.nom_usager;
@@ -2538,7 +2571,8 @@ async fn signer_demande_certificat_usager<M>(middleware: &M, compte_usager: Comp
 }
 
 /// Ajouter un CSR pour recuperer un compte usager
-async fn commande_ajouter_csr_recovery<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn commande_ajouter_csr_recovery<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("commande_ajouter_csr_recovery : {:?}", message);
@@ -2628,7 +2662,8 @@ struct ReponseCommandeGenererChallenge {
     passkey_authentication: Option<PasskeyAuthentication>,
 }
 
-async fn commande_generer_challenge<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn commande_generer_challenge<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("commande_generer_challenge : {:?}", message);
@@ -2642,7 +2677,7 @@ async fn commande_generer_challenge<M>(middleware: &M, message: MessageValide) -
         Some(inner) => inner.to_owned(),
         None => {
             if let Some(user_id) = commande.user_id {
-                if message.certificat.verifier_exchanges(vec![Securite::L2Prive, Securite::L3Protege]) {
+                if message.certificat.verifier_exchanges(vec![Securite::L2Prive, Securite::L3Protege])? {
                     user_id
                 } else {
                    Err(format!("core_maitredescomptes.commande_generer_challenge Erreur message non autorise"))?
@@ -2682,7 +2717,10 @@ async fn commande_generer_challenge<M>(middleware: &M, message: MessageValide) -
     }
 
     if let Some(true) = commande.webauthn_registration {
-        let doc_challenge = preparer_registration_webauthn(middleware, &compte, hostname).await?;
+        let doc_challenge = match preparer_registration_webauthn(middleware, &compte, hostname).await {
+            Ok(inner) => inner,
+            Err(e) => Err(millegrilles_common_rust::error::Error::String(format!("core_maitredescomptes.commande_generer_challenge Erreur {:?}", e)))?
+        };
         reponse.registration_challenge = Some(doc_challenge.webauthn_registration.expect("webauthn_registration").registration_challenge);
     }
 
@@ -2702,7 +2740,8 @@ async fn commande_generer_challenge<M>(middleware: &M, message: MessageValide) -
     Ok(Some(middleware.build_reponse(reponse)?.0))
 }
 
-async fn supprimer_cookie<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn supprimer_cookie<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("supprimer_cookie : {:?}", message);
@@ -2722,7 +2761,8 @@ async fn supprimer_cookie<M>(middleware: &M, message: MessageValide) -> Result<O
 }
 
 /// Signe un certificat usager sans autre forme de validation. Utilise certissuerInterne/.
-async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_id: T, csr: U, compte: Option<&CompteUsager>) -> Result<MessageMilleGrillesBufferDefault, Box<dyn Error>>
+async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_id: T, csr: U, compte: Option<&CompteUsager>)
+    -> Result<MessageMilleGrillesBufferDefault, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud,
           S: AsRef<str>, T: AsRef<str>, U: AsRef<str>
 {
@@ -2770,7 +2810,7 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
                     // Charger le certificat - le valide et sauvegarde dans PKI
                     let enveloppe = middleware.charger_enveloppe(
                         &reponse_json.certificat, None, None).await?;
-                    debug!("signer_certificat_usager Nouveau certificat valide, fingerprint : {}", enveloppe.fingerprint);
+                    debug!("signer_certificat_usager Nouveau certificat valide, fingerprint : {}", enveloppe.fingerprint()?);
                     return Ok(middleware.build_reponse(reponse_json)?.0)
                 },
                 false => {
@@ -2785,7 +2825,8 @@ async fn signer_certificat_usager<M,S,T,U>(middleware: &M, nom_usager: S, user_i
 
     // Une erreur est survenue dans le post, fallback vers noeuds 4.secure (si presents)
     debug!("Echec connexion a certissuer local, relai vers instances 4.secure");
-    let routage = RoutageMessageAction::builder(DOMAINE_APPLICATION_INSTANCE, COMMANDE_SIGNER_COMPTEUSAGER, vec![Securite::L4Secure])
+    let routage = RoutageMessageAction::builder(
+        DOMAINE_APPLICATION_INSTANCE, COMMANDE_SIGNER_COMPTEUSAGER, vec![Securite::L4Secure])
         .build();
 
     match middleware.transmettre_commande(routage, &commande_signature).await? {
@@ -2850,7 +2891,7 @@ impl CommandeSignatureUsager {
 }
 
 async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineMaitreDesComptes)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer ajouter_cle : {:?}", &message.message);
@@ -2923,7 +2964,10 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValide, gestion
     };
 
     // Valider la commande de registration webauthn, sauvegarder nouvelle credential, retirer challenge registration
-    let webauthn_credential = verifier_challenge_registration(idmg, &doc_registration, &transaction_ajouter_cle_contenu)?;
+    let webauthn_credential = match verifier_challenge_registration(idmg, &doc_registration, &transaction_ajouter_cle_contenu) {
+        Ok(inner) => inner,
+        Err(e) => Err(millegrilles_common_rust::error::Error::String(format!("core_maitredescomptes Erreur {:?}", e)))?
+    };
     let mut credential_interne = sauvegarder_credential(
         middleware, &user_id_certificat, hostname, webauthn_credential, true).await?;
 
@@ -2961,7 +3005,7 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValide, gestion
 }
 
 async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, passkey_credential: Passkey, supprimer_registration: bool)
-    -> Result<CredentialWebauthn, Box<dyn Error>>
+    -> Result<CredentialWebauthn, millegrilles_common_rust::error::Error>
     where M: MongoDao, S: Into<String>, T: Into<String>
 {
     let user_id = user_id.into();
@@ -3005,9 +3049,9 @@ async fn transaction_ajouter_cle<M>(middleware: &M, transaction: TransactionVali
 {
     let certificat = transaction.certificat.as_ref();
 
-    if ! certificat.verifier_exchanges(vec![Securite::L4Secure]) ||
-        ! certificat.verifier_domaines(vec![DOMAINE_NOM_MAITREDESCOMPTES.to_string()]) ||
-        ! certificat.verifier_roles(vec![RolesCertificats::Core]) {
+    if ! certificat.verifier_exchanges(vec![Securite::L4Secure])? ||
+        ! certificat.verifier_domaines(vec![DOMAINE_NOM_MAITREDESCOMPTES.to_string()])? ||
+        ! certificat.verifier_roles(vec![RolesCertificats::Core])? {
         Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur exchanges/domaines/roles non autorise - SKIP"))?
     }
 
@@ -3062,7 +3106,7 @@ async fn transaction_ajouter_cle<M>(middleware: &M, transaction: TransactionVali
 
 /// Charger un compte usager a partir du nom usager
 async fn charger_compte_usager<M, S>(middleware: &M, nom_usager: S)
-    -> Result<Option<CompteUsager>, Box<dyn Error>>
+    -> Result<Option<CompteUsager>, millegrilles_common_rust::error::Error>
     where
         M: MongoDao,
         S: AsRef<str>
@@ -3079,7 +3123,7 @@ async fn charger_compte_usager<M, S>(middleware: &M, nom_usager: S)
 }
 
 async fn charger_compte_user_id<M, S>(middleware: &M, user_id: S)
-    -> Result<Option<CompteUsager>, Box<dyn Error>>
+    -> Result<Option<CompteUsager>, millegrilles_common_rust::error::Error>
     where
         M: MongoDao,
         S: AsRef<str>
@@ -3159,7 +3203,7 @@ pub struct AjouterClePublickKeyCredential {
 }
 
 impl TryInto<RegisterPublicKeyCredential> for AjouterClePublickKeyCredential {
-    type Error = Box<dyn Error>;
+    type Error = millegrilles_common_rust::error::Error;
 
     fn try_into(self) -> Result<RegisterPublicKeyCredential, Self::Error> {
         let id = self.id;
@@ -3207,7 +3251,7 @@ struct ReponseClientAjouteCleReponseChallenge {
 
 /// Ajoute une delegation globale a partir d'un message signe par la cle de millegrille
 async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
@@ -3339,12 +3383,12 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
 }
 
 async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &GestionnaireDomaineMaitreDesComptes, message: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("commande_reset_webauthn_usager Consommer commande : {:?}", &message.message);
     // Verifier autorisation
-    if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("commande_reset_webauthn_usager autorisation acces refuse : {:?}", err);
         match middleware.build_reponse(err) {
@@ -3545,7 +3589,7 @@ struct ConfirmationSigneeDelegationGlobale {
 }
 
 /// Conserver confirmation d'activation tierce (certificat signe)
-// async fn activation_tierce<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, Box<dyn Error>>
+// async fn activation_tierce<M>(middleware: &M, message: MessageValideAction) -> Result<Option<MessageMilleGrille>, millegrilles_common_rust::error::Error>
 //     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 // {
 //     debug!("Consommer activation_tierce : {:?}", &message.message);
@@ -3591,7 +3635,8 @@ struct ReponseActivationTierce {
     user_id: String,
 }
 
-pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer commande_maj_usager_delegations : {:?}", &message.message);
@@ -3672,7 +3717,8 @@ pub async fn transaction_maj_usager_delegations<M>(middleware: &M, transaction: 
     Ok(None)
 }
 
-pub async fn commande_supprimer_cles<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+pub async fn commande_supprimer_cles<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer commande_supprimer_cles : {:?}", &message.message);
@@ -3724,7 +3770,7 @@ struct TransactionSupprimerCles {
     user_id: String,
 }
 
-// fn lire_date_valbson(date: Option<&Value>) -> Result<Option<DateTime<Utc>>, Box<dyn Error>> {
+// fn lire_date_valbson(date: Option<&Value>) -> Result<Option<DateTime<Utc>>, millegrilles_common_rust::error::Error> {
 //     let mut date_extraite = None;
 //     if let Some(a) = date {
 //         if let Some(b) = a.as_object() {
@@ -3761,7 +3807,7 @@ struct TokenUsager {
 }
 
 /// Genere un message signe avec user_id et une date d'expiration.
-fn generer_token_compte<M,S>(middleware: &M, user_id: S) -> Result<MessageMilleGrillesBufferDefault, Box<dyn Error>>
+fn generer_token_compte<M,S>(middleware: &M, user_id: S) -> Result<MessageMilleGrillesBufferDefault, millegrilles_common_rust::error::Error>
     where M: GenerateurMessages, S: Into<String>
 {
     let date_expiration = Utc::now() + chrono::Duration::days(1);
@@ -3797,7 +3843,7 @@ struct EvenementMajCompteUsager {
 }
 
 async fn emettre_maj_compte_usager<M,S>(middleware: &M, user_id: S, action: Option<&str>)
-    -> Result<(), Box<dyn Error>>
+    -> Result<(), millegrilles_common_rust::error::Error>
     where
         M: GenerateurMessages + MongoDao,
         S: AsRef<str>

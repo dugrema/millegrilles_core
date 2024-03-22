@@ -105,32 +105,36 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao + ConfigMessages {
+    async fn preparer_database<M>(&self, middleware: &M)
+        -> Result<(), millegrilles_common_rust::error::Error>
+        where M: MongoDao + ConfigMessages
+    {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
     async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_requete(middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_commande(middleware, message, self).await  // Fonction plus bas
     }
 
-    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_transaction(middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValide)
-        -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_evenement(middleware, message, self).await  // Fonction plus bas
@@ -142,12 +146,14 @@ impl GestionnaireDomaine for GestionnaireDomaineCatalogues {
         entretien(middleware).await  // Fonction plus bas
     }
 
-    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
+    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule)
+        -> Result<(), millegrilles_common_rust::error::Error> where M: Middleware + 'static
+    {
         traiter_cedule(middleware, trigger).await
     }
 
     async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-                                          -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+        -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
             M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
             T: TryInto<TransactionValide> + Send
@@ -209,7 +215,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 }
 
 /// Creer index MongoDB
-async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
+async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
 where M: MongoDao + ConfigMessages
 {
 
@@ -330,7 +336,8 @@ async fn entretien<M>(middleware: Arc<M>)
     }
 }
 
-async fn consommer_requete<M>(middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn consommer_requete<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -366,16 +373,16 @@ where
 }
 
 async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineCatalogues)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
 
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
-    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE)))? {
         true => Ok(()),
         false => {
-            match m.certificat.verifier_delegation_globale(String::from(DELEGATION_GLOBALE_PROPRIETAIRE)) {
+            match m.certificat.verifier_delegation_globale(String::from(DELEGATION_GLOBALE_PROPRIETAIRE))? {
                 true => Ok(()),
                 false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)"))
             }
@@ -421,7 +428,8 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &
 //     Ok(None)
 // }
 
-async fn consommer_transaction<M>(_middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn consommer_transaction<M>(_middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -435,7 +443,7 @@ where
     };
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE))) {
+    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_4_SECURE)))? {
         true => Ok(()),
         false => Err(format!("core.catalogue.consommer_transaction Autorisation invalide (pas 4.secure) : action = {}", action)),
     }?;
@@ -452,7 +460,7 @@ where
 }
 
 async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineCatalogues)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer evenement : {:?}", &m.message);
@@ -465,7 +473,7 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: 
     };
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.certificat.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
+    match m.certificat.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure])? {
         true => Ok(()),
         false => Err(format!("core_catalogues.consommer_evenement Autorisation invalide (pas 3.protege/4.secure) : action = {}", action)),
     }?;
@@ -550,7 +558,8 @@ where
     reponse
 }
 
-async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
+async fn traiter_cedule<M>(_middleware: &M, _trigger: &MessageCedule)
+    -> Result<(), millegrilles_common_rust::error::Error>
 where M: ValidateurX509 {
     // let message = trigger.message;
 
@@ -564,7 +573,8 @@ struct MessageCatalogue {
     catalogue: MessageMilleGrillesOwned,
 }
 
-async fn traiter_commande_application<M>(middleware: &M, commande: MessageValide, gestionnaire: &GestionnaireDomaineCatalogues) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn traiter_commande_application<M>(middleware: &M, commande: MessageValide, gestionnaire: &GestionnaireDomaineCatalogues)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + MongoDao + GenerateurMessages
 {
     debug!("traiter_commande_application Traitement catalogue application {:?}", commande.type_message);
@@ -741,7 +751,7 @@ struct ReponseListeApplications {
 }
 
 async fn liste_applications<M>(middleware: &M)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let filtre = doc! {};
@@ -780,7 +790,7 @@ struct RequeteVersionsApplication {
 }
 
 async fn liste_versions_application<M>(middleware: &M, message: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: GenerateurMessages + MongoDao
 {
     let message_ref = message.message.parse()?;
@@ -823,7 +833,7 @@ struct ReponseNom {
 }
 
 async fn repondre_application<M>(middleware: &M, m: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = m.message.parse()?;

@@ -16,11 +16,10 @@ use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::middleware::{ChiffrageFactoryTrait, EmetteurNotificationsTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{EmetteurNotificationsTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, convertir_value_mongodate, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, millegrilles_cryptographie, mongodb as mongodb};
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
-use millegrilles_common_rust::chiffrage::{Chiffreur, CleChiffrageHandler};
 use millegrilles_common_rust::chiffrage_cle::CommandeSauvegarderCle;
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::db_structs::TransactionValide;
@@ -159,32 +158,35 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
 
     fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
 
-    async fn preparer_database<M>(&self, middleware: &M) -> Result<(), String> where M: MongoDao + ConfigMessages {
+    async fn preparer_database<M>(&self, middleware: &M) 
+        -> Result<(), millegrilles_common_rust::error::Error> 
+        where M: MongoDao + ConfigMessages 
+    {
         preparer_index_mongodb_custom(middleware).await  // Fonction plus bas
     }
 
     async fn consommer_requete<M>(&self, middleware: &M, message: MessageValide)
-                                  -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+                                  -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_requete(middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide)
-                                   -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+                                   -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_commande(middleware, message, self).await  // Fonction plus bas
     }
 
-    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    async fn consommer_transaction<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_transaction(self, middleware, message).await  // Fonction plus bas
     }
 
     async fn consommer_evenement<M>(self: &'static Self, middleware: &M, message: MessageValide)
-                                    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+                                    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
         where M: Middleware + 'static
     {
         consommer_evenement(middleware, message, self).await  // Fonction plus bas
@@ -196,7 +198,7 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
         entretien(middleware).await  // Fonction plus bas
     }
 
-    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>> where M: Middleware + 'static {
+    async fn traiter_cedule<M>(self: &'static Self, middleware: &M, trigger: &MessageCedule) -> Result<(), millegrilles_common_rust::error::Error> where M: Middleware + 'static {
         traiter_cedule(middleware, trigger).await
     }
 
@@ -326,7 +328,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
 }
 
 /// Creer index MongoDB
-async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), String>
+async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
     where M: MongoDao + ConfigMessages
 {
 
@@ -493,7 +495,7 @@ async fn entretien<M>(middleware: Arc<M>)
     }
 }
 
-async fn emettre_notification_demarrage<M>(middleware: &M) -> Result<(), Box<dyn Error>>
+async fn emettre_notification_demarrage<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
     where M: EmetteurNotificationsTrait
 {
     let notification = NotificationMessageInterne {
@@ -508,8 +510,8 @@ async fn emettre_notification_demarrage<M>(middleware: &M) -> Result<(), Box<dyn
         notification, "info", Some(expiration_ts), None).await?)
 }
 
-async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait {
+async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/ {
     let date_epoch = trigger.get_date();
     debug!("Traiter cedule {}\n{:?}", DOMAINE_NOM, date_epoch);
 
@@ -537,8 +539,9 @@ async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<()
     Ok(())
 }
 
-async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
+async fn consommer_requete<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/
 {
     debug!("Consommer requete : {:?}", &m.message);
 
@@ -628,7 +631,7 @@ async fn consommer_requete<M>(middleware: &M, m: MessageValide) -> Result<Option
 }
 
 async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-                               -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: Middleware + 'static
 {
     debug!("Consommer commande : {:?}", &m.message);
@@ -643,9 +646,9 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &
     };
 
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
-    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE)))? {
         true => Ok(()),
-        false => match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        false => match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
             true => Ok(()),
             false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
         }
@@ -669,7 +672,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &
     }
 }
 
-async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -685,9 +688,9 @@ async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, m
     };
 
     // Autorisation : doit etre de niveau 4.secure
-    match m.certificat.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure]) {
+    match m.certificat.verifier_exchanges(vec![Securite::L3Protege, Securite::L4Secure])? {
         true => Ok(()),
-        false => match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+        false => match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
             true => Ok(()),
             false => Err(format!("core_topologie.consommer_transaction Autorisation invalide (pas 4.secure) : {:?}", m.type_message))
         }
@@ -706,8 +709,8 @@ async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, m
 }
 
 async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait */
 {
     debug!("Consommer evenement : {:?}", &m.type_message);
 
@@ -723,7 +726,7 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: 
     // Autorisation : doit etre de niveau 4.secure
     match m.certificat.verifier_exchanges(vec![
         Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure,
-    ]) {
+    ])? {
         true => Ok(()),
         false => Err(format!("Evenement autorisation invalide (pas exchange autorise)")),
     }?;
@@ -802,7 +805,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
 }
 
 async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Evenement presence domaine : {:?}", m.type_message);
@@ -827,7 +830,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionna
 
     let certificat = m.certificat.as_ref();
 
-    if ! certificat.verifier_domaines(vec![domaine.to_owned()]) {
+    if ! certificat.verifier_domaines(vec![domaine.to_owned()])? {
         Err(format!("core_topologie.traiter_presence_domaine Erreur domaine message ({}) mismatch certificat ", domaine))?
     }
 
@@ -894,7 +897,7 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionna
 }
 
 async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = m.message.parse()?;
@@ -1008,7 +1011,7 @@ struct TransactionSetFichiersPrimaire {
 }
 
 async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = m.message.parse()?;
@@ -1016,7 +1019,7 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValide, gestionn
     let event: PresenceFichiers = message_contenu.deserialize()?;
     debug!("traiter_presence_fichiers Presence fichiers : {:?}", event);
 
-    if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers]) {
+    if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers])? {
         Err(format!("core_topologie.traiter_presence_fichiers Certificat n'a pas le role 'fichiers'"))?
     }
     let subject = m.certificat.subject()?;
@@ -1074,8 +1077,9 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValide, gestionn
     Ok(None)
 }
 
-async fn traiter_evenement_application<M>(middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
+async fn traiter_evenement_application<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/
 {
     // let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
     debug!("Evenement application monitor : {:?}", m.type_message);
@@ -1088,13 +1092,13 @@ async fn traiter_evenement_application<M>(middleware: &M, m: MessageValide) -> R
 
 
 async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer traiter_commande_monitor : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("ajouter_cle autorisation acces refuse");
         // match middleware.formatter_reponse(&err,None) {
@@ -1107,13 +1111,13 @@ async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValide, ges
 }
 
 async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("Consommer traiter_commande_supprimer_instance : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("ajouter_cle autorisation acces refuse");
         // match middleware.formatter_reponse(&err,None) {
@@ -1129,13 +1133,13 @@ async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: Message
 }
 
 async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("traiter_commande_configurer_consignation : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("traiter_commande_configurer_consignation autorisation acces refuse");
         // match middleware.formatter_reponse(&err,None) {
@@ -1172,7 +1176,7 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message
     Ok(reponse)
 }
 
-async fn transmettre_cle_attachee<M,V>(middleware: &M, cle: V) -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+async fn transmettre_cle_attachee<M,V>(middleware: &M, cle: V) -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
           V: Serialize
 {
@@ -1238,13 +1242,13 @@ async fn transmettre_cle_attachee<M,V>(middleware: &M, cle: V) -> Result<Option<
 }
 
 async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("traiter_commande_set_fichiers_primaire : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("traiter_commande_set_fichiers_primaire autorisation acces refuse");
         // match middleware.formatter_reponse(&err,None) {
@@ -1275,13 +1279,13 @@ struct TransactionSetConsignationInstance {
 }
 
 async fn traiter_commande_set_consignation_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("traiter_commande_set_consignation_instance : {:?}", &message.message);
 
     // Verifier autorisation
-    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("traiter_commande_set_consignation_instance autorisation acces refuse");
         // match middleware.formatter_reponse(&err,None) {
@@ -1706,22 +1710,23 @@ struct ReponseListeApplicationsDeployees {
 }
 
 async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
-                                         -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+                                         -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     // Recuperer instance_id
     let certificat = message.certificat.as_ref();
     let instance_id = certificat.get_common_name()?;
-    let exchanges = certificat.get_exchanges()?;
+    let extensions = certificat.extensions()?;
+    let exchanges = extensions.exchanges.as_ref();
     debug!("liste_applications_deployees Instance_id {}, exchanges : {:?}", instance_id, exchanges);
 
-    let niveau_securite = if certificat.verifier_exchanges(vec![Securite::L3Protege]) {
+    let niveau_securite = if certificat.verifier_exchanges(vec![Securite::L3Protege])? {
         Securite::L3Protege
-    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         Securite::L3Protege
-    } else if certificat.verifier_exchanges(vec![Securite::L2Prive]) {
+    } else if certificat.verifier_exchanges(vec![Securite::L2Prive])? {
         Securite::L2Prive
-    } else if certificat.verifier_roles(vec![RolesCertificats::ComptePrive]) {
+    } else if certificat.verifier_roles(vec![RolesCertificats::ComptePrive])? {
         Securite::L2Prive
     } else {
         warn!("liste_applications_deployees Acces refuse, aucunes conditions d'acces du certificat pour liste apps");
@@ -1853,12 +1858,12 @@ struct MessageInstanceId {
 }
 
 async fn liste_noeuds<M>(middleware: &M, message: MessageValide)
-                         -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+                         -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_noeuds");
-    if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
-        if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE)))? {
+        if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
             // let refus = json!({"ok": false, "err": "Acces refuse"});
             // let reponse = match middleware.formatter_reponse(&refus, None) {
             //     Ok(m) => m,
@@ -1921,12 +1926,12 @@ struct DomaineRowBorrow<'a> {
 }
 
 async fn liste_domaines<M>(middleware: &M, message: MessageValide)
-                           -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+                           -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_domaines {:?}", message);
-    if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
-        if message.certificat.get_user_id()?.is_some() && !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE) {
+    if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE)))? {
+        if message.certificat.get_user_id()?.is_some() && !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
             let refus = json!({"ok": false, "err": "Acces refuse"});
             // let reponse = match middleware.formatter_reponse(&refus, None) {
             let reponse = match middleware.reponse_err(None, None, Some("Acces refuse")) {
@@ -2001,11 +2006,11 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValide)
 }
 
 async fn resolve_idmg<M>(middleware: &M, message: MessageValide)
-                         -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+                         -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("resolve_idmg");
-    if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE))) {
+    if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE)))? {
         // let refus = json!({"ok": false, "err": "Acces refuse"});
         // let reponse = match middleware.formatter_reponse(&refus, None) {
         //     Ok(m) => m,
@@ -2015,7 +2020,7 @@ async fn resolve_idmg<M>(middleware: &M, message: MessageValide)
         return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
     }
 
-    let idmg_local = middleware.get_enveloppe_signature().idmg()?;
+    let idmg_local = middleware.get_enveloppe_signature().enveloppe_pub.idmg()?;
 
     let message_ref = message.message.parse()?;
     let message_contenu = message_ref.contenu()?;
@@ -2132,7 +2137,7 @@ struct AdresseIdmg {
 }
 
 async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
-                         -> Result<Option<String>, Box<dyn Error>>
+                         -> Result<Option<String>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("resoudre_url {}", hostname);
@@ -2380,8 +2385,8 @@ struct FichePubliqueReception {
 }
 
 async fn produire_fiche_publique<M>(middleware: &M)
-                                    -> Result<(), Box<dyn Error>>
-    where M: ValidateurX509 + ChiffrageFactoryTrait + GenerateurMessages + MongoDao
+                                    -> Result<(), millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/
 {
     debug!("produire_fiche_publique");
 
@@ -2396,15 +2401,16 @@ async fn produire_fiche_publique<M>(middleware: &M)
     Ok(())
 }
 
-async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePublique, Box<dyn Error>>
-    where M: MongoDao + ValidateurX509 + ChiffrageFactoryTrait
+async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePublique, millegrilles_common_rust::error::Error>
+    where M: MongoDao + ValidateurX509 /*+ ChiffrageFactoryTrait*/
 {
     let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
 
     let filtre = doc! {};
     let mut curseur = collection.find(filtre, None).await?;
 
-    let chiffrage = get_cles_chiffrage(middleware).await;
+    error!("generer_contenu_fiche_publique **Fix** me - get cles chiffrages pour fiche");
+    // let chiffrage = get_cles_chiffrage(middleware).await;
 
     // let mut adresses = Vec::new();
     let mut instances: HashMap<String, InformationInstance> = HashMap::new();
@@ -2613,30 +2619,30 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
     Ok(FichePublique {
         applications: Some(applications),
         applications_v2,
-        chiffrage: Some(chiffrage),
+        chiffrage: None,  // Some(chiffrage), TODO fix me
         ca: Some(middleware.ca_pem().into()),
         idmg: middleware.idmg().into(),
         instances,
     })
 }
 
-async fn get_cles_chiffrage<M>(middleware: &M) -> Vec<Vec<String>>
-    where M: ValidateurX509 + ChiffrageFactoryTrait
-{
-    let mut chiffrage = Vec::new();
-    let public_keys = middleware.get_publickeys_chiffrage();
-    for key in public_keys {
-        let fingerprint = &key.fingerprint;
-        if let Some(certificat) = middleware.get_certificat(fingerprint).await {
-            let pem_vec: Vec<String> = certificat.get_pem_vec().into_iter().map(|c| c.pem).collect::<Vec<String>>();
-            // Skip certificat millegrille
-            if pem_vec.len() > 1 {
-                chiffrage.push(pem_vec);
-            }
-        }
-    }
-    chiffrage
-}
+// async fn get_cles_chiffrage<M>(middleware: &M) -> Vec<Vec<String>>
+//     where M: ValidateurX509 /*+ ChiffrageFactoryTrait*/
+// {
+//     let mut chiffrage = Vec::new();
+//     let public_keys = middleware.get_publickeys_chiffrage();
+//     for key in public_keys {
+//         let fingerprint = &key.fingerprint;
+//         if let Some(certificat) = middleware.get_certificat(fingerprint).await {
+//             let pem_vec: Vec<String> = certificat.get_pem_vec().into_iter().map(|c| c.pem).collect::<Vec<String>>();
+//             // Skip certificat millegrille
+//             if pem_vec.len() > 1 {
+//                 chiffrage.push(pem_vec);
+//             }
+//         }
+//     }
+//     chiffrage
+// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct InformationInstance {
@@ -2752,12 +2758,12 @@ impl TryFrom<DocumentApplicationsTiers> for ReponseApplicationsTiers {
 
 /// Genere information de resolution locale (urls, etc)
 async fn produire_information_locale<M>(middleware: &M)
-                                        -> Result<(), Box<dyn Error>>
+                                        -> Result<(), millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("produire_information_locale");
     let enveloppe_privee = middleware.get_enveloppe_signature();
-    let idmg_local = enveloppe_privee.idmg()?;
+    let idmg_local = enveloppe_privee.enveloppe_pub.idmg()?;
 
     let adresses = {
         let mut adresses = Vec::new();
@@ -2839,8 +2845,8 @@ impl TryInto<ApplicationPublique> for InformationApplication {
 }
 
 async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValide)
-                                      -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + ChiffrageFactoryTrait
+                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/
 {
     debug!("requete_fiche_millegrille");
     let message_ref = message.message.parse()?;
@@ -2849,7 +2855,7 @@ async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValide)
     debug!("requete_fiche_millegrille Parsed : {:?}", requete);
 
     let enveloppe_locale = middleware.get_enveloppe_signature();
-    let idmg_local = enveloppe_locale.idmg()?;
+    let idmg_local = enveloppe_locale.enveloppe_pub.idmg()?;
 
     let fiche = match requete.idmg.as_str() == idmg_local.as_str() {
         true => {
@@ -2898,7 +2904,7 @@ struct RequeteFicheMillegrille {
 }
 
 async fn requete_applications_tiers<M>(middleware: &M, message: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = message.message.parse()?;
@@ -2947,7 +2953,7 @@ async fn requete_applications_tiers<M>(middleware: &M, message: MessageValide)
 }
 
 async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = message.message.parse()?;
@@ -3113,7 +3119,7 @@ struct ParametresGetCleConfiguration {
 }
 
 async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: GenerateurMessages + MongoDao
 {
     debug!("requete_get_cle_configuration Message : {:?}", &m.message);
@@ -3122,14 +3128,14 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
     let requete: ParametresGetCleConfiguration = message_contenu.deserialize()?;
     debug!("requete_get_cle_configuration cle parsed : {:?}", requete);
 
-    if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers]) {
+    if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers])? {
         // let reponse = json!({"err": true, "message": "certificat doit etre de role fichiers"});
         // return Ok(Some(middleware.formatter_reponse(reponse, None)?));
         return Ok(Some(middleware.reponse_err(None, Some("Certificat doit etre de role fichiers"), None)?))
     }
 
     // Utiliser certificat du message client (requete) pour demande de rechiffrage
-    let fp_certs = m.certificat.get_pem_vec();
+    let fp_certs = m.certificat.chaine_fingerprint_pem()?;
     let pem_rechiffrage: Vec<String> = fp_certs.into_iter().map(|cert| cert.pem).collect();
 
     let permission = RequeteDechiffrage {
@@ -3265,7 +3271,7 @@ pub struct ReponseConfigurationFichiers {
 }
 
 async fn requete_configuration_fichiers<M>(middleware: &M, message: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Box<dyn Error>>
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let message_ref = message.message.parse()?;
@@ -3317,7 +3323,7 @@ struct RowInstanceActivite {
 }
 
 async fn verifier_instances_horsligne<M>(middleware: &M)
-    -> Result<(), Box<dyn Error>>
+    -> Result<(), millegrilles_common_rust::error::Error>
     where M: MongoDao + EmetteurNotificationsTrait
 {
     debug!("verifier_instances_horsligne Debut verification");

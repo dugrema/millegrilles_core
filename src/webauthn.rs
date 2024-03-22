@@ -2,7 +2,6 @@ use std::error::Error;
 use std::fmt::{Debug, Formatter};
 
 use log::{debug, error, info, warn};
-use millegrilles_common_rust::chiffrage::random_vec;
 use millegrilles_common_rust::multibase;
 use millegrilles_common_rust::rand;
 use millegrilles_common_rust::rand::Rng;
@@ -20,7 +19,10 @@ use millegrilles_common_rust::hachages::verifier_hachage_serializable;
 use millegrilles_common_rust::reqwest::Url;
 use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use millegrilles_common_rust::uuid;
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage::random_vec;
+
 use crate::core_maitredescomptes::{DocChallenge, TransactionAjouterCle};
+use crate::error::Error as CoreError;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CredentialWebauthn {
@@ -36,7 +38,7 @@ pub struct CredentialWebauthn {
     pub reset_cles: Option<bool>,
 }
 
-fn build_webauthn<H,S>(hostname: H, idmg: S) -> Result<Webauthn, Box<dyn Error>> where H: AsRef<str>, S: AsRef<str> {
+fn build_webauthn<H,S>(hostname: H, idmg: S) -> Result<Webauthn, CoreError> where H: AsRef<str>, S: AsRef<str> {
     let idmg = idmg.as_ref();
     let rp_id = hostname.as_ref();
     let rp_origin = Url::parse(format!("https://{}/", rp_id).as_str())?;
@@ -52,7 +54,7 @@ fn build_webauthn<H,S>(hostname: H, idmg: S) -> Result<Webauthn, Box<dyn Error>>
 pub fn generer_challenge_registration<I,T,U,V,W,X>(
     rp_origin: T, user_name: U, user_uuid: V, idmg: I, existing_credentials: Option<X>
 )
-    -> Result<(CreationChallengeResponse, PasskeyRegistration), Box<dyn Error>>
+    -> Result<(CreationChallengeResponse, PasskeyRegistration), CoreError>
     where I: AsRef<str>, T: AsRef<str>, U: AsRef<str>, V: AsRef<str>, W: AsRef<str>, X: AsRef<Vec<W>>
 {
     let rp_origin_str = rp_origin.as_ref();
@@ -112,7 +114,7 @@ pub fn generer_challenge_registration<I,T,U,V,W,X>(
 }
 
 pub fn verifier_challenge_registration<S>(idmg: S, doc_registration: &DocChallenge, transaction_ajouter_cle: &TransactionAjouterCle)
-    -> Result<Passkey, Box<dyn Error>>
+    -> Result<Passkey, CoreError>
     where S: AsRef<str>
 {
     let public_key_credentials: RegisterPublicKeyCredential = transaction_ajouter_cle.reponse_client.clone().try_into()?;
@@ -136,7 +138,7 @@ pub fn verifier_challenge_registration<S>(idmg: S, doc_registration: &DocChallen
 }
 
 pub fn generer_challenge_authentification<H,S>(hostname: H, idmg: S, creds: Vec<CredentialWebauthn>)
-    -> Result<(RequestChallengeResponse, PasskeyAuthentication), Box<dyn Error>>
+    -> Result<(RequestChallengeResponse, PasskeyAuthentication), CoreError>
     where H: AsRef<str>, S: AsRef<str>
 {
     let idmg = idmg.as_ref();
@@ -150,7 +152,7 @@ pub fn generer_challenge_authentification<H,S>(hostname: H, idmg: S, creds: Vec<
 }
 
 pub fn verifier_challenge_authentification<H,S>(hostname: H, idmg: S, reg: PublicKeyCredential, state: PasskeyAuthentication)
-    -> Result<AuthenticationResult, Box<dyn Error>>
+    -> Result<AuthenticationResult, CoreError>
     where H: AsRef<str>, S: AsRef<str>
 {
     let idmg = idmg.as_ref();
@@ -159,7 +161,7 @@ pub fn verifier_challenge_authentification<H,S>(hostname: H, idmg: S, reg: Publi
     Ok(webauthn.finish_passkey_authentication(&reg, &state)?)
 }
 
-pub fn generer_challenge_auth(url_site: &str, credentials: Vec<Credential>) -> Result<Challenge, Box<dyn Error>> {
+pub fn generer_challenge_auth(url_site: &str, credentials: Vec<Credential>) -> Result<Challenge, millegrilles_common_rust::error::Error> {
 
     let rnd_bytes = random_vec(128);
     debug!("Random ... {:?}", rnd_bytes);
@@ -204,7 +206,7 @@ impl Credential {
     }
 }
 // impl TryInto<webauthn_rs::proto::Credential> for Credential {
-//     type Error = Box<dyn Error>;
+//     type Error = millegrilles_common_rust::error::Error;
 //
 //     fn try_into(self) -> Result<webauthn_rs::proto::Credential, Self::Error> {
 //
@@ -288,7 +290,7 @@ pub struct ConfigChallenge {
     pub challenge_bytes: Vec<u8>,
 }
 impl ConfigChallenge {
-    pub fn try_new<S>(hostname: S, challenge: S) -> Result<Self, Box<dyn Error>>
+    pub fn try_new<S>(hostname: S, challenge: S) -> Result<Self, CoreError>
         where S: Into<String>
     {
         let hostname = hostname.into();
@@ -303,7 +305,7 @@ impl ConfigChallenge {
         })
     }
 
-    fn get_commande(&self) -> Result<CommandeWebauthn, Box<dyn Error>> {
+    fn get_commande(&self) -> Result<CommandeWebauthn, millegrilles_common_rust::error::Error> {
         let byte_commande = self.challenge_bytes[0];
         match byte_commande {
             0x2 => {
@@ -351,7 +353,7 @@ pub struct CompteCredential {
     type_: Option<String>,
 }
 
-fn verifier_commande<S>(commande: &CommandeWebauthn, message: &S) -> Result<bool, Box<dyn Error>>
+fn verifier_commande<S>(commande: &CommandeWebauthn, message: &S) -> Result<bool, millegrilles_common_rust::error::Error>
     where S: Serialize
 {
     let val = serde_json::to_value(message)?;
@@ -375,8 +377,8 @@ fn verifier_commande<S>(commande: &CommandeWebauthn, message: &S) -> Result<bool
 }
 
 /// Verifier signature avec webauthn
-pub fn authenticate_complete(credentials: u64, challenge: ConfigChallenge, rsp: PublicKeyCredential)  // , challenge: &Challenge, response: AuthenticatorAssertionResponseRaw, credentials: Vec<Credential>) -> Result<bool, Box<dyn Error>> {
-    -> Result<u32, Box<dyn Error>>
+pub fn authenticate_complete(credentials: u64, challenge: ConfigChallenge, rsp: PublicKeyCredential)  // , challenge: &Challenge, response: AuthenticatorAssertionResponseRaw, credentials: Vec<Credential>) -> Result<bool, millegrilles_common_rust::error::Error> {
+    -> Result<u32, millegrilles_common_rust::error::Error>
 {
     todo!("fix me");
     // let val_auth_state = json!({
@@ -398,7 +400,7 @@ pub fn authenticate_complete(credentials: u64, challenge: ConfigChallenge, rsp: 
 
 }
 
-// fn convertir_creds_compte(doc_compte: Document) -> Result<Vec<webauthn_rs::proto::Credential>, Box<dyn Error>> {
+// fn convertir_creds_compte(doc_compte: Document) -> Result<Vec<webauthn_rs::proto::Credential>, millegrilles_common_rust::error::Error> {
 //     let element_webauthn = doc_compte.get_array("webauthn")?;
 //
 //     let mut creds = Vec::new();
@@ -430,7 +432,7 @@ pub struct ClientAssertResponseContent {
 }
 
 impl TryInto<PublicKeyCredential> for ClientAssertionResponse {
-    type Error = Box<dyn Error>;
+    type Error = millegrilles_common_rust::error::Error;
 
     fn try_into(self) -> Result<PublicKeyCredential, Self::Error> {
         // let id_b64 = multibase_to_b64(self.id64)?;
@@ -465,7 +467,7 @@ impl TryInto<PublicKeyCredential> for ClientAssertionResponse {
     }
 }
 
-pub fn multibase_to_b64<S>(val: S) -> Result<String, Box<dyn Error>>
+pub fn multibase_to_b64<S>(val: S) -> Result<String, CoreError>
     where S: AsRef<str>
 {
     let val_str = val.as_ref();
@@ -479,7 +481,7 @@ pub fn multibase_to_b64<S>(val: S) -> Result<String, Box<dyn Error>>
     }
 }
 
-pub fn multibase_to_safe<S>(val: S) -> Result<Base64UrlSafeData, Box<dyn Error>>
+pub fn multibase_to_safe<S>(val: S) -> Result<Base64UrlSafeData, CoreError>
     where S: AsRef<str>
 {
     let val_str = val.as_ref();
@@ -489,7 +491,7 @@ pub fn multibase_to_safe<S>(val: S) -> Result<Base64UrlSafeData, Box<dyn Error>>
     Ok(data)
 }
 
-pub fn valider_commande<M, S>(hostname: S, challenge: S, message: &M) -> Result<bool, Box<dyn Error>>
+pub fn valider_commande<M, S>(hostname: S, challenge: S, message: &M) -> Result<bool, CoreError>
     where
         S: Into<String>,
         M: Serialize,
