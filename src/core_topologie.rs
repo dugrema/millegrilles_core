@@ -41,6 +41,7 @@ use millegrilles_common_rust::transactions::{charger_transaction, EtatTransactio
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::error::Error as CommonError;
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 
 use mongodb::options::{FindOptions, UpdateOptions};
 use crate::core_maitredescomptes::NOM_COLLECTION_USAGERS;
@@ -511,7 +512,8 @@ async fn emettre_notification_demarrage<M>(middleware: &M) -> Result<(), millegr
 }
 
 async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), millegrilles_common_rust::error::Error>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/ {
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
+{
     let date_epoch = trigger.get_date();
     debug!("Traiter cedule {}\n{:?}", DOMAINE_NOM, date_epoch);
 
@@ -541,7 +543,7 @@ async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<()
 
 async fn consommer_requete<M>(middleware: &M, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
     debug!("Consommer requete : {:?}", &m.message);
 
@@ -710,7 +712,7 @@ async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, m
 
 async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait */
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
     debug!("Consommer evenement : {:?}", &m.type_message);
 
@@ -1079,7 +1081,7 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValide, gestionn
 
 async fn traiter_evenement_application<M>(middleware: &M, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
     // let event: PresenceMonitor = m.message.get_msg().map_contenu(None)?;
     debug!("Evenement application monitor : {:?}", m.type_message);
@@ -2386,7 +2388,7 @@ struct FichePubliqueReception {
 
 async fn produire_fiche_publique<M>(middleware: &M)
                                     -> Result<(), millegrilles_common_rust::error::Error>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
     debug!("produire_fiche_publique");
 
@@ -2402,15 +2404,20 @@ async fn produire_fiche_publique<M>(middleware: &M)
 }
 
 async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePublique, millegrilles_common_rust::error::Error>
-    where M: MongoDao + ValidateurX509 /*+ ChiffrageFactoryTrait*/
+    where M: MongoDao + ValidateurX509 + CleChiffrageHandler
 {
     let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
 
     let filtre = doc! {};
     let mut curseur = collection.find(filtre, None).await?;
 
-    error!("generer_contenu_fiche_publique **Fix** me - get cles chiffrages pour fiche");
-    // let chiffrage = get_cles_chiffrage(middleware).await;
+    // Extraire chaines pem de certificats de chiffrage
+    let chiffrage_enveloppes = middleware.get_publickeys_chiffrage();
+    let mut chiffrage = Vec::new();
+    for cert in chiffrage_enveloppes {
+        let chaine_pem = cert.chaine_pem()?;
+        chiffrage.push(chaine_pem)
+    }
 
     // let mut adresses = Vec::new();
     let mut instances: HashMap<String, InformationInstance> = HashMap::new();
@@ -2619,7 +2626,7 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
     Ok(FichePublique {
         applications: Some(applications),
         applications_v2,
-        chiffrage: None,  // Some(chiffrage), TODO fix me
+        chiffrage: Some(chiffrage),
         ca: Some(middleware.ca_pem().into()),
         idmg: middleware.idmg().into(),
         instances,
@@ -2846,7 +2853,7 @@ impl TryInto<ApplicationPublique> for InformationApplication {
 
 async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValide)
                                       -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao /*+ ChiffrageFactoryTrait*/
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
     debug!("requete_fiche_millegrille");
     let message_ref = message.message.parse()?;
