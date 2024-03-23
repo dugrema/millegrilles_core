@@ -11,7 +11,7 @@ use millegrilles_common_rust::chrono as chrono;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
-use millegrilles_common_rust::middleware::{EmetteurCertificat, Middleware};
+use millegrilles_common_rust::middleware::{charger_certificats_chiffrage, EmetteurCertificat, Middleware};
 use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, QueueType, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
@@ -229,15 +229,13 @@ async fn entretien<M>(middleware: Arc<M>)
         }
 
         if prochain_chargement_certificats_maitredescles < maintenant {
-            error!("Fix me - charger certificats maitre des cles **TODO**");
-            prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
-            // match middleware.charger_certificats_chiffrage(middleware.as_ref()).await {
-            //     Ok(()) => {
-            //         // prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
-            //         // debug!("Prochain chargement cert maitredescles: {:?}", prochain_chargement_certificats_maitredescles);
-            //     },
-            //     Err(e) => warn!("Erreur chargement certificats de maitre des cles : {:?}", e)
-            // }
+            match charger_certificats_chiffrage(middleware.as_ref()).await {
+                Ok(()) => {
+                    prochain_chargement_certificats_maitredescles = maintenant + intervalle_chargement_certificats_maitredescles;
+                    debug!("domaines_core.entretien Prochain chargement cert maitredescles: {:?}", prochain_chargement_certificats_maitredescles);
+                },
+                Err(e) => warn!("domaines_core.entretien Erreur chargement certificats de maitre des cles : {:?}", e)
+            }
         }
 
         if prochain_entretien_transactions < maintenant {
