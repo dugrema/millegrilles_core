@@ -665,9 +665,9 @@ async fn maj_catalogue<M>(middleware: &M, transaction: TransactionValide)
     // };
 
     debug!("maj_catalogue Parse catalogue\n{}", transaction.transaction.contenu);
-    let escaped_catalogue: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    // let escaped_catalogue: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
 
-    let transaction_catalogue: MessageCatalogue = match serde_json::from_str(escaped_catalogue.as_str()) {
+    let transaction_catalogue: MessageCatalogue = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(inner) => inner,
         Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur transaction.convertir {:?}", e))?
     };

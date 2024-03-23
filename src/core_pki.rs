@@ -912,8 +912,8 @@ async fn sauvegarder_certificat<M>(middleware: &M, transaction: TransactionValid
 {
     debug!("Sauvegarder certificat recu via transaction");
 
-    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let contenu: TransactionCertificat = match serde_json::from_str(escaped_contenu.as_str()) {
+    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let contenu: TransactionCertificat = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(c) => Ok(c),
         Err(e) => Err(format!("core_pki.sauvegarder_certificat Erreur conversion transaction en TransactionCertificat : {:?}", e)),
     }?;

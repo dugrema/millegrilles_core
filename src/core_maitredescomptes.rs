@@ -2017,8 +2017,8 @@ async fn sauvegarder_inscrire_usager<M>(middleware: &M, transaction: Transaction
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("sauvegarder_inscrire_usager {:?}", transaction.transaction.id);
-    let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let transaction: TransactionInscrireUsager = match serde_json::from_str(escaped_transaction.as_str()) {
+    // let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let transaction: TransactionInscrireUsager = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion en TransactionInscrireUsager : {:?}", e))?
     };
@@ -3055,8 +3055,8 @@ async fn transaction_ajouter_cle<M>(middleware: &M, transaction: TransactionVali
         Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur exchanges/domaines/roles non autorise - SKIP"))?
     }
 
-    let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let transaction_contenu: CredentialWebauthn = match serde_json::from_str(escaped_transaction.as_str()) {
+    // let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let transaction_contenu: CredentialWebauthn = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur conversion en TransactionAjouterCle : {:?}", e))?
     };
@@ -3450,8 +3450,8 @@ async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: T
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let commande: CommandeAjouterDelegationSignee = match serde_json::from_str(escaped_transaction.as_str()) {
+    // let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let commande: CommandeAjouterDelegationSignee = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur conversion en CommandeAjouterCle : {:?}", e))?
     };
@@ -3538,8 +3538,8 @@ async fn transaction_reset_webauthn_usager<M>(middleware: &M, transaction: Trans
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let commande: CommandeResetWebauthnUsager = match serde_json::from_str(escaped_transaction.as_str()) {
+    // let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let commande: CommandeResetWebauthnUsager = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_reset_webauthn_usager Erreur conversion en CommandeResetWebauthnUsager : {:?}", e))?
     };
@@ -3683,8 +3683,8 @@ pub async fn transaction_maj_usager_delegations<M>(middleware: &M, transaction: 
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let commande: TransactionMajUsagerDelegations = match serde_json::from_str(escaped_transaction.as_str()) {
+    // let escaped_transaction: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let commande: TransactionMajUsagerDelegations = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion en CommandeAjouterDelegationSignee : {:?}", e))?
     };
@@ -3743,8 +3743,8 @@ pub async fn transaction_supprimer_cles<M>(middleware: &M, transaction: Transact
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let commande: TransactionSupprimerCles = match serde_json::from_str(escaped_contenu.as_str()) {
+    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let commande: TransactionSupprimerCles = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("Erreur conversion en CommandeAjouterDelegationSignee : {:?}", e))?
     };

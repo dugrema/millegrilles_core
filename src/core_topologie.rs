@@ -748,34 +748,34 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: 
     }
 }
 
-async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
-    where
-        M: ValidateurX509 + GenerateurMessages + MongoDao,
-{
-    //let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
-    let message_ref = m.message.parse()?;
-    let message_contenu = match message_ref.contenu() {
-        Ok(t) => t,
-        Err(e) => Err(format!("Erreur conversion contenu {:?} : {:?}", m, e))?,
-    };
-    let trigger: TriggerTransaction = match message_contenu.deserialize() {
-        Ok(t) => t,
-        Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
-    };
-
-    let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;
-    let message_id = transaction.transaction.id.clone();
-    debug!("Traitement transaction, chargee : {}", message_id);
-
-    let reponse = aiguillage_transaction(middleware, transaction).await;
-    if reponse.is_ok() {
-        // Marquer transaction completee
-        debug!("Transaction traitee {}, marquer comme completee", message_id);
-        marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &message_id, EtatTransaction::Complete).await?;
-    }
-
-    reponse
-}
+// async fn traiter_transaction<M>(_domaine: &str, middleware: &M, m: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+//     where
+//         M: ValidateurX509 + GenerateurMessages + MongoDao,
+// {
+//     //let trigger = match serde_json::from_value::<TriggerTransaction>(Value::Object(m.message.get_msg().contenu.clone())) {
+//     let message_ref = m.message.parse()?;
+//     let message_contenu = match message_ref.contenu() {
+//         Ok(t) => t,
+//         Err(e) => Err(format!("Erreur conversion contenu {:?} : {:?}", m, e))?,
+//     };
+//     let trigger: TriggerTransaction = match message_contenu.deserialize() {
+//         Ok(t) => t,
+//         Err(e) => Err(format!("Erreur conversion message vers Trigger {:?} : {:?}", m, e))?,
+//     };
+//
+//     let transaction = charger_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &trigger).await?;
+//     let message_id = transaction.transaction.id.clone();
+//     debug!("Traitement transaction, chargee : {}", message_id);
+//
+//     let reponse = aiguillage_transaction(middleware, transaction).await;
+//     if reponse.is_ok() {
+//         // Marquer transaction completee
+//         debug!("Transaction traitee {}, marquer comme completee", message_id);
+//         marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &message_id, EtatTransaction::Complete).await?;
+//     }
+//
+//     reponse
+// }
 
 async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
@@ -796,7 +796,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
     };
 
     match action.as_str() {
-        // TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
+        TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
         TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
@@ -1315,10 +1315,10 @@ async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: Trans
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let transaction = match serde_json::from_str::<TransactionSetFichiersPrimaire>(escaped_contenu.as_str()) {
+    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let transaction = match serde_json::from_str::<TransactionSetFichiersPrimaire>(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
-        Err(e) => Err(format!("transaction_set_fichiers_primaire Erreur convertir {:?}", e))?
+        Err(e) => Err(format!("transaction_set_fichiers_primaire Erreur convertir {:?}\n{}", e, transaction.transaction.contenu))?
     };
     debug!("transaction_set_fichiers_primaire Set fichiers primaire : {:?}", transaction);
 
@@ -1390,8 +1390,8 @@ async fn transaction_configurer_consignation<M>(middleware: &M, transaction: Tra
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let transaction = match serde_json::from_str::<TransactionConfigurerConsignation>(escaped_contenu.as_str()) {
+    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let transaction = match serde_json::from_str::<TransactionConfigurerConsignation>(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
     };
@@ -1481,7 +1481,7 @@ async fn transaction_configurer_consignation<M>(middleware: &M, transaction: Tra
                 Ok(inner) => inner,
                 Err(e) => Err(format!("transaction_configurer_consignation Erreur mapper reponse : {:?}", e))?
             },
-            None => Err(format!("transaction_configurer_consignation Erreur sauvegarde configuration consignation : Aucun doc conserve"))?
+            None => Err(String::from("transaction_configurer_consignation Erreur sauvegarde configuration consignation : Aucun doc conserve"))?
         },
         Err(e) => Err(format!("transaction_configurer_consignation Erreur sauvegarde configuration consignation : {:?}", e))?
     };
@@ -1511,8 +1511,8 @@ async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: T
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let transaction = match serde_json::from_str::<TransactionSetConsignationInstance>(escaped_contenu.as_str()) {
+    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let transaction = match serde_json::from_str::<TransactionSetConsignationInstance>(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_set_consignation_instance Erreur convertir {:?}", e))?
     };
@@ -1542,44 +1542,50 @@ async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: T
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
-async fn traiter_transaction_domaine<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, String>
-    where
-        M: GenerateurMessages + MongoDao,
-        T: Transaction
+async fn traiter_transaction_domaine<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+    where M: GenerateurMessages + MongoDao
 {
-    todo!("fix me");
-    // let mut doc = transaction.contenu();
-    // let domaine = match doc.get_str("domaine") {
-    //     Ok(d) => d,
-    //     Err(e) => Err(format!("Erreur traitement transaction domaine {:?}", e))?
-    // };
-    //
-    // let ops = doc! {
-    //     "$set": {"dirty": false},
-    //     "$setOnInsert": {CHAMP_DOMAINE: domaine, CHAMP_CREATION: Utc::now()},
-    //     "$currentDate": {CHAMP_MODIFICATION: true},
-    // };
-    // let filtre = doc! {CHAMP_DOMAINE: domaine};
-    // let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
-    // let options = UpdateOptions::builder().upsert(true).build();
-    // match collection.update_one(filtre, ops, options).await {
-    //     Ok(_) => (),
-    //     Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
-    // }
-    //
-    // let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
-    //     Ok(r) => r,
-    //     Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
-    // };
-    // Ok(Some(reponse))
+    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let transaction = match serde_json::from_str::<PresenceDomaine>(transaction.transaction.contenu.as_str()) {
+        Ok(t) => t,
+        Err(e) => {
+            error!("traiter_transaction_domaine Erreur convertir {:?}\n{}", e, transaction.transaction.contenu);
+            Err(format!("traiter_transaction_domaine Erreur convertir {:?}", e))?
+        }
+    };
+    let domaine = match transaction.domaine {
+        Some(d) => d,
+        None => Err(String::from("traiter_transaction_domaine Erreur domaine absent"))?
+    };
+
+    let mut set_ops = doc!{"dirty": false};
+    if let Some(instance_id) = transaction.instance_id {
+        set_ops.insert("instance_id", instance_id);
+    }
+
+    let ops = doc! {
+        "$set": set_ops,
+        "$setOnInsert": {CHAMP_DOMAINE: &domaine, CHAMP_CREATION: Utc::now()},
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    let filtre = doc! {CHAMP_DOMAINE: domaine};
+    let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
+    let options = UpdateOptions::builder().upsert(true).build();
+    match collection.update_one(filtre, ops, options).await {
+        Ok(_) => (),
+        Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
+    }
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
 async fn traiter_transaction_monitor<M>(middleware: &M, transaction: TransactionValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: GenerateurMessages + MongoDao
 {
-    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(escaped_contenu.as_str()) {
+    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(d) => d,
         Err(e) => Err(format!("core_topologie.traiter_transaction_monitor Erreur conversion transaction monitor : {:?}", e))?
     };
@@ -1612,8 +1618,8 @@ async fn traiter_transaction_supprimer_instance<M>(middleware: &M, transaction: 
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: GenerateurMessages + MongoDao
 {
-    let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(escaped_contenu.as_str()) {
+    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
         Ok(d) => d,
         Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_instance Erreur conversion transaction monitor : {:?}", e))?
     };
