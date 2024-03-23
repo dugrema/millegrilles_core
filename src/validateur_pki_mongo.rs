@@ -8,13 +8,13 @@ use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::{BackupStarter, CommandeBackup, thread_backup};
 use millegrilles_common_rust::bson::{doc, Document};
 use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
-use millegrilles_common_rust::chiffrage_cle::CleChiffrageHandlerImpl;
+use millegrilles_common_rust::chiffrage_cle::{CleChiffrageCache, CleChiffrageHandlerImpl};
 use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMessagesDb, ConfigurationMq, ConfigurationNoeud, ConfigurationPki, IsConfigNoeud};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
-use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait, repondre_certificat};
+use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait, repondre_certificat, MiddlewareMessage};
 use millegrilles_common_rust::middleware_db::MiddlewareDb;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
@@ -57,6 +57,16 @@ impl MiddlewareMessages for MiddlewareDbPki {}
 impl CleChiffrageHandler for MiddlewareDbPki {
     fn get_publickeys_chiffrage(&self) -> Vec<Arc<EnveloppeCertificat>> {
         self.cle_chiffrage_handler.get_publickeys_chiffrage()
+    }
+}
+
+impl CleChiffrageCache for MiddlewareDbPki {
+    fn entretien_cle_chiffrage(&self) {
+        self.cle_chiffrage_handler.entretien_cle_chiffrage();
+    }
+
+    fn ajouter_certificat_chiffrage(&self, certificat: Arc<EnveloppeCertificat>) -> Result<(), millegrilles_common_rust::error::Error> {
+        self.cle_chiffrage_handler.ajouter_certificat_chiffrage(certificat)
     }
 }
 
