@@ -1153,9 +1153,9 @@ async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message
 
     // Valider commande
     {
-        let mut message_ref = message.message.parse()?;
-        let message_contenu = message_ref.contenu()?;
-        let commande = match message_contenu.deserialize() {
+        let mut message_ref = message.message.parse_to_owned()?;
+        // let message_contenu = message_ref.contenu()?;
+        let commande = match message_ref.deserialize() {
             Ok(inner) => inner,
             Err(e) => {
                 Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
