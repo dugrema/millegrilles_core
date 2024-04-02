@@ -996,7 +996,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValide, gestionna
         // // sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
         // sauvegarder_traiter_transaction(middleware, msg_action, gestionnaire).await?;
 
-        sauvegarder_traiter_transaction_serializable(middleware, &tval, gestionnaire, DOMAINE_NOM, TRANSACTION_DOMAINE).await?;
+        sauvegarder_traiter_transaction_serializable(middleware, &tval, gestionnaire, DOMAINE_NOM, TRANSACTION_INSTANCE).await?;
 
         // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
         let filtre = doc! {"instance_id": &event.instance_id};
