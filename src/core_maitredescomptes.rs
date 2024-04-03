@@ -48,7 +48,7 @@ use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCred
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::hachages::hacher_bytes_vu8;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesRef, MessageMilleGrillesRefDefault};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageMilleGrillesRef, MessageMilleGrillesRefDefault};
 use millegrilles_common_rust::mongodb::Collection;
 use millegrilles_common_rust::multibase::Base;
 use millegrilles_common_rust::multibase::Base::Base64Url;
@@ -646,7 +646,7 @@ async fn consommer_requete<M>(middleware: &M, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer requete : {:?}", &m.message);
+    debug!("Consommer requete : {:?}", &m.type_message);
 
     let (action, domaine) = match &m.type_message {
         TypeMessageOut::Requete(r) => {
@@ -701,7 +701,7 @@ async fn consommer_commande<M>(middleware: &M, gestionnaire: &GestionnaireDomain
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: Middleware + 'static
 {
-    debug!("Consommer commande : {:?}", &m.message);
+    debug!("Consommer commande : {:?}", &m.type_message);
 
     let (action, domaine) = match &m.type_message {
         TypeMessageOut::Commande(r) => {
@@ -790,7 +790,7 @@ async fn consommer_transaction<M>(middleware: &M, m: MessageValide)
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer transaction : {:?}", &m.message);
+    debug!("Consommer transaction : {:?}", &m.type_message);
 
     let (action, domaine) = match &m.type_message {
         TypeMessageOut::Transaction(r) => {
@@ -820,7 +820,7 @@ where
 
 async fn consommer_evenement(middleware: &(impl ValidateurX509 + GenerateurMessages + MongoDao), m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error> {
-    debug!("Consommer evenement : {:?}", &m.message);
+    debug!("Consommer evenement : {:?}", &m.type_message);
 
     let action = match &m.type_message {
         TypeMessageOut::Evenement(r) => {
@@ -1933,7 +1933,7 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValide, gestionnaire
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
-    debug!("inscrire_usager Consommer inscrire_usager : {:?}", &message.message);
+    debug!("inscrire_usager Consommer inscrire_usager : {:?}", &message.type_message);
     let (transaction, message_id) = {
         let message_ref = message.message.parse()?;
         let message_contenu = message_ref.contenu()?;
@@ -2894,7 +2894,7 @@ async fn commande_ajouter_cle<M>(middleware: &M, message: MessageValide, gestion
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    debug!("Consommer ajouter_cle : {:?}", &message.message);
+    debug!("Consommer ajouter_cle : {:?}", &message.type_message);
 
     let message_ref = message.message.parse()?;
     let uuid_transaction = message_ref.id.to_owned();
@@ -3254,7 +3254,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer ajouter_delegation_signee : {:?}", &message.message);
+    debug!("Consommer ajouter_delegation_signee : {:?}", &message.type_message);
     // Verifier autorisation
     let user_id = match message.certificat.get_user_id()? {
         Some(inner) => inner.to_owned(),
@@ -3274,9 +3274,12 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
         let message_contenu = message_ref.contenu()?;
         let commande: CommandeAjouterDelegationSignee = message_contenu.deserialize()?;
 
+        // let vec_message = Vec::from(commande.confirmation.as_bytes());
+        // let message_confirmation_buf = MessageMilleGrillesBufferDefault::from(vec_message);
+        // let mut message_confirmation = message_confirmation_buf.parse()?;
         let mut message_confirmation = commande.confirmation;
         // let user_id = commande.user_id.as_str();
-        let hostname = commande.hostname.as_str();
+        let hostname = commande.hostname;
 
         // S'assurer que la signature est recente (moins de 2 minutes, ajustement 10 secondes futur max)
         let date_signature = &message_confirmation.estampille;
@@ -3304,7 +3307,7 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
 
         // Valider la pubkey, elle doit correspondre au certificat de la MilleGrille.
         let public_key_millegrille = middleware.ca_cert().public_key()?.raw_public_key()?;
-        if hex::decode(message_confirmation.pubkey)? != public_key_millegrille {
+        if hex::decode(&message_confirmation.pubkey)? != public_key_millegrille {
             let err = json!({"ok": false, "code": 4, "err": "Permission refusee, pubkey n'est pas la cle de la MilleGrille"});
             debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
             match middleware.build_reponse(err) {
@@ -3315,8 +3318,9 @@ async fn commande_ajouter_delegation_signee<M>(middleware: &M, message: MessageV
         debug!("ajouter_delegation_signee Correspondance cle publique millegrille OK");
 
         // Valider le format du contenu (parse)
-        let message_confirmation_buffer = message_confirmation.contenu()?;
-        let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = message_confirmation_buffer.deserialize()?;
+        // let message_confirmation_buffer = message_confirmation.contenu()?;
+        // let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = message_confirmation_buffer.deserialize()?;
+        let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = message_confirmation.deserialize()?;
         if commande_ajouter_delegation.user_id.as_str() != user_id.as_str() {
             let err = json!({"ok": false, "code": 5, "err": "Permission refusee, user_id signe et session serveur mismatch"});
             debug!("ajouter_delegation_signee autorisation acces refuse : {:?}", err);
@@ -3386,7 +3390,7 @@ async fn commande_reset_webauthn_usager<M>(middleware: &M, gestionnaire: &Gestio
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    debug!("commande_reset_webauthn_usager Consommer commande : {:?}", &message.message);
+    debug!("commande_reset_webauthn_usager Consommer commande : {:?}", &message.type_message);
     // Verifier autorisation
     if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
@@ -3458,7 +3462,7 @@ async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: T
 
     let user_id_option = match transaction.certificat.get_user_id()? {
         Some(inner) => Some(inner.to_owned()),
-        None => commande.user_id.clone()
+        None => match commande.user_id { Some(inner) => Some(inner.to_owned()), None => None }
     };
 
     let user_id = match user_id_option.as_ref() {
@@ -3467,6 +3471,8 @@ async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: T
     };
 
     // Valider contenu
+    // let message_confirmation_buf = MessageMilleGrillesBufferDefault::from(Vec::from(commande.confirmation.as_bytes()));
+    // let mut message_confirmation = message_confirmation_buf.parse()?;
     let mut message_confirmation = commande.confirmation;
 
     // Valider la signature de la cle de millegrille
@@ -3490,7 +3496,7 @@ async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: T
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur raw_public_key {:?}", e))?
     };
 
-    let public_key_recue = match hex::decode(message_confirmation.pubkey) {
+    let public_key_recue = match hex::decode(&message_confirmation.pubkey) {
         Ok(inner) => inner,
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur hex::decode {:?}", e))?
     } ;
@@ -3499,11 +3505,11 @@ async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: T
     }
 
     debug!("transaction_ajouter_delegation_signee {:?}", message_confirmation.routage);
-    let message_confirmation_contenu = match message_confirmation.contenu() {
-        Ok(inner) => inner,
-        Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur map contenu() : {:?}", e))?
-    };
-    let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = match message_confirmation_contenu.deserialize() {
+    // let message_confirmation_contenu = match message_confirmation.contenu() {
+    //     Ok(inner) => inner,
+    //     Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur map contenu() : {:?}", e))?
+    // };
+    let commande_ajouter_delegation: ConfirmationSigneeDelegationGlobale = match message_confirmation.deserialize() {
         Ok(inner) => inner,
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur map_contenu : {:?}", e))?
     };
@@ -3571,11 +3577,12 @@ struct CommandeResetWebauthnUsager {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct CommandeAjouterDelegationSignee<'a> {
-    #[serde(borrow="'a")]
-    confirmation: MessageMilleGrillesRefDefault<'a>,
+    // #[serde(borrow="'a")]
+    // confirmation: MessageMilleGrillesRefDefault<'a>,
+    confirmation: MessageMilleGrillesOwned,
     #[serde(rename="userId")]
-    user_id: Option<String>,
-    hostname: String,
+    user_id: Option<&'a str>,
+    hostname: &'a str,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ConfirmationSigneeDelegationGlobale {
@@ -3639,7 +3646,7 @@ pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: Message
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer commande_maj_usager_delegations : {:?}", &message.message);
+    debug!("Consommer commande_maj_usager_delegations : {:?}", &message.type_message);
 
     // Valider contenu
     let (message_id, commande) = {
@@ -3721,7 +3728,7 @@ pub async fn commande_supprimer_cles<M>(middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer commande_supprimer_cles : {:?}", &message.message);
+    debug!("Consommer commande_supprimer_cles : {:?}", &message.type_message);
 
     // Valider contenu
     let uuid_transaction = {
