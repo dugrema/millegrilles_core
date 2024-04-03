@@ -145,7 +145,7 @@ struct CompteUsager {
     compte_prive: Option<bool>,
 
     delegation_globale: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none", with="optionepochseconds")]
+    #[serde(default, skip_serializing_if = "Option::is_none", with="optionepochseconds")]
     delegations_date: Option<DateTime<Utc>>,
     delegations_version: Option<usize>,
 }
@@ -1989,7 +1989,7 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValide, gestionnaire
                 }
             };
 
-            sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
+            // sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
             let resultat_inscrire_usager = sauvegarder_traiter_transaction(
                 middleware, message, gestionnaire).await?;
 
