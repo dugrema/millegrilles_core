@@ -127,10 +127,10 @@ pub struct GestionnaireDomaineTopologie {}
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomaineTopologie {
-    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
-            M: ValidateurX509 + GenerateurMessages + MongoDao,
-            T: TryInto<TransactionValide> + Send
+            M: ValidateurX509 + GenerateurMessages + MongoDao
     {
         aiguillage_transaction(middleware, transaction).await
     }
@@ -143,21 +143,21 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
     #[inline]
     fn get_collection_transactions(&self) -> Option<String> { Some(NOM_COLLECTION_TRANSACTIONS.into()) }
 
-    fn get_collections_documents(&self) -> Vec<String> {
-        vec![
+    fn get_collections_documents(&self) -> Result<Vec<String>, CommonError> {
+        Ok(vec![
             String::from(NOM_COLLECTION_DOMAINES),
             String::from(NOM_COLLECTION_NOEUDS),
-        ]
+        ])
     }
 
     #[inline]
-    fn get_q_transactions(&self) -> Option<String> { Some(NOM_Q_TRANSACTIONS.into()) }
+    fn get_q_transactions(&self) -> Result<Option<String>, CommonError> { Ok(Some(NOM_Q_TRANSACTIONS.into())) }
     #[inline]
-    fn get_q_volatils(&self) -> Option<String> { Some(NOM_Q_VOLATILS.into()) }
+    fn get_q_volatils(&self) -> Result<Option<String>, CommonError> { Ok(Some(NOM_Q_VOLATILS.into())) }
     #[inline]
-    fn get_q_triggers(&self) -> Option<String> { Some(NOM_Q_TRIGGERS.into()) }
+    fn get_q_triggers(&self) -> Result<Option<String>, CommonError> { Ok(Some(NOM_Q_TRIGGERS.into())) }
 
-    fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
+    fn preparer_queues(&self) -> Result<Vec<QueueType>, CommonError> { Ok(preparer_queues()) }
 
     async fn preparer_database<M>(&self, middleware: &M) 
         -> Result<(), millegrilles_common_rust::error::Error> 
@@ -203,11 +203,10 @@ impl GestionnaireDomaine for GestionnaireDomaineTopologie {
         traiter_cedule(middleware, trigger).await
     }
 
-    async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
-                                          -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+    async fn aiguillage_transaction<M>(&self, middleware: &M, transaction: TransactionValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
-            M: ValidateurX509 + GenerateurMessages + MongoDao,
-            T: TryInto<TransactionValide> + Send
+            M: ValidateurX509 + GenerateurMessages + MongoDao
     {
         aiguillage_transaction(middleware, transaction).await
     }
@@ -1344,7 +1343,7 @@ async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: Trans
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct TransactionConfigurerConsignation {
     instance_id: String,
-    type_store: String,
+    type_store: Option<String>,
     url_download: Option<String>,
     url_archives: Option<String>,
     consignation_url: Option<String>,
@@ -1669,7 +1668,7 @@ struct PresenceMonitor {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceFichiers {
-    type_store: String,
+    type_store: Option<String>,
     url_download: Option<String>,
     url_archives: Option<String>,
     consignation_url: Option<String>,
@@ -3176,7 +3175,9 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
     //     Some(r) => r,
     //     None => Err(format!("requetes.requete_get_cle_configuration Pas de correlation_id pour message"))?
     // };
-    let routage = RoutageMessageAction::builder(DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE, vec![Securite::L4Secure])
+    let routage = RoutageMessageAction::builder(
+        DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE, vec![Securite::L4Secure]
+    )
         .reply_to(reply_to)
         .correlation_id(correlation_id)
         .blocking(false)

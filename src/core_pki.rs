@@ -71,10 +71,10 @@ pub struct GestionnaireDomainePki {}
 
 #[async_trait]
 impl TraiterTransaction for GestionnaireDomainePki {
-    async fn appliquer_transaction<M,T>(&self, middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+    async fn appliquer_transaction<M>(&self, middleware: &M, transaction: TransactionValide)
+        -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
         where
-            M: ValidateurX509 + GenerateurMessages + MongoDao,
-            T: TryInto<TransactionValide> + Send
+            M: ValidateurX509 + GenerateurMessages + MongoDao
     {
         aiguillage_transaction(middleware, transaction).await
     }
@@ -87,20 +87,20 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
     #[inline]
     fn get_collection_transactions(&self) -> Option<String> {Some(NOM_COLLECTION_TRANSACTIONS.into())}
 
-    fn get_collections_documents(&self) -> Vec<String> {
-        vec![
+    fn get_collections_documents(&self) -> Result<Vec<String>, CommonError> {
+        Ok(vec![
             String::from(COLLECTION_CERTIFICAT_NOM),
-        ]
+        ])
     }
 
     #[inline]
-    fn get_q_transactions(&self) -> Option<String> {Some(NOM_Q_TRANSACTIONS.into())}
+    fn get_q_transactions(&self) -> Result<Option<String>, CommonError> {Ok(Some(NOM_Q_TRANSACTIONS.into()))}
     #[inline]
-    fn get_q_volatils(&self) -> Option<String> {Some(NOM_Q_VOLATILS.into())}
+    fn get_q_volatils(&self) -> Result<Option<String>, CommonError> {Ok(Some(NOM_Q_VOLATILS.into()))}
     #[inline]
-    fn get_q_triggers(&self) -> Option<String> {Some(NOM_Q_TRIGGERS.into())}
+    fn get_q_triggers(&self) -> Result<Option<String>, CommonError> {Ok(Some(NOM_Q_TRIGGERS.into()))}
 
-    fn preparer_queues(&self) -> Vec<QueueType> { preparer_queues() }
+    fn preparer_queues(&self) -> Result<Vec<QueueType>, CommonError> { Ok(preparer_queues()) }
 
     async fn preparer_database<M>(&self, middleware: &M)
         -> Result<(), millegrilles_common_rust::error::Error> where M: MongoDao + ConfigMessages
@@ -148,11 +148,9 @@ impl GestionnaireDomaine for GestionnaireDomainePki {
         traiter_cedule(middleware, trigger).await
     }
 
-    async fn aiguillage_transaction<M, T>(&self, middleware: &M, transaction: T)
+    async fn aiguillage_transaction<M>(&self, middleware: &M, transaction: TransactionValide)
                                           -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
-        where
-            M: ValidateurX509 + GenerateurMessages + MongoDao /*+ VerificateurMessage*/,
-            T: TryInto<TransactionValide> + Send
+        where M: ValidateurX509 + GenerateurMessages + MongoDao
     {
         aiguillage_transaction(middleware, transaction).await
     }

@@ -807,7 +807,7 @@ impl GenerateurMessages for MiddlewareDbPki {
     }
 
     async fn transmettre_requete<R,M>(&self, routage: R, message: M)
-                                      -> Result<TypeMessage, millegrilles_common_rust::error::Error>
+                                      -> Result<Option<TypeMessage>, millegrilles_common_rust::error::Error>
         where R: Into<RoutageMessageAction> + Send, M: Serialize + Send + Sync
     {
         self.ressources.generateur_messages.transmettre_requete(routage, message).await
