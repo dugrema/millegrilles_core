@@ -48,7 +48,7 @@ use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCred
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::hachages::hacher_bytes_vu8;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageMilleGrillesRef, MessageMilleGrillesRefDefault};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageMilleGrillesRef, MessageMilleGrillesRefDefault, MessageValidable};
 use millegrilles_common_rust::mongodb::Collection;
 use millegrilles_common_rust::multibase::Base;
 use millegrilles_common_rust::multibase::Base::Base64Url;

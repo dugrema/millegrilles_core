@@ -32,7 +32,7 @@ use serde::{Serialize, Deserialize};
 use crate::validateur_pki_mongo::MiddlewareDbPki;
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageMilleGrillesRefDefault, RoutageMessageOwned};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageMilleGrillesRefDefault, MessageValidable, RoutageMessageOwned};
 
 use millegrilles_common_rust::error::Error as CommonError;
 
