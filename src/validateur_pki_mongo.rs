@@ -36,6 +36,8 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::redis_dao::RedisDao;
 use millegrilles_common_rust::tokio::sync::mpsc::Sender;
 use millegrilles_common_rust::tokio_stream::StreamExt;
+use millegrilles_common_rust::error::Error as CommonError;
+use crate::core_pki::PKI_DOCUMENT_CHAMP_FINGERPRINT_PK;
 
 use crate::core_pki::{COLLECTION_CERTIFICAT_NOM, CorePkiCertificat, DOMAINE_NOM as PKI_DOMAINE_NOM};
 
@@ -731,6 +733,20 @@ impl ValidateurX509 for MiddlewareDbPki {
         match self.validateur.get_certificat(fingerprint).await {
             Some(c) => Some(c),
             None => {
+                // Charger le certificat a partir de CorePki (MongoDB
+                if let Ok(Some(inner)) = charger_certificat_pki(self, fingerprint).await {
+                    let ca = match inner.ca.as_ref() {
+                        Some(inner) => Some(inner.as_str()),
+                        None => None
+                    };
+                    match self.charger_enveloppe(&inner.certificat, Some(inner.fingerprint.as_str()), ca).await {
+                        Ok(inner) => return Some(inner),
+                        Err(e) => {
+                            error!("get_certificat Erreur chargement certificat avec CorePki db : {:?}", e)
+                        }
+                    }
+                };
+
                 // Cas special, certificat inconnu a PKI. Tenter de le charger de redis
                 let redis_certificat = match self.redis.as_ref() {
                     Some(redis) => match redis.get_certificat(fingerprint).await {
@@ -897,6 +913,15 @@ impl IsConfigNoeud for MiddlewareDbPki {
     fn get_configuration_noeud(&self) -> &ConfigurationNoeud {
         self.ressources.configuration.get_configuration_noeud()
     }
+}
+
+async fn charger_certificat_pki<M,S>(middleware: &M, fingerprint: S)
+    -> Result<Option<CorePkiCertificat>, CommonError>
+    where M: MongoDao, S: AsRef<str>
+{
+    let collection = middleware.get_collection_typed::<CorePkiCertificat>(crate::core_pki::DOMAINE_NOM)?;
+    let filtre = doc!{ PKI_DOCUMENT_CHAMP_FINGERPRINT_PK: fingerprint.as_ref() };
+    Ok(collection.find_one(filtre, None).await?)
 }
 
 // #[async_trait]
