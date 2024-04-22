@@ -9,7 +9,7 @@ use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{Datelike, Timelike, Utc};
-use millegrilles_common_rust::common_messages::{DataChiffre, MessageReponse, PresenceFichiersRepertoire, ReponseInformationConsignationFichiers, RequeteConsignationFichiers, RequeteDechiffrage};
+use millegrilles_common_rust::common_messages::{MessageReponse, PresenceFichiersRepertoire, ReponseInformationConsignationFichiers, RequeteConsignationFichiers, RequeteDechiffrage};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::constantes::Securite::{L1Public, L2Prive, L3Protege};
 use millegrilles_common_rust::domaines::GestionnaireDomaine;
@@ -23,6 +23,7 @@ use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::chiffrage_cle::CommandeSauvegarderCle;
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::db_structs::TransactionValide;
+use millegrilles_common_rust::dechiffrage::DataChiffre;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions, ReturnDocument};
 use millegrilles_common_rust::notifications::NotificationMessageInterne;
@@ -3117,7 +3118,7 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct ParametresGetCleConfiguration {
-    ref_hachage_bytes: String,
+    // ref_hachage_bytes: String,
 }
 
 async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
@@ -3137,19 +3138,46 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
     }
 
     // Utiliser certificat du message client (requete) pour demande de rechiffrage
-    let fp_certs = m.certificat.chaine_fingerprint_pem()?;
-    let pem_rechiffrage: Vec<String> = fp_certs.into_iter().map(|cert| cert.pem).collect();
+    let instance_id = m.certificat.get_common_name()?;
+    let pem_rechiffrage = m.certificat.chaine_pem()?;
+    // let pem_rechiffrage: Vec<String> = fp_certs.into_iter().map(|cert| cert.pem).collect();
+
+    // Recuperer information de dechiffrage (avec cle_id) pour cette instance
+    let filtre = doc!("instance_id": &instance_id);
+    let collection = middleware.get_collection_typed::<ReponseConsignationSatellite>(NOM_COLLECTION_FICHIERS)?;
+    let consignation_instance = match collection.find_one(filtre, None).await? {
+        Some(inner) => inner,
+        None => {
+            info!("requete_get_cle_configuration Aucune configuration pour fichiers sur instance {}", instance_id);
+            return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration de fichiers trouvees"))?))
+        }
+    };
+
+    let data_chiffre = match consignation_instance.data_chiffre {
+        Some(inner) => inner,
+        None => {
+            info!("requete_get_cle_configuration Aucune configuration pour fichiers sur instance {}", instance_id);
+            return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration chiffree trouvee pour les fichiers"))?))
+        }
+    };
+
+    let cle_id = match data_chiffre.cle_id {
+        Some(inner) => inner,
+        None => match data_chiffre.ref_hachage_bytes {
+            Some(inner) => inner,
+            None => {
+                info!("requete_get_cle_configuration Aucune configuration cle_id/ref_hachage_bytes trouve pour {}", instance_id);
+                return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration cle_id/ref_hachage_bytes trouve trouvee pour les fichiers"))?))
+            }
+        }
+    };
 
     let permission = RequeteDechiffrage {
         domaine: DOMAINE_NOM.to_string(),
-        liste_hachage_bytes: vec![requete.ref_hachage_bytes],
+        liste_hachage_bytes: None,
+        cle_ids: Some(vec![cle_id]),
         certificat_rechiffrage: Some(pem_rechiffrage)
     };
-    // let permission = json!({
-    //     "domaine":
-    //     "liste_hachage_bytes": vec![requete.ref_hachage_bytes],
-    //     "certificat_rechiffrage": pem_rechiffrage,
-    // });
 
     let (reply_to, correlation_id) = match &m.type_message {
         TypeMessageOut::Requete(r) => {
@@ -3166,17 +3194,8 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
         _ => Err(String::from("requete_get_cle_configuration Mauvais type de message"))?
     };
 
-    // Emettre requete de rechiffrage de cle, reponse acheminee directement au demandeur
-    // let reply_to = match m.reply_q {
-    //     Some(r) => r,
-    //     None => Err(format!("requetes.requete_get_cle_configuration Pas de reply q pour message"))?
-    // };
-    // let correlation_id = match m.correlation_id {
-    //     Some(r) => r,
-    //     None => Err(format!("requetes.requete_get_cle_configuration Pas de correlation_id pour message"))?
-    // };
     let routage = RoutageMessageAction::builder(
-        DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE, vec![Securite::L4Secure]
+        DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, vec![Securite::L3Protege]
     )
         .reply_to(reply_to)
         .correlation_id(correlation_id)
@@ -3184,7 +3203,6 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
         .build();
 
     debug!("requete_get_cle_configuration Transmettre requete permission dechiffrage cle : {:?}", permission);
-
     middleware.transmettre_requete(routage, &permission).await?;
 
     Ok(None)  // Aucune reponse a transmettre, c'est le maitre des cles qui va repondre

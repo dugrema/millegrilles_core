@@ -2258,7 +2258,7 @@ dependencies = [
  "async-std",
  "async-tar",
  "async-trait",
- "base64 0.21.7",
+ "base64 0.22.0",
  "base64-url",
  "blake2",
  "bytes 1.6.0",
@@ -2312,8 +2312,8 @@ dependencies = [
 
 [[package]]
 name = "millegrilles_cryptographie"
-version = "2024.3.0"
-source = "git+https://github.com/dugrema/millegrilles_cryptographie.git?branch=2024.3#8411235d46498ed1959f4e65cbf30ffd7c79dbda"
+version = "2024.3.2"
+source = "git+https://github.com/dugrema/millegrilles_cryptographie.git?branch=2024.3#7dd6d5738774ad1bf2d2654846048047f64f627f"
 dependencies = [
  "base64 0.22.0",
  "blake2",
