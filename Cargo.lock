@@ -2596,7 +2596,7 @@ checksum = "523dc4f511e55ab87b694dc30d0f820d60906ef06413f93d4d7a1385599cc149"
 [[package]]
 name = "millegrilles_common_rust"
 version = "2024.4.0"
-source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=2024.4#0d383f10b5ab63fefa32788df37511efe0c6e320"
+source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=2024.4#89bfa57f1cb9d1267cefa7e9189d13a2cf4361fd"
 dependencies = [
  "async-compression",
  "async-recursion",
@@ -2631,6 +2631,7 @@ dependencies = [
  "serde",
  "serde-helpers",
  "serde_json",
+ "static_cell",
  "substring",
  "tempfile",
  "tokio",
@@ -3329,6 +3330,12 @@ dependencies = [
  "opaque-debug",
  "universal-hash",
 ]
+
+[[package]]
+name = "portable-atomic"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7170ef9988bc169ba16dd36a7fa041e5c4cbeb6a35b76d4c03daded371eae7c0"
 
 [[package]]
 name = "powerfmt"
@@ -4286,6 +4293,15 @@ name = "stable_deref_trait"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a8f112729512f8e442d81f95a8a7ddf2b7c6b8a1a6f509a95864142b30cab2d3"
+
+[[package]]
+name = "static_cell"
+version = "2.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d89b0684884a883431282db1e4343f34afc2ff6996fe1f4a1664519b66e14c1e"
+dependencies = [
+ "portable-atomic",
+]
 
 [[package]]
 name = "stringprep"
