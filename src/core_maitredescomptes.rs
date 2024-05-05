@@ -263,13 +263,11 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let requetes_protegees: Vec<&str> = vec![
         REQUETE_LISTE_USAGERS,
         REQUETE_LISTE_PROPRIETAIRES,
+        REQUETE_USERID_PAR_NOMUSAGER
     ];
     for req in requetes_protegees {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L3Protege});
     }
-
-    // RK 4.secure pour requetes internes
-    rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAINE_NOM, REQUETE_USERID_PAR_NOMUSAGER), exchange: Securite::L4Secure});
 
     let commandes_publiques: Vec<&str> = vec![
         // Commandes
