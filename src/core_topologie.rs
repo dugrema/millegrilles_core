@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::error::Error;
+use std::str::from_utf8;
 use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
@@ -16,7 +17,7 @@ use millegrilles_common_rust::domaines::GestionnaireDomaine;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction, RoutageMessageReponse};
 use millegrilles_common_rust::messages_generiques::{MessageCedule, ReponseCommande};
-use millegrilles_common_rust::middleware::{EmetteurNotificationsTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, thread_emettre_presence_domaine};
+use millegrilles_common_rust::middleware::{EmetteurNotificationsTrait, Middleware, sauvegarder_traiter_transaction, sauvegarder_traiter_transaction_serializable, sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, thread_emettre_presence_domaine};
 use millegrilles_common_rust::mongo_dao::{ChampIndex, convertir_bson_deserializable, convertir_bson_value, convertir_to_bson, filtrer_doc_id, IndexOptions, MongoDao};
 use millegrilles_common_rust::{chrono, millegrilles_cryptographie, mongodb as mongodb};
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
@@ -24,7 +25,7 @@ use millegrilles_common_rust::chiffrage_cle::CommandeSauvegarderCle;
 use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::dechiffrage::DataChiffre;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageMilleGrillesRef, MessageMilleGrillesRefDefault, MessageValidable};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOneOptions, ReturnDocument};
 use millegrilles_common_rust::notifications::NotificationMessageInterne;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType, TypeMessageOut};
@@ -58,6 +59,7 @@ pub const NOM_COLLECTION_MILLEGRILLES: &str = "CoreTopologie/millegrilles";
 pub const NOM_COLLECTION_MILLEGRILLES_ADRESSES: &str = "CoreTopologie/millegrillesAdresses";
 pub const NOM_COLLECTION_FICHIERS: &str = "CoreTopologie/fichiers";
 pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
+pub const NOM_COLLECTION_TOKENS: &str = "CoreTopologie/tokens";
 
 pub const DOMAINE_PRESENCE_NOM: &str = "CoreTopologie";
 pub const DOMAINE_FICHIERS: &str = "fichiers";
@@ -85,6 +87,8 @@ const TRANSACTION_SUPPRIMER_INSTANCE: &str = "supprimerInstance";
 const TRANSACTION_SET_FICHIERS_PRIMAIRE: &str = "setFichiersPrimaire";
 const TRANSACTION_CONFIGURER_CONSIGNATION: &str = "configurerConsignation";
 const TRANSACTION_SET_CONSIGNATION_INSTANCE: &str = "setConsignationInstance";
+
+const COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE: &str = "ajouterConsignationHebergee";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
@@ -260,6 +264,8 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_CONFIGURER_CONSIGNATION,
         TRANSACTION_SET_FICHIERS_PRIMAIRE,
         TRANSACTION_SET_CONSIGNATION_INSTANCE,
+
+        COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
@@ -483,12 +489,13 @@ async fn entretien<M>(middleware: Arc<M>)
         }
 
         debug!("Cycle entretien {}", DOMAINE_NOM);
-        if notification_demarrage_emise == false {
-            notification_demarrage_emise = true;
-            if let Err(e) = emettre_notification_demarrage(middleware.as_ref()).await {
-                warn!("Erreur emission notification demarrage {:?}", e);
-            }
-        }
+
+        // if notification_demarrage_emise == false {
+        //     notification_demarrage_emise = true;
+        //     if let Err(e) = emettre_notification_demarrage(middleware.as_ref()).await {
+        //         warn!("Erreur emission notification demarrage {:?}", e);
+        //     }
+        // }
 
         if let Err(e) = verifier_instances_horsligne(middleware.as_ref()).await {
             warn!("Erreur verification etat instances hors ligne {:?}", e);
@@ -496,20 +503,20 @@ async fn entretien<M>(middleware: Arc<M>)
     }
 }
 
-async fn emettre_notification_demarrage<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
-    where M: EmetteurNotificationsTrait
-{
-    let notification = NotificationMessageInterne {
-        from: "CoreTopologie".to_string(),
-        subject: Some("Demarrage core".to_string()),
-        content: "<p>Core demarre</p>".to_string(),
-        version: 1,
-        format: "html".into()
-    };
-    let expiration_ts = Utc::now().timestamp() + 7 * 86400;
-    Ok(middleware.emettre_notification_proprietaire(
-        notification, "info", Some(expiration_ts), None).await?)
-}
+// async fn emettre_notification_demarrage<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
+//     where M: EmetteurNotificationsTrait
+// {
+//     let notification = NotificationMessageInterne {
+//         from: "CoreTopologie".to_string(),
+//         subject: Some("Demarrage core".to_string()),
+//         content: "<p>Core demarre</p>".to_string(),
+//         version: 1,
+//         format: "html".into()
+//     };
+//     let expiration_ts = Utc::now().timestamp() + 7 * 86400;
+//     Ok(middleware.emettre_notification_proprietaire(
+//         notification, "info", Some(expiration_ts), None).await?)
+// }
 
 async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
@@ -663,6 +670,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &
         TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire).await,
         TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
+        COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
         //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
         //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
         //
@@ -1298,6 +1306,394 @@ async fn traiter_commande_set_consignation_instance<M>(middleware: &M, message: 
     // Sauvegarder la transaction, marquer complete et repondre
     let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
     Ok(reponse)
+}
+
+#[derive(Deserialize)]
+struct JwtHebergement {
+    jwt_readonly: String,
+    jwt_readwrite: String,
+}
+
+#[derive(Serialize)]
+struct RequeteRelaiWeb {
+    url: String,
+    headers: HashMap<String, String>,
+    json: Option<Value>,
+}
+
+// async fn charger_fiche<M>(middleware: &M, url: &Url, etag: Option<&String>)
+//     -> Result<Option<FichePublique>, millegrilles_common_rust::error::Error>
+//     where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     debug!("charger_fiche {:?}", url);
+//
+//     let routage = RoutageMessageAction::builder(DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET, vec![Securite::L1Public])
+//         .build();
+//
+//     let hostname = match url.host_str() {
+//         Some(inner) => inner,
+//         None => Err(CommonError::Str("charger_fiche Url sans hostname"))?
+//     };
+//     let mut url_fiche = url.clone();
+//     url_fiche.set_path("fiche.json");
+//     let requete = json!({
+//         "url": url_fiche.as_str(),
+//         "headers": {
+//             "Cache-Control": "public, max-age=604800",
+//             "If-None-Match": etag,
+//         }
+//     });
+//
+//     let reponse = {
+//         let reponse_http = middleware.transmettre_commande(routage, &requete).await?;
+//         debug!("charger_fiche Reponse http : {:?}", reponse_http);
+//         match reponse_http {
+//             Some(reponse) => match reponse {
+//                 TypeMessage::Valide(reponse) => Ok(reponse),
+//                 _ => Err(format!("core_topologie.charger_fiche Mauvais type de message recu en reponse"))
+//             },
+//             None => Err(format!("core_topologie.charger_fiche Aucun message recu en reponse"))
+//         }
+//     }?;
+//
+//     // Mapper message avec la fiche
+//     let message_ref = reponse.message.parse()?;
+//     debug!("charger_fiche Reponse fiche :\n{}", from_utf8(&reponse.message.buffer)?);
+//     let message_contenu = message_ref.contenu()?;
+//     let reponse_fiche: ReponseFichePubliqueTierce = message_contenu.deserialize()?;
+//
+//     // Verifier code reponse HTTP
+//     match reponse_fiche.code {
+//         Some(c) => {
+//             if c == 304 {
+//                 // Aucun changement sur le serveur
+//                 // On fait un touch sur l'adresse du hostname verifie et on retourne la fiche
+//                 let filtre = doc! {"adresse": hostname};
+//                 let ops = doc! {"$currentDate": {CHAMP_MODIFICATION: true}};
+//                 let collection_adresses = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
+//                 collection_adresses.update_one(filtre, ops.clone(), None).await?;
+//
+//                 let filtre = doc! {"adresses": hostname};
+//                 let collection_fiches = middleware.get_collection_typed::<FichePublique>(NOM_COLLECTION_MILLEGRILLES)?;
+//                 match collection_fiches.find_one_and_update(filtre, ops, None).await? {
+//                     Some(fiche) => {
+//                         return Ok(Some(fiche));
+//                     },
+//                     None => ()
+//                 }
+//             } else if c != 200 {
+//                 Err(format!("core_topologie.charger_fiche Code reponse http {}", c))?
+//             }
+//         }
+//         None => Err(CommonError::Str("core_topologie.charger_fiche Code reponse http manquant"))?
+//     };
+//
+//     // Verifier presence fiche publique
+//     let mut fiche_publique_message: MessageMilleGrillesOwned = match reponse_fiche.json {
+//         Some(f) => match serde_json::from_value(f) {
+//             Ok(inner) => inner,
+//             Err(e) => Err(CommonError::String(format!("core_topologie.resoudre_url Fiche publique invalide : {:?}", e)))?
+//         },
+//         None => Err(CommonError::Str("core_topologie.resoudre_url Fiche publique manquante"))?
+//     };
+//
+//     // Verifier la fiche
+//     fiche_publique_message.verifier_signature()?;
+//
+//     // TODO : Valider le certificat de la fiche
+//
+//     debug!("Verification headers : {:?}", reponse_fiche.headers);
+//     let etag = match reponse_fiche.headers.as_ref() {
+//         Some(e) => match e.get("ETag").cloned() {
+//             Some(inner) => Some(ReponseUrlEtag {url: url_fiche.clone(), etag: inner}),
+//             None => None
+//         },
+//         None => None
+//     };
+//
+//     // Sauvegarder et retourner la fiche
+//     let fiche_publique: FichePublique = fiche_publique_message.deserialize()?;
+//     maj_fiche_publique(middleware, &fiche_publique, etag).await?;
+//     Ok(Some(fiche_publique))
+// }
+
+async fn demander_jwt_hebergement<M>(middleware: &M, fiche: &FichePublique, url: Option<Url>)
+    -> Result<(JwtHebergement, Url), CommonError>
+    where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    let idmg = fiche.idmg.as_str();
+    let cert_ca_pem = match fiche.ca.as_ref() {
+        Some(inner) => inner.as_str(),
+        None => Err(CommonError::Str("demander_jwt_hebergement Fiche sans CA"))?
+    };
+
+    // Mapper les instances avec hebergement_python
+    let mut liste_url_hebergement = Vec::new();
+    for (nom, application) in &fiche.applications_v2 {
+        if nom != "hebergement_python" { continue }  // On est juste interesse par hebergement
+        for (instance_id, instance) in &application.instances {
+            let pathname = instance.pathname.as_str();
+            if let Some(instance_info) = fiche.instances.get(instance_id.as_str()) {
+                let port_https = instance_info.ports.get("https").unwrap_or_else(|| &443);
+                if let Some(domaines) = instance_info.domaines.as_ref() {
+                    for domaine in domaines {
+                        let url_domaine = Url::parse(format!("https://{}:{}{}", domaine, port_https, pathname).as_str())?;
+                        liste_url_hebergement.push(url_domaine);
+                    }
+                }
+            }
+        }
+    }
+    debug!("demander_jwt_hebergement List url hebergement : {:?}", liste_url_hebergement);
+
+    if let Some(url) = url {
+        // Verifier que le URL existe encore dans la fiche
+        if let Some(hostname) = url.host_str() {
+            // TODO
+        }
+    }
+
+    let mut headers = HashMap::new();
+    headers.insert("Cache-Control".to_string(), "no-store".to_string());
+    let routage = RoutageMessageAction::builder(DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET, vec![Securite::L1Public])
+        .build();
+    let contenu_message = json!({"roles": ["fichiers"]});
+    let message_requete = middleware.build_message_action(
+        millegrilles_cryptographie::messages_structs::MessageKind::Requete, routage.clone(), &contenu_message)?.0;
+    let mut message_requete_ref = message_requete.parse_to_owned()?;
+    let enveloppe_signature = middleware.get_enveloppe_signature();
+    message_requete_ref.millegrille = Some(enveloppe_signature.ca_pem.clone());
+    let message_requete_value = serde_json::to_value(message_requete_ref)?;
+
+    let mut reponse_jwt: Option<JwtHebergement> = None;
+    let mut url_verifie: Option<Url> = None;
+    for url_hebergement in liste_url_hebergement {
+        let mut url_jwt = url_hebergement.clone();
+        url_jwt.set_path(format!("{}/jwt", url_hebergement.path()).as_str());
+        let requete_web = RequeteRelaiWeb {
+            url: url_jwt.to_string(),
+            headers: headers.clone(),
+            json: Some(message_requete_value.clone()),
+        };
+        let reponse = {
+            let reponse_http = middleware.transmettre_commande(routage.clone(), &requete_web).await?;
+            match reponse_http {
+                Some(reponse) => match reponse {
+                    TypeMessage::Valide(reponse) => Ok(reponse),
+                    _ => Err(format!("core_topologie.demander_jwt_hebergement Mauvais type de message recu en reponse"))
+                },
+                None => Err(format!("core_topologie.demander_jwt_hebergement Aucun message recu en reponse"))
+            }
+        }?;
+        debug!("demander_jwt_hebergement Reponse http :\n{}", from_utf8(&reponse.message.buffer)?);
+
+        // Mapper message avec la fiche
+        let message_ref = reponse.message.parse()?;
+        debug!("demander_jwt_hebergement Reponse fiche :\n{}", from_utf8(&reponse.message.buffer)?);
+        let message_contenu = message_ref.contenu()?;
+        let reponse: ReponseRelaiWeb = message_contenu.deserialize()?;
+
+        let mut message_owned = match reponse.code {
+            Some(c) => {
+                if c == 200 {
+                    if let Some(value) = reponse.json {
+                        match serde_json::from_value::<MessageMilleGrillesOwned>(value) {
+                            Ok(inner) => inner,
+                            Err(e) => {
+                                error!("demander_jwt_hebergement Erreur deserialize reponse, ** SKIP **");
+                                continue
+                            }
+                        }
+                    } else {
+                        continue
+                    }
+                } else {
+                    continue
+                }
+            }
+            None => Err(CommonError::Str("core_topologie.demander_jwt_hebergement Code reponse http manquant"))?
+        };
+
+        // Verifier le message recu
+        if let Err(e) = message_owned.verifier_signature() {
+            error!("demander_jwt_hebergement Erreur verification signature message JWT, **SKIP**");
+            continue
+        }
+
+        // TODO Verifier certificat du message recu
+        let enveloppe_ca = middleware.charger_enveloppe(&vec![cert_ca_pem.to_string()], None, None).await?;
+        let certificat_pem = match message_owned.certificat.as_ref() {
+            Some(inner) => inner,
+            None => Err(CommonError::Str("core_topologie.demander_jwt_hebergement Certificat manquant de la reponse"))?
+        };
+        let enveloppe_certificat = middleware.charger_enveloppe(certificat_pem, None, Some(cert_ca_pem)).await?;
+        if ! enveloppe_certificat.verifier_domaines(vec!["Hebergement".to_string()])? {
+            Err(CommonError::Str("core_topologie.demander_jwt_hebergement Certificat de la reponse JWT n'est pas domaine Hebergement"))?
+        }
+        if ! enveloppe_certificat.verifier_exchanges(vec![Securite::L4Secure])? {
+            Err(CommonError::Str("core_topologie.demander_jwt_hebergement Certificat de la reponse JWT n'est pas 4.secure"))?
+        }
+        // Valider le certificat avec le CA qui provient de la fiche
+        if ! middleware.valider_chaine(enveloppe_certificat.as_ref(), Some(enveloppe_ca.as_ref()), true)? {
+            Err(CommonError::Str("core_topologie.demander_jwt_hebergement Certificat reponse invalide"))?
+        }
+
+        // Dechiffrer le message
+        let message_buffer: MessageMilleGrillesBufferDefault = message_owned.try_into()?;
+        let message_ref = message_buffer.parse()?;
+
+        // Conserver le token et URL verifie
+        reponse_jwt = Some(message_ref.dechiffrer(enveloppe_signature.as_ref())?);
+        url_verifie = Some(url_hebergement);
+
+        break
+    }
+
+    let reponse_jwt = match reponse_jwt {
+        Some(inner) => inner,
+        None => Err(CommonError::Str("core_topologie.charger_fiche Aucun token JWT recu"))?
+    };
+    let url_verifie = match url_verifie {
+        Some(inner) => inner,
+        None => Err(CommonError::Str("core_topologie.charger_fiche Aucun URL verifie pour hebergement"))?
+    };
+
+    debug!("Reponse JWT url : {}\nRW:{}\nRO:{}", url_verifie.to_string(), reponse_jwt.jwt_readwrite, reponse_jwt.jwt_readonly);
+
+    // TODO Verifier tokens JWT, recuperer expirations
+    let expiration = Utc::now() + Duration::new(1800, 0);
+
+    // TODO Conserver token dans la base de donnees
+    let collection = middleware.get_collection(NOM_COLLECTION_TOKENS)?;
+    let options = UpdateOptions::builder().upsert(true).build();
+
+    let filtre = doc!{"idmg": idmg, "role": "hebergement_readonly"};
+    let ops = doc!{
+        "$set": {
+            "token": &reponse_jwt.jwt_readonly,
+            "expiration": expiration,
+        },
+        "$setOnInsert": {CHAMP_CREATION: Utc::now()},
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+    collection.update_one(filtre, ops, options.clone()).await?;
+
+    let filtre = doc!{"idmg": idmg, "role": "hebergement_readwrite"};
+    let ops = doc!{
+        "$set": {
+            "token": &reponse_jwt.jwt_readwrite,
+            "expiration": expiration,
+        },
+        "$setOnInsert": {CHAMP_CREATION: Utc::now()},
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+    collection.update_one(filtre, ops, options.clone()).await?;
+
+    Ok((reponse_jwt, url_verifie))
+}
+
+#[derive(Deserialize)]
+struct CommandeAjouterConsignationHebergee {
+    url: String,
+}
+
+struct ReponseCommandeAjouterConsignationHebergee {
+    ok: bool,
+}
+
+async fn commande_ajouter_consignation_hebergee<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+                                                   -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("commande_ajouter_consignation_hebergee : {:?}", &message.type_message);
+
+    // Verifier autorisation
+    if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        error!("commande_ajouter_consignation_hebergee autorisation acces refuse");
+        return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
+    }
+
+    // Valider commande
+    let commande = {
+        let message_ref = message.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        match message_contenu.deserialize::<CommandeAjouterConsignationHebergee>() {
+            Ok(inner) => inner,
+            Err(e) => {
+                error!("commande_ajouter_consignation_hebergee Erreur convertir {:?}", e);
+                return Ok(Some(middleware.reponse_err(2, None, Some("Permission refusee, certificat non autorise"))?))
+            }
+        }
+    };
+
+    let url_connexion = Url::parse(commande.url.as_str())?;
+    let fiche_publique = match charger_fiche(middleware, &url_connexion, None).await {
+        Ok(inner) => match inner {
+            Some(fiche) => fiche,
+            None => {
+                error!("commande_ajouter_consignation_hebergee Erreur acces fiche - non trouvee");
+                return Ok(Some(middleware.reponse_err(Some(3), None, Some("Erreur acces fiche - non trouvee"))?))
+            }
+        },
+        Err(e) => {
+            error!("charger_fiche Erreur chargement fiche : {:?}", e);
+            return Ok(Some(middleware.reponse_err(Some(4), None, Some("Erreur acces fiche"))?))
+        }
+    };
+
+    // Verifier si on a deja une configuration d'hebergement pour cette millegrille
+    let idmg = fiche_publique.idmg.as_str();
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+    let filtre = doc!{"instance_id": idmg};
+    if collection.find_one(filtre, None).await?.is_some() {
+        error!("commande_ajouter_consignation_hebergee Erreur ajout consignation existante sur idmg : {}", idmg);
+        return Ok(Some(middleware.reponse_err(Some(6), None, Some("Une configuration d'hebergement existe deja pour cette millegrille"))?))
+    }
+
+    let (jwt, url_verifie) = match demander_jwt_hebergement(middleware, &fiche_publique, Some(url_connexion.clone())).await {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!("charger_fiche Erreur demande JWT pour hebergement : {:?}", e);
+            return Ok(Some(middleware.reponse_err(Some(5), None, Some("Erreur demande tokens"))?))
+        }
+    };
+
+    // Ajouter la consignation
+    let transaction = TransactionConfigurerConsignation {
+        instance_id: idmg.to_owned(),
+        type_store: Some("heberge".to_string()),
+        url_download: None,
+        url_archives: None,
+        consignation_url: Some(url_verifie.to_string()),
+        sync_intervalle: Some(86400),
+        sync_actif: Some(true),
+        supporte_archives: None,
+        data_chiffre: None,
+        hostname_sftp: None,
+        username_sftp: None,
+        port_sftp: None,
+        remote_path_sftp: None,
+        key_type_sftp: None,
+        s3_access_key_id: None,
+        s3_region: None,
+        s3_endpoint: None,
+        s3_bucket: None,
+        type_backup: None,
+        hostname_sftp_backup: None,
+        port_sftp_backup: None,
+        username_sftp_backup: None,
+        remote_path_sftp_backup: None,
+        key_type_sftp_backup: None,
+        backup_intervalle_secs: None,
+        backup_limit_bytes: None,
+    };
+
+    sauvegarder_traiter_transaction_serializable(
+        middleware, &transaction, gestionnaire,
+        TOPOLOGIE_NOM_DOMAINE, TRANSACTION_CONFIGURER_CONSIGNATION).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
 async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: TransactionValide)
@@ -2134,8 +2530,182 @@ struct AdresseIdmg {
     // derniere_modification: DateEpochSeconds,
 }
 
+async fn charger_fiche<M>(middleware: &M, url: &Url, etag: Option<&String>)
+    -> Result<Option<FichePublique>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("charger_fiche {:?}", url);
+
+    let routage = RoutageMessageAction::builder(DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET, vec![Securite::L1Public])
+        .build();
+
+    let hostname = match url.host_str() {
+        Some(inner) => inner,
+        None => Err(CommonError::Str("charger_fiche Url sans hostname"))?
+    };
+    let mut url_fiche = url.clone();
+    url_fiche.set_path("fiche.json");
+    let requete = json!({
+        "url": url_fiche.as_str(),
+        "headers": {
+            "Cache-Control": "public, max-age=604800",
+            "If-None-Match": etag,
+        }
+    });
+
+    let reponse = {
+        let reponse_http = middleware.transmettre_commande(routage, &requete).await?;
+        debug!("charger_fiche Reponse http : {:?}", reponse_http);
+        match reponse_http {
+            Some(reponse) => match reponse {
+                TypeMessage::Valide(reponse) => Ok(reponse),
+                _ => Err(format!("core_topologie.charger_fiche Mauvais type de message recu en reponse"))
+            },
+            None => Err(format!("core_topologie.charger_fiche Aucun message recu en reponse"))
+        }
+    }?;
+
+    // Mapper message avec la fiche
+    let message_ref = reponse.message.parse()?;
+    debug!("charger_fiche Reponse fiche :\n{}", from_utf8(&reponse.message.buffer)?);
+    let message_contenu = message_ref.contenu()?;
+    let reponse_fiche: ReponseRelaiWeb = message_contenu.deserialize()?;
+
+    // Verifier code reponse HTTP
+    match reponse_fiche.code {
+        Some(c) => {
+            if c == 304 {
+                // Aucun changement sur le serveur
+                // On fait un touch sur l'adresse du hostname verifie et on retourne la fiche
+                let filtre = doc! {"adresse": hostname};
+                let ops = doc! {"$currentDate": {CHAMP_MODIFICATION: true}};
+                let collection_adresses = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
+                collection_adresses.update_one(filtre, ops.clone(), None).await?;
+
+                let filtre = doc! {"adresses": hostname};
+                let collection_fiches = middleware.get_collection_typed::<FichePublique>(NOM_COLLECTION_MILLEGRILLES)?;
+                match collection_fiches.find_one_and_update(filtre, ops, None).await? {
+                    Some(fiche) => {
+                        return Ok(Some(fiche));
+                    },
+                    None => ()
+                }
+            } else if c != 200 {
+                Err(format!("core_topologie.charger_fiche Code reponse http {}", c))?
+            }
+        }
+        None => Err(CommonError::Str("core_topologie.charger_fiche Code reponse http manquant"))?
+    };
+
+    // Verifier presence fiche publique
+    let mut fiche_publique_message: MessageMilleGrillesOwned = match reponse_fiche.json {
+        Some(f) => match serde_json::from_value(f) {
+            Ok(inner) => inner,
+            Err(e) => Err(CommonError::String(format!("core_topologie.resoudre_url Fiche publique invalide : {:?}", e)))?
+        },
+        None => Err(CommonError::Str("core_topologie.resoudre_url Fiche publique manquante"))?
+    };
+
+    // Verifier la fiche
+    fiche_publique_message.verifier_signature()?;
+
+    // TODO : Valider le certificat de la fiche
+
+    debug!("Verification headers : {:?}", reponse_fiche.headers);
+    let etag = match reponse_fiche.headers.as_ref() {
+        Some(e) => match e.get("ETag").cloned() {
+            Some(inner) => Some(ReponseUrlEtag {url: url_fiche.clone(), etag: inner}),
+            None => None
+        },
+        None => None
+    };
+
+    // Sauvegarder et retourner la fiche
+    let fiche_publique: FichePublique = fiche_publique_message.deserialize()?;
+    maj_fiche_publique(middleware, &fiche_publique, etag).await?;
+    Ok(Some(fiche_publique))
+}
+
+struct ReponseUrlEtag {
+    url: Url,
+    etag: String,
+}
+
+async fn maj_fiche_publique<M>(middleware: &M, fiche: &FichePublique, etag: Option<ReponseUrlEtag>) -> Result<(), CommonError>
+    where M: MongoDao
+{
+    let idmg_tiers = fiche.idmg.as_str();
+
+    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES)?;
+    let filtre = doc! {"idmg": &idmg_tiers};
+    let set_json = json!({
+        "applicationsV2": fiche.applications_v2,
+        "chiffrage": fiche.chiffrage,
+        "ca": fiche.ca,
+        "instances": fiche.instances,
+    });
+    let set_bson = convertir_to_bson(set_json)?;
+    let ops = doc! {
+        "$set": set_bson,
+        "$setOnInsert": {
+            "idmg": &idmg_tiers,
+            CHAMP_CREATION: Utc::now(),
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    let options = UpdateOptions::builder()
+        .upsert(true)
+        .build();
+    let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
+    if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
+        error!("maj_fiche_publique Erreur, fiche publique idmg {} n'a pas ete sauvegardee", idmg_tiers);
+    }
+
+    let domaine_etag = match etag.as_ref() {
+        Some(inner) => inner.url.host_str(),
+        None => None
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
+    for (instance_id, instance) in &fiche.instances {
+        if let Some(domaines) = instance.domaines.as_ref() {
+            for domaine in domaines {
+
+                let filtre = doc! { "adresse": domaine };
+
+                let mut set_ops = doc!{"idmg": &idmg_tiers};
+                match domaine_etag {
+                    Some(inner) => match etag.as_ref() {
+                        Some(inner) => {
+                            set_ops.insert("etag", inner.etag.as_str());
+                        },
+                        None => ()
+                    },
+                    None => ()
+                }
+
+                let ops = doc! {
+                    "$set": set_ops,
+                    "$setOnInsert": {
+                        // "adresse": domaine,
+                        CHAMP_CREATION: Utc::now(),
+                    },
+                    "$currentDate": {CHAMP_MODIFICATION: true},
+                };
+                let options = UpdateOptions::builder().upsert(true).build();
+                let resultat_update = collection.update_one(filtre, ops, Some(options)).await?;
+                if resultat_update.modified_count != 1 && resultat_update.upserted_id.is_none() {
+                    error!("resoudre_url Erreur, adresse {} pour idmg {} n'a pas ete sauvegardee", domaine, idmg_tiers);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
-                         -> Result<Option<String>, millegrilles_common_rust::error::Error>
+    -> Result<Option<String>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("resoudre_url {}", hostname);
@@ -2167,7 +2737,7 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     // Mapper message avec la fiche
     let message_ref = reponse.message.parse()?;
     let message_contenu = message_ref.contenu()?;
-    let reponse_fiche: ReponseFichePubliqueTierce = message_contenu.deserialize()?;
+    let reponse_fiche: ReponseRelaiWeb = message_contenu.deserialize()?;
     debug!("Reponse fiche : {:?}", reponse);
 
     // Verifier code reponse HTTP
@@ -2191,10 +2761,16 @@ async fn resoudre_url<M>(middleware: &M, hostname: &str, etag: Option<&String>)
     }?;
 
     // Verifier presence fiche publique
-    let fiche_json_value = match reponse_fiche.json {
-        Some(f) => Ok(f),
-        None => Err(format!("core_topologie.resoudre_url Fiche publique manquante"))
-    }?;
+    let fiche_json_value: FichePublique = match reponse_fiche.json {
+        Some(f) => match serde_json::from_value(f) {
+            Ok(inner) => inner,
+            Err(e) => Err(CommonError::String(format!("core_topologie.resoudre_url Fiche publique invalide : {:?}", e)))?
+        },
+        None => Err(CommonError::Str("core_topologie.resoudre_url Fiche publique manquante"))?
+    };
+
+    maj_fiche_publique(middleware, &fiche_json_value, None).await?;
+
     todo!("fix me")
     // debug!("resoudre_url Message json string : {}", fiche_json_value);
     // let mut fiche_publique_message = MessageSerialise::from_serializable(fiche_json_value)?;
@@ -2366,7 +2942,7 @@ struct ResultatValidationTierce {
 // }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-struct ReponseFichePubliqueTierce {
+struct ReponseRelaiWeb {
     code: Option<u16>,
     verify_ok: Option<bool>,
     headers: Option<HashMap<String, String>>,
@@ -2570,7 +3146,8 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
                 };
 
                 let mut appv2_info = InformationApplicationInstance {
-                    pathname: format!("/{}", &app.application),
+                    // pathname: format!("/{}", &app.application),
+                    pathname,
                     port: None,
                     version: "".to_string()
                 };
@@ -2620,7 +3197,7 @@ async fn generer_contenu_fiche_publique<M>(middleware: &M) -> Result<FichePubliq
     }
 
     Ok(FichePublique {
-        applications: Some(applications),
+        applications: None,   //Some(applications),
         applications_v2,
         chiffrage: Some(chiffrage),
         ca: Some(middleware.ca_pem().into()),
