@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use log::{debug, error, info, trace, warn};
 use millegrilles_common_rust::async_trait::async_trait;
+use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::{Bson, bson, DateTime, doc, to_bson};
 use millegrilles_common_rust::bson::Array;
 use millegrilles_common_rust::bson::Document;
@@ -79,6 +80,7 @@ const REQUETE_APPLICATIONS_TIERS: &str = "applicationsTiers";
 const REQUETE_CONSIGNATION_FICHIERS: &str = "getConsignationFichiers";
 const REQUETE_CONFIGURATION_FICHIERS: &str = "getConfigurationFichiers";
 const REQUETE_GET_CLE_CONFIGURATION: &str = "getCleConfiguration";
+const REQUETE_GET_TOKEN_HEBERGEMENT: &str = "getTokenHebergement";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_INSTANCE: &str = "instance";
@@ -252,6 +254,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         REQUETE_FICHE_MILLEGRILLE,
         REQUETE_APPLICATIONS_TIERS,
         REQUETE_CONSIGNATION_FICHIERS,
+        REQUETE_GET_TOKEN_HEBERGEMENT,
     ];
     for req in requetes_publiques {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAINE_NOM, req), exchange: Securite::L1Public });
@@ -545,6 +548,12 @@ async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<()
         }
     }
 
+    if minutes == 4 {
+        if let Err(e) = rafraichir_fiches_millegrilles(middleware).await {
+            error!("core_topoologie.entretien Erreur rafraichir fiches millegrilles : {:?}", e);
+        }
+    }
+
     Ok(())
 }
 
@@ -577,6 +586,7 @@ async fn consommer_requete<M>(middleware: &M, m: MessageValide)
                         REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
                         REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
                         REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
+                        REQUETE_GET_TOKEN_HEBERGEMENT => requete_get_token_hebergement(middleware, m).await,
                         _ => {
                             error!("Message requete/action non autorisee sur 1.public : '{:?}'. Message dropped.", m.type_message);
                             Ok(None)
@@ -1320,102 +1330,6 @@ struct RequeteRelaiWeb {
     headers: HashMap<String, String>,
     json: Option<Value>,
 }
-
-// async fn charger_fiche<M>(middleware: &M, url: &Url, etag: Option<&String>)
-//     -> Result<Option<FichePublique>, millegrilles_common_rust::error::Error>
-//     where M: ValidateurX509 + GenerateurMessages + MongoDao
-// {
-//     debug!("charger_fiche {:?}", url);
-//
-//     let routage = RoutageMessageAction::builder(DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET, vec![Securite::L1Public])
-//         .build();
-//
-//     let hostname = match url.host_str() {
-//         Some(inner) => inner,
-//         None => Err(CommonError::Str("charger_fiche Url sans hostname"))?
-//     };
-//     let mut url_fiche = url.clone();
-//     url_fiche.set_path("fiche.json");
-//     let requete = json!({
-//         "url": url_fiche.as_str(),
-//         "headers": {
-//             "Cache-Control": "public, max-age=604800",
-//             "If-None-Match": etag,
-//         }
-//     });
-//
-//     let reponse = {
-//         let reponse_http = middleware.transmettre_commande(routage, &requete).await?;
-//         debug!("charger_fiche Reponse http : {:?}", reponse_http);
-//         match reponse_http {
-//             Some(reponse) => match reponse {
-//                 TypeMessage::Valide(reponse) => Ok(reponse),
-//                 _ => Err(format!("core_topologie.charger_fiche Mauvais type de message recu en reponse"))
-//             },
-//             None => Err(format!("core_topologie.charger_fiche Aucun message recu en reponse"))
-//         }
-//     }?;
-//
-//     // Mapper message avec la fiche
-//     let message_ref = reponse.message.parse()?;
-//     debug!("charger_fiche Reponse fiche :\n{}", from_utf8(&reponse.message.buffer)?);
-//     let message_contenu = message_ref.contenu()?;
-//     let reponse_fiche: ReponseFichePubliqueTierce = message_contenu.deserialize()?;
-//
-//     // Verifier code reponse HTTP
-//     match reponse_fiche.code {
-//         Some(c) => {
-//             if c == 304 {
-//                 // Aucun changement sur le serveur
-//                 // On fait un touch sur l'adresse du hostname verifie et on retourne la fiche
-//                 let filtre = doc! {"adresse": hostname};
-//                 let ops = doc! {"$currentDate": {CHAMP_MODIFICATION: true}};
-//                 let collection_adresses = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
-//                 collection_adresses.update_one(filtre, ops.clone(), None).await?;
-//
-//                 let filtre = doc! {"adresses": hostname};
-//                 let collection_fiches = middleware.get_collection_typed::<FichePublique>(NOM_COLLECTION_MILLEGRILLES)?;
-//                 match collection_fiches.find_one_and_update(filtre, ops, None).await? {
-//                     Some(fiche) => {
-//                         return Ok(Some(fiche));
-//                     },
-//                     None => ()
-//                 }
-//             } else if c != 200 {
-//                 Err(format!("core_topologie.charger_fiche Code reponse http {}", c))?
-//             }
-//         }
-//         None => Err(CommonError::Str("core_topologie.charger_fiche Code reponse http manquant"))?
-//     };
-//
-//     // Verifier presence fiche publique
-//     let mut fiche_publique_message: MessageMilleGrillesOwned = match reponse_fiche.json {
-//         Some(f) => match serde_json::from_value(f) {
-//             Ok(inner) => inner,
-//             Err(e) => Err(CommonError::String(format!("core_topologie.resoudre_url Fiche publique invalide : {:?}", e)))?
-//         },
-//         None => Err(CommonError::Str("core_topologie.resoudre_url Fiche publique manquante"))?
-//     };
-//
-//     // Verifier la fiche
-//     fiche_publique_message.verifier_signature()?;
-//
-//     // TODO : Valider le certificat de la fiche
-//
-//     debug!("Verification headers : {:?}", reponse_fiche.headers);
-//     let etag = match reponse_fiche.headers.as_ref() {
-//         Some(e) => match e.get("ETag").cloned() {
-//             Some(inner) => Some(ReponseUrlEtag {url: url_fiche.clone(), etag: inner}),
-//             None => None
-//         },
-//         None => None
-//     };
-//
-//     // Sauvegarder et retourner la fiche
-//     let fiche_publique: FichePublique = fiche_publique_message.deserialize()?;
-//     maj_fiche_publique(middleware, &fiche_publique, etag).await?;
-//     Ok(Some(fiche_publique))
-// }
 
 async fn demander_jwt_hebergement<M>(middleware: &M, fiche: &FichePublique, url: Option<Url>)
     -> Result<(JwtHebergement, Url), CommonError>
@@ -3785,6 +3699,111 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
     Ok(None)  // Aucune reponse a transmettre, c'est le maitre des cles qui va repondre
 }
 
+#[derive(Deserialize)]
+struct RequeteGetTokenHebergement {
+    idmg: String,
+    readwrite: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ReponseGetTokenHebergement {
+    jwt: String
+}
+
+#[derive(Deserialize)]
+struct HebergementTokenRow {
+    idmg: String,
+    role: String,
+    token: String,
+    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    expiration: chrono::DateTime<Utc>,
+}
+
+async fn requete_get_token_hebergement<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    debug!("requete_get_token_hebergement Message :\n{}", from_utf8(&m.message.buffer)?);
+    let message_ref = m.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteGetTokenHebergement = message_contenu.deserialize()?;
+
+    if !m.certificat.verifier_roles_string(vec![
+        "collections".to_string(),
+        "fichiers".to_string(),
+        "media".to_string(),
+        "stream".to_string(),
+        "backup".to_string(),
+    ])? {
+        return Ok(Some(middleware.reponse_err(Some(1), None, Some("Acces refuse. Le certificat de la requete doit etre un des roles : collections, fichiers, media, backup, stream"))?))
+    }
+    let supporte_readwrite = m.certificat.verifier_exchanges(vec![Securite::L2Prive, Securite::L3Protege, Securite::L4Secure])?;
+    if !supporte_readwrite && !m.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        return Ok(Some(middleware.reponse_err(Some(2), None, Some("Acces refuse. Le certificat de la requete doit etre systeme (au moins securite 1.public)"))?))
+    }
+
+    let requete_readwrite = requete.readwrite.unwrap_or_else(|| false);
+    if requete_readwrite && !supporte_readwrite {
+        return Ok(Some(middleware.reponse_err(Some(3), None, Some("Acces refuse. Le certificat ne supporte pas l'acces read-write"))?))
+    }
+
+    let idmg = requete.idmg;
+    let filtre = match requete_readwrite {
+        true => doc!{"idmg": &idmg, "role": "hebergement_readwrite"},
+        false => doc!{"idmg": &idmg, "role": "hebergement_readonly"},
+    };
+    let collection = middleware.get_collection_typed::<HebergementTokenRow>(NOM_COLLECTION_TOKENS)?;
+    let token_row_opt = collection.find_one(filtre, None).await?;
+
+    let now = Utc::now();
+    let reset_tokens = match token_row_opt.as_ref() {
+        Some(inner) => {
+            if inner.expiration < now {
+                true
+            } else {
+                false
+            }
+        },
+        None => true
+    };
+
+    let token = match reset_tokens {
+        true => {
+            // Charger la fiche et demander de nouveaux tokens
+            let collection = middleware.get_collection_typed::<FichePublique>(NOM_COLLECTION_MILLEGRILLES)?;
+            let filtre = doc!{"idmg": &idmg};
+            let fiche_publique = match collection.find_one(filtre, None).await? {
+                Some(inner) => inner,
+                None => {
+                    error!("requete_get_token_hebergement Erreur ajout consignation existante sur idmg : {}", idmg);
+                    return Ok(Some(middleware.reponse_err(Some(4), None, Some("Une configuration d'hebergement existe deja pour cette millegrille"))?))
+                }
+            };
+
+            let (jwt, url_verifie) = match demander_jwt_hebergement(middleware, &fiche_publique, None).await {
+                Ok(inner) => inner,
+                Err(e) => {
+                    error!("requete_get_token_hebergement Erreur demande JWT pour hebergement : {:?}", e);
+                    return Ok(Some(middleware.reponse_err(Some(5), None, Some("Erreur demande tokens"))?))
+                }
+            };
+
+            match requete_readwrite {
+                true => jwt.jwt_readwrite,
+                false => jwt.jwt_readonly
+            }
+        },
+        false => {
+            let token_row = token_row_opt.expect("token_row");
+            token_row.token
+        }
+    };
+
+    let reponse = ReponseGetTokenHebergement {jwt: token};
+
+    Ok(Some(middleware.build_reponse_chiffree(reponse, m.certificat.as_ref())?.0))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ReponseConsignationSatellite {
     pub instance_id: String,
@@ -4037,6 +4056,30 @@ async fn verifier_instances_horsligne<M>(middleware: &M)
         ).await?;
     }
 
+    Ok(())
+}
+
+async fn rafraichir_fiches_millegrilles<M>(middleware: &M)
+    -> Result<(), millegrilles_common_rust::error::Error>
+    where M: GenerateurMessages + MongoDao
+{
+    debug!("rafraichir_fiches_millegrilles Debut");
+
+    let filtre = doc!{
+        "$or": [
+            {"local": false},
+            {"local": {"$exists": false}}
+        ]
+    };
+    let collection = middleware.get_collection_typed::<FichePublique>(NOM_COLLECTION_MILLEGRILLES)?;
+    let mut curseur = collection.find(filtre, None).await?;
+
+    while curseur.advance().await? {
+        let row = curseur.deserialize_current()?;
+        todo!("fix rafraichir fiche")
+    }
+
+    debug!("rafraichir_fiches_millegrilles Fin");
     Ok(())
 }
 
