@@ -89,6 +89,7 @@ const TRANSACTION_SUPPRIMER_INSTANCE: &str = "supprimerInstance";
 const TRANSACTION_SET_FICHIERS_PRIMAIRE: &str = "setFichiersPrimaire";
 const TRANSACTION_CONFIGURER_CONSIGNATION: &str = "configurerConsignation";
 const TRANSACTION_SET_CONSIGNATION_INSTANCE: &str = "setConsignationInstance";
+const TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE: &str = "supprimerConsignation";
 
 const COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE: &str = "ajouterConsignationHebergee";
 
@@ -96,6 +97,7 @@ const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
 const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 const EVENEMENT_INSTANCE_SUPPRIMEE: &str = "instanceSupprimee";
+const EVENEMENT_INSTANCE_CONSIGNATION_SUPPRIMEE: &str = "instanceConsignationSupprimee";
 const EVENEMENT_APPLICATION_DEMARREE: &str = "applicationDemarree";
 const EVENEMENT_APPLICATION_ARRETEE: &str = "applicationArretee";
 const EVENEMENT_MODIFICATION_CONSIGNATION: &str = "modificationConsignation";
@@ -105,6 +107,7 @@ const INDEX_NOEUDS: &str = "noeuds";
 const INDEX_IDMG: &str = "idmg";
 const INDEX_ADRESSES: &str = "adresses";
 const INDEX_ADRESSE: &str = "adresse";
+const INDEX_INSTANCE_ID: &str = "instance_id";
 
 const CHAMP_DOMAINE: &str = "domaine";
 const CHAMP_INSTANCE_ID: &str = "instance_id";
@@ -267,6 +270,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_CONFIGURER_CONSIGNATION,
         TRANSACTION_SET_FICHIERS_PRIMAIRE,
         TRANSACTION_SET_CONSIGNATION_INSTANCE,
+        TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE,
 
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE,
     ];
@@ -305,31 +309,32 @@ pub fn preparer_queues() -> Vec<QueueType> {
         }
     ));
 
-    let transactions_liste = vec![
-        TRANSACTION_MONITOR,
-        TRANSACTION_SUPPRIMER_INSTANCE,
-        TRANSACTION_SET_FICHIERS_PRIMAIRE,
-        TRANSACTION_CONFIGURER_CONSIGNATION,
-        TRANSACTION_SET_CONSIGNATION_INSTANCE,
-    ];
-    let mut rk_transactions = Vec::new();
-    for t in transactions_liste {
-        rk_transactions.push(ConfigRoutingExchange {
-            routing_key: format!("transaction.{}.{}", DOMAINE_NOM, t).into(),
-            exchange: Securite::L4Secure,
-        });
-    }
+    // let transactions_liste = vec![
+    //     TRANSACTION_MONITOR,
+    //     TRANSACTION_SUPPRIMER_INSTANCE,
+    //     TRANSACTION_SET_FICHIERS_PRIMAIRE,
+    //     TRANSACTION_CONFIGURER_CONSIGNATION,
+    //     TRANSACTION_SET_CONSIGNATION_INSTANCE,
+    //     TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE,
+    // ];
+    // let mut rk_transactions = Vec::new();
+    // for t in transactions_liste {
+    //     rk_transactions.push(ConfigRoutingExchange {
+    //         routing_key: format!("transaction.{}.{}", DOMAINE_NOM, t).into(),
+    //         exchange: Securite::L4Secure,
+    //     });
+    // }
 
     // Queue de transactions
-    queues.push(QueueType::ExchangeQueue(
-        ConfigQueue {
-            nom_queue: NOM_Q_TRANSACTIONS.into(),
-            routing_keys: rk_transactions,
-            ttl: None,
-            durable: true,
-            autodelete: false,
-        }
-    ));
+    // queues.push(QueueType::ExchangeQueue(
+    //     ConfigQueue {
+    //         nom_queue: NOM_Q_TRANSACTIONS.into(),
+    //         routing_keys: rk_transactions,
+    //         ttl: None,
+    //         durable: true,
+    //         autodelete: false,
+    //     }
+    // ));
 
     // Queue de triggers pour Pki
     queues.push(QueueType::Triggers(DOMAINE_NOM.into(), Securite::L3Protege));
@@ -464,6 +469,21 @@ async fn preparer_index_mongodb_custom<M>(middleware: &M) -> Result<(), millegri
         NOM_COLLECTION_MILLEGRILLES_ADRESSES,
         champs_index_mg_adresses,
         Some(options_unique_mg_adresses),
+    ).await?;
+
+    // Index table fichiers
+    let options_unique_fichiers = IndexOptions {
+        nom_index: Some(String::from(INDEX_INSTANCE_ID)),
+        unique: true,
+    };
+    let champs_index_fichiers = vec!(
+        ChampIndex { nom_champ: String::from(CHAMP_INSTANCE_ID), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_FICHIERS,
+        champs_index_fichiers,
+        Some(options_unique_fichiers),
     ).await?;
 
     Ok(())
@@ -680,6 +700,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &
         TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire).await,
         TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
+        TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_commande_supprimer_consignation_instance(middleware, m, gestionnaire).await,
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
         //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
         //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
@@ -719,7 +740,7 @@ async fn consommer_transaction<M>(gestionnaire: &GestionnaireDomaineTopologie, m
     match action.as_str() {
         TRANSACTION_DOMAINE | TRANSACTION_MONITOR | TRANSACTION_SUPPRIMER_INSTANCE |
         TRANSACTION_SET_FICHIERS_PRIMAIRE | TRANSACTION_CONFIGURER_CONSIGNATION |
-        TRANSACTION_SET_CONSIGNATION_INSTANCE => {
+        TRANSACTION_SET_CONSIGNATION_INSTANCE | TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => {
             // sauvegarder_transaction_recue(middleware, m, NOM_COLLECTION_TRANSACTIONS).await?;
             // Ok(None)
             Ok(sauvegarder_traiter_transaction(middleware, m, gestionnaire).await?)
@@ -820,6 +841,7 @@ async fn aiguillage_transaction<M, T>(middleware: &M, transaction: T) -> Result<
         TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
         TRANSACTION_SET_CONSIGNATION_INSTANCE => transaction_set_consignation_instance(middleware, transaction).await,
+        TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_transaction_supprimer_consignation(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
@@ -1057,6 +1079,7 @@ async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValide, gestionn
         "archive": event.archive,
         "orphelin": event.orphelin,
         "manquant": event.manquant,
+        "supprime": false,
     };
 
     let mut ops = doc! {
@@ -1110,6 +1133,32 @@ async fn traiter_evenement_application<M>(middleware: &M, m: MessageValide)
     Ok(None)
 }
 
+async fn traiter_transaction_supprimer_consignation<M>(middleware: &M, transaction: TransactionValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: GenerateurMessages + MongoDao
+{
+    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+    let mut doc_transaction: TransactionSupprimerConsignationInstance = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+        Ok(d) => d,
+        Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_consignation Erreur conversion transaction monitor : {:?}", e))?
+    };
+
+    let instance_id = doc_transaction.instance_id;
+
+    let filtre = doc! {CHAMP_INSTANCE_ID: &instance_id};
+    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+    let ops = doc!{
+        "$set": {"supprime": true},
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+    match collection.update_one(filtre, ops, None).await {
+        Ok(_) => (),
+        Err(e) => Err(format!("traiter_transaction_supprimer_consignation Erreur maj transaction topologie domaine : {:?}", e))?
+    }
+
+    let reponse = middleware.reponse_ok(None, None)?;
+    Ok(Some(reponse))
+}
 
 async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -1315,6 +1364,49 @@ async fn traiter_commande_set_consignation_instance<M>(middleware: &M, message: 
 
     // Sauvegarder la transaction, marquer complete et repondre
     let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
+    Ok(reponse)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct TransactionSupprimerConsignationInstance {
+    instance_id: String,
+}
+
+async fn traiter_commande_supprimer_consignation_instance<M>(
+    middleware: &M, message: MessageValide, gestionnaire: &GestionnaireDomaineTopologie
+)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("traiter_commande_supprimer_consignation_instance : {:?}", &message.type_message);
+
+    // Verifier autorisation
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        debug!("traiter_commande_supprimer_consignation_instance autorisation acces refuse");
+        return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
+    }
+
+    // Valider commande
+    let instance_id = {
+        let message_ref = message.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        let contenu = match message_contenu.deserialize::<TransactionSetConsignationInstance>() {
+            Ok(inner) => inner,
+            Err(e) => Err(format!("traiter_commande_supprimer_consignation_instance Erreur convertir {:?}", e))?
+        };
+        contenu.instance_id
+    };
+
+    // Sauvegarder la transaction, marquer complete et repondre
+    let reponse = sauvegarder_traiter_transaction(middleware, message, gestionnaire).await?;
+
+    // Emettre evenement d'instance consignation supprimee
+    let evenement_supprimee = json!({"instance_id": &instance_id});
+    let routage = RoutageMessageAction::builder(
+        DOMAINE_NOM, EVENEMENT_INSTANCE_CONSIGNATION_SUPPRIMEE, vec![Securite::L2Prive])
+        .build();
+    middleware.emettre_evenement(routage, &evenement_supprimee).await?;
+
     Ok(reponse)
 }
 
@@ -1636,7 +1728,7 @@ async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: Trans
     // Set flag primaire sur la bonne instance
     let filtre = doc! {"instance_id": &transaction.instance_id};
     let ops = doc!{
-        "$set": {"primaire": true},
+        "$set": {"primaire": true, "supprime": false},
         "$currentDate": {CHAMP_MODIFICATION: true},
     };
     if let Err(e) = collection.update_one(filtre, ops, None).await {
@@ -1757,6 +1849,7 @@ async fn transaction_configurer_consignation<M>(middleware: &M, transaction: Tra
         "key_type_sftp_backup": transaction.key_type_sftp_backup,
         "backup_intervalle_secs": transaction.backup_intervalle_secs,
         "backup_limit_bytes": transaction.backup_limit_bytes,
+        "supprime": false,
     };
 
     let ops = doc! {
@@ -1820,7 +1913,8 @@ async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: T
 
     let filtre = doc! { CHAMP_INSTANCE_ID: &transaction.instance_id };
     let set_ops = doc! {
-        CHAMP_CONSIGNATION_ID: transaction.consignation_id.as_ref()
+        CHAMP_CONSIGNATION_ID: transaction.consignation_id.as_ref(),
+        "supprime": false,
     };
     let ops = doc! {
         "$set": set_ops,
@@ -3485,6 +3579,7 @@ async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide
         "key_type_sftp_backup": 1,
         "backup_intervalle_secs": 1,
         "backup_limit_bytes": 1,
+        "supprime": 1,
     };
 
     if let Some(true) = requete.stats {
@@ -3880,6 +3975,8 @@ pub struct ReponseConsignationSatellite {
     #[serde(rename = "_mg-derniere-modification", skip_serializing_if = "Option::is_none", serialize_with="optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
     #[serde(default)]
     pub derniere_modification: Option<chrono::DateTime<Utc>>,
+
+    pub supprime: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
