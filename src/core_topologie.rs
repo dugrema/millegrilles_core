@@ -70,6 +70,8 @@ const NOM_Q_VOLATILS: &str = "CoreTopologie/volatils";
 const NOM_Q_TRIGGERS: &str = "CoreTopologie/triggers";
 
 const REQUETE_APPLICATIONS_DEPLOYEES: &str = "listeApplicationsDeployees";
+const REQUETE_USERAPPS_DEPLOYEES: &str = "listeUserappsDeployees";
+
 const REQUETE_LISTE_DOMAINES: &str = "listeDomaines";
 const REQUETE_LISTE_NOEUDS: &str = "listeNoeuds";
 // const REQUETE_INFO_DOMAINE: &str = "infoDomaine";
@@ -241,6 +243,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
     let requetes_privees = vec![
         REQUETE_LISTE_DOMAINES,
         REQUETE_APPLICATIONS_DEPLOYEES,
+        REQUETE_USERAPPS_DEPLOYEES,
         // REQUETE_INFO_NOEUD,
         REQUETE_RESOLVE_IDMG,
         REQUETE_FICHE_MILLEGRILLE,
@@ -581,7 +584,7 @@ async fn consommer_requete<M>(middleware: &M, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
-    debug!("Consommer requete : {:?}", &m.message);
+    debug!("Consommer requete : {:?}", &m.type_message);
 
     let (domaine, action, mut exchanges) = match &m.type_message {
         TypeMessageOut::Requete(r) => {
@@ -625,6 +628,7 @@ async fn consommer_requete<M>(middleware: &M, m: MessageValide)
                     match action.as_str() {
                         REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
                         REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, m).await,
+                        REQUETE_USERAPPS_DEPLOYEES => liste_userapps_deployees(middleware, m).await,
                         REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, m).await,
                         REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
                         REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
@@ -673,7 +677,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &
                                -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: Middleware + 'static
 {
-    debug!("Consommer commande : {:?}", &m.message);
+    debug!("Consommer commande : {:?}", &m.type_message);
 
     let (domaine, action) = match &m.type_message {
         TypeMessageOut::Commande(r) => {
@@ -938,6 +942,16 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionna
     Ok(None)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DetailApplications {
+    application: Option<String>,
+    name_property: Option<String>,
+    securite: Option<String>,
+    supporte_usagers: Option<bool>,
+    url: Option<String>,
+    links: Option<Vec<Value>>
+}
+
 async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -985,7 +999,7 @@ async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValide, gestionna
         }
     }
 
-    debug!("Applications noeud : {:?}", &applications);
+    // debug!("Applications noeud : {:?}", &applications);
 
     // let mut set_ops = m.message.get_msg().map_to_bson()?;
     // filtrer_doc_id(&mut set_ops);
@@ -2049,6 +2063,14 @@ struct PresenceDomaine {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+struct WebAppLink {
+    name: String,
+    labels: HashMap<String, Value>,
+    securite: String,
+    url: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct PresenceMonitor {
     #[serde(serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
     #[serde(default)]
@@ -2057,7 +2079,7 @@ struct PresenceMonitor {
     domaines: Option<Vec<String>>,
     instance_id: String,
     services: Option<HashMap<String, InfoService>>,
-    applications_configurees: Option<Vec<Value>>,
+    applications_configurees: Option<Vec<ApplicationConfiguree>>,
     containers: Option<HashMap<String, Value>>,
     disk: Option<Vec<Value>>,
     fqdn_detecte: Option<String>,
@@ -2069,6 +2091,7 @@ struct PresenceMonitor {
     system_battery: Option<Value>,
     system_fans: Option<Value>,
     system_temperature: Option<HashMap<String, Value>>,
+    webapps: Option<Vec<WebAppLink>>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2103,6 +2126,8 @@ struct ReponseApplicationDeployee {
     name_property: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     supporte_usagers: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    labels: Option<HashMap<String, Value>>,
 }
 
 #[derive(Serialize)]
@@ -2190,6 +2215,7 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
                             onion: onion.to_owned(),
                             name_property: None,
                             supporte_usagers: None,
+                            labels: None,
                         };
 
                         if let Some(p) = app.name_property.as_ref() {
@@ -2219,6 +2245,105 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
     Ok(Some(reponse))
 }
 
+async fn liste_userapps_deployees<M>(middleware: &M, message: MessageValide)
+                                     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    // Recuperer instance_id
+    let certificat = message.certificat.as_ref();
+    let instance_id = certificat.get_common_name()?;
+    let extensions = certificat.extensions()?;
+    let exchanges = extensions.exchanges.as_ref();
+    debug!("liste_applications_deployees Instance_id {}, exchanges : {:?}", instance_id, exchanges);
+
+    let niveau_securite = if certificat.verifier_exchanges(vec![Securite::L3Protege])? {
+        Securite::L3Protege
+    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        Securite::L3Protege
+    } else if certificat.verifier_exchanges(vec![Securite::L2Prive])? {
+        Securite::L2Prive
+    } else if certificat.verifier_roles(vec![RolesCertificats::ComptePrive])? {
+        Securite::L2Prive
+    } else {
+        warn!("liste_applications_deployees Acces refuse, aucunes conditions d'acces du certificat pour liste apps");
+        // let reponse = json!({"ok": false, "err": "Acces refuse"});
+        // return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+        return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
+    };
+    debug!("liste_applications_deployees Niveau de securite : {:?}", niveau_securite);
+
+    // Retour de toutes les applications (maitrecomptes est toujours sur exchange 2.prive)
+    let sec_cascade = securite_cascade_public(niveau_securite);
+
+    let mut curseur = {
+        let filtre = doc! {};
+        let projection = doc! {"instance_id": true, "domaine": true, "securite": true, "applications": true, "onion": true, "webapps": true};
+        let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
+        let ops = FindOptions::builder().projection(Some(projection)).build();
+        match collection.find(filtre, Some(ops)).await {
+            Ok(c) => c,
+            Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur chargement applications : {:?}", e))?
+        }
+    };
+
+    // Extraire liste d'applications
+    let mut resultats = Vec::new();
+    while let Some(row) = curseur.next().await {
+        let info_monitor = row?;
+        let instance_id = info_monitor.instance_id.as_str();
+
+        if let Some(applications) = info_monitor.webapps {
+            for app in applications {
+                let securite = match securite_enum(app.securite.as_str()) {
+                    Ok(s) => s,
+                    Err(e) => continue   // Skip
+                };
+
+                debug!("liste_applications_deployees App {} securite {:?}", app.name, securite);
+
+                // Verifier si le demandeur a le niveau de securite approprie
+                if sec_cascade.contains(&securite) {
+                    // Preparer la valeur a exporter pour les applications
+                    let onion = match info_monitor.onion.as_ref() {
+                        Some(onion) => {
+                            let mut url_onion = Url::parse(app.url.as_str())?;
+                            url_onion.set_host(Some(onion.as_str()));
+                            Some(url_onion.as_str().to_owned())
+                        },
+                        None => None
+                    };
+
+                    let info_app = ReponseApplicationDeployee {
+                        instance_id: instance_id.to_owned(),
+                        application: app.name.clone(),
+                        securite: securite.get_str().to_owned(),
+                        url: Some(app.url.clone()),
+                        onion: onion.to_owned(),
+                        name_property: Some(app.name.clone()),
+                        supporte_usagers: Some(true),
+                        labels: Some(app.labels),
+                    };
+
+                    resultats.push(info_app);
+                } else {
+                    debug!("liste_applications_deployees App {} refuse, securite insuffisante", app.name);
+                }
+            }
+        }
+    }
+
+    let liste = ReponseListeApplicationsDeployees {
+        ok: true,
+        resultats,
+    };
+
+    let reponse = match middleware.build_reponse(liste) {
+        Ok(m) => m.0,
+        Err(e) => Err(format!("core_topologie.liste_applications_deployees  Erreur preparation reponse applications : {:?}", e))?
+    };
+    Ok(Some(reponse))
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct InformationMonitor {
     domaines: Option<Vec<String>>,
@@ -2230,6 +2355,7 @@ struct InformationMonitor {
     #[serde(serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
     #[serde(default)]
     date_presence: Option<chrono::DateTime<Utc>>,
+    webapps: Option<Vec<WebAppLink>>,
 }
 
 impl InformationMonitor {
@@ -2331,7 +2457,7 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValide)
                            -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    debug!("liste_domaines {:?}", message);
+    debug!("liste_domaines {:?}", message.type_message);
     if !message.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_2_PRIVE), String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE)))? {
         if message.certificat.get_user_id()?.is_some() && !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
             let refus = json!({"ok": false, "err": "Acces refuse"});
@@ -3711,7 +3837,7 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: GenerateurMessages + MongoDao
 {
-    debug!("requete_get_cle_configuration Message : {:?}", &m.message);
+    debug!("requete_get_cle_configuration Message : {:?}", &m.type_message);
     let message_ref = m.message.parse()?;
     let message_contenu = message_ref.contenu()?;
     let requete: ParametresGetCleConfiguration = message_contenu.deserialize()?;

@@ -340,7 +340,7 @@ async fn consommer_requete<M>(middleware: &M, message: MessageValide)
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer requete : {:?}", &message.message);
+    debug!("Consommer requete : {:?}", &message.type_message);
 
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
     let (domaine, action) = match &message.type_message {
@@ -375,7 +375,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: Middleware + 'static
 {
-    debug!("Consommer commande : {:?}", &m.message);
+    debug!("Consommer commande : {:?}", &m.type_message);
 
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
     match m.certificat.verifier_exchanges_string(vec!(String::from(SECURITE_3_PROTEGE), String::from(SECURITE_4_SECURE)))? {
@@ -432,7 +432,7 @@ async fn consommer_transaction<M>(_middleware: &M, m: MessageValide)
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
-    debug!("Consommer transaction : {:?}", &m.message);
+    debug!("Consommer commande : {:?}", &m.type_message);
 
     let action = match &m.type_message {
         TypeMessageOut::Transaction(r) => {
@@ -462,7 +462,7 @@ async fn consommer_evenement<M>(middleware: &M, m: MessageValide, gestionnaire: 
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    debug!("Consommer evenement : {:?}", &m.message);
+    debug!("Consommer evenement : {:?}", &m.type_message);
 
     let action = match &m.type_message {
         TypeMessageOut::Transaction(r) => {
@@ -649,7 +649,8 @@ struct Catalogue {
     version: String,
     description: Option<HashMap<String, String>>,
     dependances: Option<Vec<Value>>,
-    nginx: Option<HashMap<String, Value>>
+    nginx: Option<HashMap<String, Value>>,
+    web: Option<HashMap<String, Value>>,
 }
 
 async fn maj_catalogue<M>(middleware: &M, transaction: TransactionValide)
