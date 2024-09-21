@@ -2593,8 +2593,8 @@ checksum = "6c8640c5d730cb13ebd907d8d04b52f55ac9a2eec55b440c8892f40d56c76c1d"
 
 [[package]]
 name = "millegrilles_common_rust"
-version = "2024.5.1"
-source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=2024.5#c053b2904ae6905d4037e6dfadc04154dd85fba0"
+version = "2024.7.0"
+source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=master#df74a1415f9bc4b241474d406b18831719361e7e"
 dependencies = [
  "async-compression",
  "async-recursion",
@@ -2645,7 +2645,7 @@ dependencies = [
 
 [[package]]
 name = "millegrilles_core"
-version = "2024.5.0"
+version = "2024.7.0"
 dependencies = [
  "env_logger 0.9.3",
  "log",
@@ -2657,7 +2657,7 @@ dependencies = [
 [[package]]
 name = "millegrilles_cryptographie"
 version = "2024.5.0"
-source = "git+https://github.com/dugrema/millegrilles_cryptographie.git?branch=2024.5#54534f187bbc5d72d5338510d1e89c2be7aad612"
+source = "git+https://github.com/dugrema/millegrilles_cryptographie.git?tag=2024.6-release#c6233a0baa16124c061b41442a582f0af4cbea70"
 dependencies = [
  "base64 0.22.1",
  "blake2",

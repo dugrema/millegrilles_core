@@ -3888,7 +3888,8 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
         domaine: DOMAINE_NOM.to_string(),
         liste_hachage_bytes: None,
         cle_ids: Some(vec![cle_id]),
-        certificat_rechiffrage: Some(pem_rechiffrage)
+        certificat_rechiffrage: Some(pem_rechiffrage),
+        inclure_signature: None,
     };
 
     let (reply_to, correlation_id) = match &m.type_message {
