@@ -83,6 +83,7 @@ const REQUETE_CONSIGNATION_FICHIERS: &str = "getConsignationFichiers";
 const REQUETE_CONFIGURATION_FICHIERS: &str = "getConfigurationFichiers";
 const REQUETE_GET_CLE_CONFIGURATION: &str = "getCleConfiguration";
 const REQUETE_GET_TOKEN_HEBERGEMENT: &str = "getTokenHebergement";
+const REQUETE_GET_CLEID_BACKUP_DOMAINE: &str = "getCleidBackupDomaine";
 
 const TRANSACTION_DOMAINE: &str = "domaine";
 const TRANSACTION_INSTANCE: &str = "instance";
@@ -94,6 +95,7 @@ const TRANSACTION_SET_CONSIGNATION_INSTANCE: &str = "setConsignationInstance";
 const TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE: &str = "supprimerConsignation";
 
 const COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE: &str = "ajouterConsignationHebergee";
+const COMMANDE_SET_CLEID_BACKUP_DOMAINE: &str = "setCleidBackupDomaine";
 
 const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
@@ -232,6 +234,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         REQUETE_LISTE_DOMAINES,
         REQUETE_LISTE_NOEUDS,
         REQUETE_CONFIGURATION_FICHIERS,
+        REQUETE_GET_CLEID_BACKUP_DOMAINE,
         // REQUETE_INFO_DOMAINE,
         // REQUETE_INFO_NOEUD,
     ];
@@ -276,6 +279,7 @@ pub fn preparer_queues() -> Vec<QueueType> {
         TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE,
 
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE,
+        COMMANDE_SET_CLEID_BACKUP_DOMAINE,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAINE_NOM, commande), exchange: Securite::L3Protege });
@@ -654,6 +658,7 @@ async fn consommer_requete<M>(middleware: &M, m: MessageValide)
                         REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, m).await,
                         REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, m).await,
                         REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
+                        REQUETE_GET_CLEID_BACKUP_DOMAINE => requete_get_cleid_backup_domaine(middleware, m).await,
                         _ => {
                             error!("Message requete/action inconnue : '{}'. Message dropped.", action);
                             Ok(None)
@@ -706,6 +711,7 @@ async fn consommer_commande<M>(middleware: &M, m: MessageValide, gestionnaire: &
         TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
         TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_commande_supprimer_consignation_instance(middleware, m, gestionnaire).await,
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
+        COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire).await,
         //     COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
         //     COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
         //
@@ -1712,6 +1718,61 @@ async fn commande_ajouter_consignation_hebergee<M>(middleware: &M, message: Mess
     sauvegarder_traiter_transaction_serializable(
         middleware, &transaction, gestionnaire,
         TOPOLOGIE_NOM_DOMAINE, TRANSACTION_CONFIGURER_CONSIGNATION).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+#[derive(Deserialize)]
+struct TransactionSetCleidBackupDomaine {
+    domaine: String,
+    cle_id: Option<String>,
+    reset: Option<bool>,
+}
+
+async fn commande_set_cleid_backup_domaine<M>(middleware: &M, m: MessageValide, gestionnaire: &GestionnaireDomaineTopologie)
+                                              -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("commande_set_cleid_backup_domaine Message : {:?}", &m.type_message);
+    let message_ref = m.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: TransactionSetCleidBackupDomaine = message_contenu.deserialize()?;
+
+    let now = Utc::now();
+    let certificat_subject = m.certificat.subject()?;
+    let instance_id = match certificat_subject.get("commonName") {
+        Some(inner) => inner.as_str(),
+        None => Err("Certificat sans commonName")?
+    };
+
+    let domaine = commande.domaine;
+
+    if !m.certificat.verifier_exchanges(vec![Securite::L3Protege])? {
+        return Ok(Some(middleware.reponse_err(None, Some("Certificat doit avoir la securite 3.protege"), None)?))
+    }
+    if !m.certificat.verifier_domaines(vec![domaine.clone()])? {
+        return Ok(Some(middleware.reponse_err(None, Some("Certificat doit etre de meme domaine que le domaine demande"), None)?))
+    }
+
+    let filtre = doc!{"domaine": &domaine};
+    let collection = middleware.get_collection_typed::<RowCoreTopologieDomaines>(NOM_COLLECTION_DOMAINES)?;
+    let cle_id_backup = match commande.reset {
+        Some(true) => None,
+        _ => match commande.cle_id {
+            Some(inner) => Some(inner),
+            None => Err("cle_id manquant de la commande")?
+        }
+    };
+    let ops = doc! {
+        "$setOnInsert": {"instance_id": instance_id, CHAMP_CREATION: now, "dirty": true, "reclame_fuuids": false},
+        "$set": { "cle_id_backup": cle_id_backup },
+        "$currentDate": { CHAMP_MODIFICATION: true }
+    };
+    let options = UpdateOptions::builder().upsert(true).build();
+    let result = collection.update_one(filtre, ops, options).await?;
+    if result.modified_count != 1 {
+        Err(format!("Erreur mise a jour de cle_id de backup du domaine {}, aucuns changements apportes a la DB", domaine))?
+    }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
@@ -3919,6 +3980,62 @@ async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
     middleware.transmettre_requete(routage, &permission).await?;
 
     Ok(None)  // Aucune reponse a transmettre, c'est le maitre des cles qui va repondre
+}
+
+#[derive(Deserialize)]
+struct RequeteGetCleidBackupDomaine {
+    domaine: String,
+}
+
+#[derive(Deserialize)]
+struct RowCoreTopologieDomaines {
+    domaine: String,
+    instance_id: String,
+    dirty: Option<bool>,
+    reclame_fuuids: Option<bool>,
+    cle_id_backup: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ReponseGetCleidBackupDomaine {
+    ok: bool,
+    cle_id: String,
+}
+
+async fn requete_get_cleid_backup_domaine<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: GenerateurMessages + MongoDao
+{
+    debug!("requete_get_cleid_backup_domaine Message : {:?}", &m.type_message);
+    let message_ref = m.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteGetCleidBackupDomaine = message_contenu.deserialize()?;
+
+    let domaine = requete.domaine;
+
+    if !m.certificat.verifier_exchanges(vec![Securite::L3Protege])? {
+        return Ok(Some(middleware.reponse_err(None, Some("Certificat doit avoir la securite 3.protege"), None)?))
+    }
+    if !m.certificat.verifier_domaines(vec![domaine.clone()])? {
+        return Ok(Some(middleware.reponse_err(None, Some("Certificat doit etre de meme domaine que le domaine demande"), None)?))
+    }
+
+    let filtre = doc!{"domaine": &domaine};
+    let collection = middleware.get_collection_typed::<RowCoreTopologieDomaines>(NOM_COLLECTION_DOMAINES)?;
+    let row_domaine = collection.find_one(filtre, None).await?;
+
+    let reponse = match row_domaine {
+        Some(inner) => match inner.cle_id_backup {
+            Some(cle_id) => {
+                let reponse = ReponseGetCleidBackupDomaine { ok: true, cle_id };
+                middleware.build_reponse(reponse)?.0
+            },
+            None => middleware.reponse_err(Some(1), None, Some("Aucune cle presente"))?
+        },
+        None => middleware.reponse_err(Some(2), None, Some("Domaine non configure"))?
+    };
+
+    Ok(Some(reponse))
 }
 
 #[derive(Deserialize)]
