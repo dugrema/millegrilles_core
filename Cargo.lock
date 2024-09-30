@@ -2603,8 +2603,8 @@ checksum = "6c8640c5d730cb13ebd907d8d04b52f55ac9a2eec55b440c8892f40d56c76c1d"
 
 [[package]]
 name = "millegrilles_common_rust"
-version = "2024.7.2"
-source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=master#642b02fb7989a042ec916de86e6676e1601284d2"
+version = "2024.7.4"
+source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=master#c22cc2724f060fc823aa5fd86664e3720f0bd794"
 dependencies = [
  "async-compression",
  "async-recursion",
@@ -2656,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "millegrilles_core"
-version = "2024.7.0"
+version = "2024.7.1"
 dependencies = [
  "env_logger 0.9.3",
  "log",

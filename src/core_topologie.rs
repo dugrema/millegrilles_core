@@ -888,11 +888,11 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionna
 
     let instance_id = certificat.get_common_name()?;
 
-    let filtre = doc! {"domaine": domaine, "instance_id": &instance_id};
-    let ops = doc! {
-        "$set": {
-            "reclame_fuuids": match event.reclame_fuuids { Some(inner) => inner, None => false },
-        },
+    let filtre = doc! {"domaine": domaine};
+    let mut ops = doc! {
+        // "$set": {
+        //     "reclame_fuuids": event.reclame_fuuids,
+        // },
         "$setOnInsert": {
             "domaine": domaine,
             "instance_id": instance_id,
@@ -902,6 +902,10 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionna
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
 
+    if let Some(reclame_fuuids) = event.reclame_fuuids {
+        ops.insert("$set", doc!{"reclame_fuuids": reclame_fuuids});
+    }
+
     debug!("Document monitor a sauvegarder : {:?}", ops);
 
     let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
@@ -910,40 +914,6 @@ async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionna
         Ok(r) => r,
         Err(e) => Err(format!("Erreur find document sur transaction domaine : {:?}", e))?
     };
-    // let creer_transaction = match result {
-    //     Some(d) => d.get_bool("dirty")?,
-    //     None => true,
-    // };
-
-    // if creer_transaction {
-    //     debug!("Creer transaction topologie pour domaine {}", domaine);
-    //
-    //     let tval = json!({
-    //         "domaine": event.domaine,
-    //         "instance_id": event.instance_id,
-    //     });
-    //
-    //     let transaction = middleware.formatter_message(
-    //         MessageKind::Transaction,
-    //         &tval,
-    //         Some(DOMAINE_NOM),
-    //         Some(TRANSACTION_DOMAINE),
-    //         None,
-    //         None,
-    //         false
-    //     )?;
-    //
-    //     // Sauvegarder la transation
-    //     let msg = MessageSerialise::from_parsed(transaction)?;
-    //     let msg_action = MessageValideAction::new(msg, "", "", DOMAINE_NOM, TRANSACTION_DOMAINE, TypeMessageOut::Transaction);
-    //     // sauvegarder_transaction_recue(middleware, msg_action, NOM_COLLECTION_TRANSACTIONS).await?;
-    //     sauvegarder_traiter_transaction(middleware, msg_action, gestionnaire).await?;
-    //
-    //     // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
-    //     let filtre = doc! {"domaine": &event.domaine};
-    //     let ops = doc! {"$set": {"dirty": false}};
-    //     let _ = collection.update_one(filtre, ops, None).await?;
-    // }
 
     Ok(None)
 }
@@ -2514,8 +2484,29 @@ struct DomaineRowBorrow<'a> {
     reclame_fuuids: Option<bool>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct DomaineRowOwned {
+    instance_id: String,
+    domaine: String,
+    #[serde(rename(deserialize="_mg-creation"), serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
+    #[serde(default)]
+    creation: Option<chrono::DateTime<Utc>>,
+    #[serde(rename(deserialize="_mg-derniere-modification"), serialize_with="optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
+    #[serde(default)]
+    presence: Option<chrono::DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    dirty: Option<bool>,
+    reclame_fuuids: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ReponseListDomaines {
+    ok: bool,
+    resultats: Vec<DomaineRowOwned>,
+}
+
 async fn liste_domaines<M>(middleware: &M, message: MessageValide)
-                           -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+                           -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("liste_domaines {:?}", message.type_message);
@@ -2536,8 +2527,8 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValide)
     let requete: RequeteListeDomaines = message_contenu.deserialize()?;
 
     let mut curseur = {
-        let projection = doc! {"instance_id": true, "domaine": true, CHAMP_MODIFICATION: true};
-        let collection = middleware.get_collection_typed::<DomaineRowBorrow>(NOM_COLLECTION_DOMAINES)?;
+        let projection = doc! {"instance_id": true, "domaine": true, CHAMP_MODIFICATION: true, "reclame_fuuids": true, "_mg-creation": true};
+        let collection = middleware.get_collection_typed::<DomaineRowOwned>(NOM_COLLECTION_DOMAINES)?;
         let ops = FindOptions::builder().projection(Some(projection)).build();
 
         let mut filtre = doc!{};
@@ -2550,48 +2541,21 @@ async fn liste_domaines<M>(middleware: &M, message: MessageValide)
             Err(e) => Err(format!("core_topologie.liste_domaines Erreur chargement domaines : {:?}", e))?
         }
     };
-
-    // let mut domaines = Vec::new();
-    // while let Some(r) = curseur.next().await {
-    //     match r {
-    //         Ok(mut d) => {
-    //             // Convertir date bson en DateTimeEpochSeconds
-    //             let date_presence = d.remove(CHAMP_MODIFICATION);
-    //             if let Some(date) = date_presence {
-    //                 if let Some(date) = date.as_datetime() {
-    //                     let date = DateEpochSeconds::from(date.to_chrono());
-    //                     d.insert("date_presence", date);
-    //                 }
-    //             }
-    //             filtrer_doc_id(&mut d);
-    //             domaines.push(d);
-    //         }
-    //         Err(e) => warn!("core_topologie.liste_domaines Erreur lecture document sous liste_noeuds() : {:?}", e)
-    //     }
-    // }
-
-    let mut domaines = Vec::new();
+    let mut reponse_liste_domaines = ReponseListDomaines { ok: true, resultats: Vec::new() };
     while curseur.advance().await? {
         match curseur.deserialize_current() {
             Ok(inner) => {
                 // Serialiser sous forme de value json
-                domaines.push(serde_json::to_value(inner)?)
+                reponse_liste_domaines.resultats.push(inner);
             },
             Err(e) => {
-                error!("Erreur deserialize valeur Domaine : {:?}", e);
+                error!("liste_domaines Erreur deserialize valeur Domaine : {:?}", e);
                 continue
             }
         };
     }
 
-    debug!("Domaines : {:?}", domaines);
-    let liste = json!({"ok": true, "resultats": domaines});
-    // let reponse = match middleware.formatter_reponse(&liste, None) {
-    let reponse = match middleware.build_reponse(liste) {
-        Ok(m) => m.0,
-        Err(e) => Err(format!("core_topologie.liste_domaines Erreur preparation reponse domaines : {:?}", e))?
-    };
-    Ok(Some(reponse))
+    Ok(Some(middleware.build_reponse(reponse_liste_domaines)?.0))
 }
 
 async fn resolve_idmg<M>(middleware: &M, message: MessageValide)
