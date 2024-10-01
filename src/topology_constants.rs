@@ -1,11 +1,11 @@
 pub const DOMAIN_NAME: &str = "CoreTopologie";
-pub const COLLECTION_NAME_TRANSACTIONS: &str = "CoreTopologie/domaines";
+pub const NOM_COLLECTION_DOMAINES: &str = "CoreTopologie/domaines";
 pub const NOM_COLLECTION_INSTANCES: &str = "CoreTopologie/instances";
 pub const NOM_COLLECTION_NOEUDS: &str = NOM_COLLECTION_INSTANCES;
 pub const NOM_COLLECTION_MILLEGRILLES: &str = "CoreTopologie/millegrilles";
 pub const NOM_COLLECTION_MILLEGRILLES_ADRESSES: &str = "CoreTopologie/millegrillesAdresses";
 pub const NOM_COLLECTION_FICHIERS: &str = "CoreTopologie/fichiers";
-pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAIN_NAME;
+pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 pub const NOM_COLLECTION_TOKENS: &str = "CoreTopologie/tokens";
 
 pub const DOMAINE_PRESENCE_NOM: &str = "CoreTopologie";

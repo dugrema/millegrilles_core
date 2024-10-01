@@ -32,6 +32,13 @@ mod pki_requests;
 mod pki_commands;
 mod pki_events;
 mod pki_transactions;
+mod topology_requests;
+mod topology_structs;
+mod topology_commands;
+mod topology_common;
+mod topology_events;
+mod topology_transactions;
+mod topology_maintenance;
 
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;

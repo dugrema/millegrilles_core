@@ -164,7 +164,7 @@ pub fn preparer_queues(manager: &PkiManager) -> Vec<QueueType> {
     queues
 }
 
-pub async fn preparer_index_mongodb<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
+pub async fn preparer_index_mongodb_pki<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
 where M: MongoDao + ConfigMessages
 {
     // Documents

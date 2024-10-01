@@ -9,8 +9,8 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::middleware::Middleware;
 use crate::catalogues_manager::CataloguesManager;
-use crate::pki_manager::PkiManager;
-use crate::topology_manager::TopologyManager;
+use crate::pki_manager::{preparer_index_mongodb_pki, PkiManager};
+use crate::topology_manager::{preparer_index_mongodb_topologie, TopologyManager};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
 
 pub struct Managers {
@@ -91,12 +91,12 @@ where M: Middleware + IsConfigNoeud
     // Preparer des ressources additionnelles
     preparer_index_mongodb_maitredescomptes(middleware).await
         .expect("preparer_index_maitredescomptes_mongodb");
-    // preparer_index_mongodb_topology(middleware).await
-    //     .expect("preparer_index_mongodb_topology");
+    preparer_index_mongodb_topologie(middleware).await
+        .expect("preparer_index_mongodb_topologie");
     // preparer_index_mongodb_catalogues(middleware).await
     //     .expect("preparer_index_mongodb_catalogues");
-    // preparer_index_mongodb_pki(middleware).await
-    //     .expect("preparer_index_mongodb_pki");
+    preparer_index_mongodb_pki(middleware).await
+        .expect("preparer_index_mongodb_pki");
 
     Ok((managers, futures))
 }
