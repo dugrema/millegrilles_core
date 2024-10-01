@@ -1,20 +1,31 @@
-mod domaines_core;
+// Domaines Core (obsolete)
+// mod domaines_core;
+// mod core_catalogues;
+// mod core_maitredescomptes;
+// mod core_pki;
+// mod core_topologie;
+
 mod ceduleur;
 mod validateur_pki_mongo;
 mod webauthn;
-
-// Domaines Core
-mod core_catalogues;
-mod core_maitredescomptes;
-mod core_pki;
-mod core_topologie;
 mod error;
-// mod core_backup;
+mod builder;
+mod common;
 
-use crate::domaines_core::build;
+// Maitre des comptes
+mod maitredescomptes_manager;
+mod maitredescomptes_commands;
+mod maitredescomptes_requests;
+mod maitredescomptes_events;
+mod maitredescomptes_constants;
+mod pki_constants;
+mod pki_structs;
+mod maitredescomptes_structs;
+
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;
-use millegrilles_common_rust::tokio_stream::StreamExt;
+
+use crate::builder::run;
 
 fn main() {
     env_logger::init();
@@ -24,10 +35,7 @@ fn main() {
 
 #[tokio::main(flavor = "current_thread")]
 // #[tokio::main(flavor = "multi_thread", worker_threads = 5)]
-async fn executer() {
-    let mut futures = build().await;
-    futures.next().await.expect("future").expect("resultat");
-}
+async fn executer() { run().await }
 
 #[cfg(test)]
 pub mod test_setup {

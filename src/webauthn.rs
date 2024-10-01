@@ -21,7 +21,7 @@ use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChal
 use millegrilles_common_rust::uuid;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage::random_vec;
 
-use crate::core_maitredescomptes::{DocChallenge, TransactionAjouterCle};
+use crate::maitredescomptes_structs::{DocChallenge, TransactionAjouterCle};
 use crate::error::Error as CoreError;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

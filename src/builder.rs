@@ -1,0 +1,108 @@
+use crate::maitredescomptes_manager::{preparer_index_mongodb as preparer_index_mongodb_maitredescomptes, MaitreDesComptesManager};
+use log::{debug, info, warn};
+use millegrilles_common_rust::{chrono, tokio};
+use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::configuration::{ConfigMessages, IsConfigNoeud};
+use millegrilles_common_rust::domaines_v2::GestionnaireDomaineSimple;
+use millegrilles_common_rust::futures::stream::FuturesUnordered;
+use millegrilles_common_rust::middleware_db_v2::preparer as preparer_middleware;
+use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
+use millegrilles_common_rust::static_cell::StaticCell;
+use millegrilles_common_rust::tokio::task::JoinHandle;
+use millegrilles_common_rust::tokio::spawn;
+use millegrilles_common_rust::tokio_stream::StreamExt;
+use millegrilles_common_rust::error::Error as CommonError;
+use millegrilles_common_rust::middleware::{charger_certificats_chiffrage, Middleware};
+
+use crate::common::*;
+use crate::validateur_pki_mongo::preparer_middleware_pki;
+
+// static MAITREDESCOMPTES_MANAGER: StaticCell<MaitreDesComptesManager> = StaticCell::new();
+// static TOPOLOGY_MANAGER: StaticCell<MaitreDesComptesManager> = StaticCell::new();
+// static CATALOGUES_MANAGER: StaticCell<MaitreDesComptesManager> = StaticCell::new();
+// static PKI_MANAGER: StaticCell<MaitreDesComptesManager> = StaticCell::new();
+
+pub struct Managers {
+    pub maitredescomptes: MaitreDesComptesManager,
+    // pub topology: TopologyComptesManager,
+    // pub catalogues: CataloguesManager,
+    // pub pki: PkiManager,
+}
+
+static MANAGERS: StaticCell<Managers> = StaticCell::new();
+
+pub async fn run() {
+
+    let middleware_hooks = preparer_middleware_pki();
+    let futures_middleware = middleware_hooks.futures;
+    let middleware = middleware_hooks.middleware;
+
+    let (gestionnaires, futures_domaines) = initialiser(middleware).await
+        .expect("initialiser domaines");
+
+    // Test redis connection
+    if let Some(redis) = middleware.redis.as_ref() {
+        match redis.liste_certificats_fingerprints().await {
+            Ok(fingerprints_redis) => {
+                debug!("run liste_certificats_fingerprints Result : {:?}", fingerprints_redis);
+            },
+            Err(e) => warn!("run liste_certificats_fingerprints Error testing redis connection : {:?}", e)
+        }
+    }
+
+    // Combiner les JoinHandles recus
+    let mut futures = FuturesUnordered::new();
+    futures.extend(futures_middleware);
+    futures.extend(futures_domaines);
+
+    // Le "await" maintien l'application ouverte. Des qu'une task termine, l'application arrete.
+    futures.next().await;
+
+    for f in &futures {
+        f.abort()
+    }
+
+    info!("run Attendre {} tasks restantes", futures.len());
+    while futures.len() > 0 {
+        futures.next().await;
+    }
+
+    info!("run Fin execution");
+}
+
+/// Initialise le gestionnaire. Retourne les spawned tasks dans une liste de futures
+/// (peut servir a canceller).
+async fn initialiser<M>(middleware: &'static M) -> Result<
+    (&'static Managers, FuturesUnordered<JoinHandle<()>>), CommonError>
+where M: Middleware + IsConfigNoeud
+{
+    let config = middleware.get_configuration_noeud();
+    // let instance_id = config.instance_id.as_ref().expect("instance_id").to_string();
+
+    let managers = Managers {
+        maitredescomptes: MaitreDesComptesManager {},
+        // topology: TopologyComptesManager {},
+        // catalogues: CataloguesManager {},
+        // pki: PkiManager {},
+    };
+
+    let managers = MANAGERS.try_init(managers)
+        .expect("staticcell MANAGERS");
+
+    // Preparer la collection avec index
+    let mut futures = FuturesUnordered::new();
+    futures.extend(managers.maitredescomptes.initialiser(middleware).await
+        .expect("maitredescomptes_manager initialiser"));
+    // futures.extend(topology_manager.initialiser(middleware).await
+    //     .expect("topology_manager initialiser"));
+    // futures.extend(catalogues_manager.initialiser(middleware).await
+    //     .expect("catalogues_manager initialiser"));
+    // futures.extend(pki_manager.initialiser(middleware).await
+    //     .expect("pki_manager initialiser"));
+
+    // Preparer des ressources additionnelles
+    preparer_index_mongodb_maitredescomptes(middleware).await
+        .expect("preparer_index_maitredescomptes_mongodb");
+
+    Ok((managers, futures))
+}
