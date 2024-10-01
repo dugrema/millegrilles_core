@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::BackupStarter;
@@ -14,10 +15,16 @@ use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{Middleware, MiddlewareMessages};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
 use millegrilles_common_rust::recepteur_messages::MessageValide;
-
+use crate::catalogues_commands::consommer_commande_catalogues;
 use crate::catalogues_constants::*;
+use crate::catalogues_events::consommer_evenement_catalogues;
+use crate::catalogues_maintenance::traiter_cedule_catalogues;
+use crate::catalogues_requests::consommer_requete_catalogues;
+use crate::catalogues_transactions::aiguillage_transaction_catalogues;
 
-pub struct CataloguesManager {}
+pub struct CataloguesManager {
+    pub catalogues_charges: Mutex<bool>
+}
 
 impl GestionnaireDomaineV2 for CataloguesManager {
     fn get_collection_transactions(&self) -> Option<String> {
@@ -25,7 +32,7 @@ impl GestionnaireDomaineV2 for CataloguesManager {
     }
 
     fn get_collections_volatiles(&self) -> Result<Vec<String>, CommonError> {
-        todo!()
+        Ok(vec![String::from(NOM_COLLECTION_CATALOGUES)])
     }
 }
 
@@ -53,23 +60,21 @@ impl ConsommateurMessagesBus for CataloguesManager {
     where
         M: Middleware
     {
-        todo!()
+        consommer_requete_catalogues(middleware, message).await
     }
 
     async fn consommer_commande<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
         M: Middleware
     {
-        todo!()
-        // consommer_commande(middleware, message, self).await
+        consommer_commande_catalogues(middleware, message, self).await
     }
 
     async fn consommer_evenement<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
         M: Middleware
     {
-        todo!()
-        // consommer_evenement(middleware, self, message).await
+        consommer_evenement_catalogues(middleware, message, self).await
     }
 }
 
@@ -79,8 +84,7 @@ impl AiguillageTransactions for CataloguesManager {
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao
     {
-        todo!()
-        // aiguillage_transaction(self, middleware, transaction).await
+        aiguillage_transaction_catalogues(middleware, transaction).await
     }
 }
 
@@ -90,16 +94,95 @@ impl GestionnaireDomaineSimple for CataloguesManager {
     where
         M: MiddlewareMessages + BackupStarter + MongoDao
     {
-        Ok(())
+        traiter_cedule_catalogues(middleware, trigger, self).await
     }
 }
 
 pub fn preparer_queues(manager: &CataloguesManager) -> Vec<QueueType> {
-    todo!()
+    let mut rk_volatils = Vec::new();
+
+    // RK 3.protege seulement
+    let requetes = vec![REQUETE_INFO_APPLICATION, REQUETE_LISTE_APPLICATIONS, REQUETE_VERSIONS_APPLICATION];
+    for req in requetes {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L3Protege});
+    }
+
+    let commandes = vec![
+        TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
+    ];
+    for commande in commandes {
+        rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, commande), exchange: Securite::L3Protege});
+    }
+
+    let mut queues = Vec::new();
+
+    // Queue de messages volatils (requete, commande, evenements)
+    queues.push(QueueType::ExchangeQueue (
+        ConfigQueue {
+            nom_queue: NOM_Q_VOLATILS.into(),
+            routing_keys: rk_volatils,
+            ttl: 300000.into(),
+            durable: false,
+            autodelete: false,
+        }
+    ));
+
+    let mut rk_transactions = Vec::new();
+    rk_transactions.push(ConfigRoutingExchange {
+        routing_key: format!("transaction.{}.{}", DOMAIN_NAME, TRANSACTION_APPLICATION).into(),
+        exchange: Securite::L4Secure
+    });
+
+    // Queue de transactions
+    queues.push(QueueType::ExchangeQueue (
+        ConfigQueue {
+            nom_queue: NOM_Q_TRANSACTIONS.into(),
+            routing_keys: rk_transactions,
+            ttl: None,
+            durable: true,
+            autodelete: false,
+        }
+    ));
+
+    // Queue de triggers pour Pki
+    queues.push(QueueType::Triggers (DOMAIN_NAME.into(), Securite::L3Protege));
+
+    queues
 }
 
-pub async fn preparer_index_mongodb<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
+pub async fn preparer_index_mongodb_catalogues<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
 where M: MongoDao + ConfigMessages
 {
-    todo!()
+    // Index catalogues
+    let options_unique_catalogues = IndexOptions {
+        nom_index: Some(String::from(INDEX_NOMS_CATALOGUES)),
+        unique: true
+    };
+    let champs_index_catalogues = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_NOM_CATALOGUE), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_CATALOGUES,
+        champs_index_catalogues,
+        Some(options_unique_catalogues)
+    ).await?;
+
+    // catalogues_versions
+    let options_unique_catalogues_versions = IndexOptions {
+        nom_index: Some(String::from(INDEX_NOMS_CATALOGUES)),
+        unique: true
+    };
+    let champs_index_catalogues_versions = vec!(
+        ChampIndex {nom_champ: String::from(CHAMP_NOM_CATALOGUE), direction: 1},
+        ChampIndex {nom_champ: String::from(CHAMP_VERSION), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_CATALOGUES_VERSIONS,
+        champs_index_catalogues_versions,
+        Some(options_unique_catalogues_versions)
+    ).await?;
+
+    Ok(())
 }

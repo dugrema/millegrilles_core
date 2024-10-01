@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use crate::maitredescomptes_manager::{preparer_index_mongodb as preparer_index_mongodb_maitredescomptes, MaitreDesComptesManager};
 use log::{debug, info, warn};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
@@ -8,7 +9,7 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::middleware::Middleware;
-use crate::catalogues_manager::CataloguesManager;
+use crate::catalogues_manager::{preparer_index_mongodb_catalogues, CataloguesManager};
 use crate::pki_manager::{preparer_index_mongodb_pki, PkiManager};
 use crate::topology_manager::{preparer_index_mongodb_topologie, TopologyManager};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
@@ -70,7 +71,7 @@ where M: Middleware + IsConfigNoeud
     let managers = Managers {
         maitredescomptes: MaitreDesComptesManager {},
         topology: TopologyManager {},
-        catalogues: CataloguesManager {},
+        catalogues: CataloguesManager {catalogues_charges: Mutex::new(false)},
         pki: PkiManager {},
     };
 
@@ -93,8 +94,8 @@ where M: Middleware + IsConfigNoeud
         .expect("preparer_index_maitredescomptes_mongodb");
     preparer_index_mongodb_topologie(middleware).await
         .expect("preparer_index_mongodb_topologie");
-    // preparer_index_mongodb_catalogues(middleware).await
-    //     .expect("preparer_index_mongodb_catalogues");
+    preparer_index_mongodb_catalogues(middleware).await
+        .expect("preparer_index_mongodb_catalogues");
     preparer_index_mongodb_pki(middleware).await
         .expect("preparer_index_mongodb_pki");
 

@@ -39,6 +39,12 @@ mod topology_common;
 mod topology_events;
 mod topology_transactions;
 mod topology_maintenance;
+mod catalogues_requests;
+mod catalogues_commands;
+mod catalogues_events;
+mod catalogues_transactions;
+mod catalogues_structs;
+mod catalogues_maintenance;
 
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;
