@@ -2,9 +2,12 @@ use log::debug;
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PasskeyRegistration, RegisterPublicKeyCredential, RequestChallengeResponse};
 
 use millegrilles_common_rust::bson::DateTime as DateTimeBson;
+use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
-use millegrilles_common_rust::serde_json;
-use millegrilles_common_rust::serde_json::json;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesOwned;
+use millegrilles_common_rust::{base64_url, chrono, openssl, serde_json};
+use millegrilles_common_rust::serde_json::{json, Value};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChallengeRegistrationWebauthn {
@@ -151,4 +154,129 @@ pub struct TransactionAjouterCle {
     #[serde(rename="reponseChallenge")]
     pub reponse_client: AjouterClePublickKeyCredential,
     pub reset_cles: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionInscrireUsager {
+    pub fingerprint_pk: String,
+    #[serde(rename="nomUsager")]
+    pub nom_usager: String,
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub securite: String,
+    pub csr: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CommandeAjouterDelegationSignee<'a> {
+    // #[serde(borrow="'a")]
+    // confirmation: MessageMilleGrillesRefDefault<'a>,
+    pub confirmation: MessageMilleGrillesOwned,
+    #[serde(rename="userId")]
+    pub user_id: Option<&'a str>,
+    pub hostname: &'a str,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConfirmationSigneeDelegationGlobale {
+    #[serde(rename="activerDelegation")]
+    pub activer_delegation: Option<bool>,
+    pub challenge: String,
+    #[serde(rename="nomUsager")]
+    pub nom_usager: String,
+    #[serde(rename="userId")]
+    pub user_id: String,
+}
+
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CookieSession {
+    pub user_id: String,
+    pub hostname: String,
+    pub challenge: String,
+    #[serde(with = "epochseconds")]
+    pub expiration: DateTime<Utc>,
+}
+
+impl Into<Value> for CookieSession {
+    fn into(self) -> Value {
+        serde_json::to_value(self).expect("value")
+    }
+}
+
+impl CookieSession {
+    pub fn new<U,H>(user_id: U, hostname: H, duree_session: i64) -> Self
+    where U: Into<String>, H: Into<String>
+    {
+        let date_expiration = Utc::now() + chrono::Duration::seconds(duree_session);
+
+        let mut buffer_challenge = [0u8; 32];
+        openssl::rand::rand_bytes(&mut buffer_challenge).expect("openssl::random::rand_bytes");
+        let challenge = base64_url::encode(&buffer_challenge[..]);
+
+        Self {
+            user_id: user_id.into(),
+            hostname: hostname.into(),
+            challenge,
+            expiration: date_expiration,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CompteUsager {
+    #[serde(rename="nomUsager")]
+    pub nom_usager: String,
+    #[serde(rename="userId")]
+    pub user_id: String,
+
+    pub compte_prive: Option<bool>,
+
+    pub delegation_globale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with="optionepochseconds")]
+    pub delegations_date: Option<DateTime<Utc>>,
+    pub delegations_version: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RequeteGetCookieUsager {
+    pub user_id: String,
+    pub hostname: String,
+    pub challenge: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionMajUsagerDelegations {
+    pub compte_prive: Option<bool>,
+    pub delegation_globale: Option<String>,
+    #[serde(rename="userId")]
+    pub user_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionSupprimerCles {
+    #[serde(rename="userId")]
+    pub user_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EvenementMajCompteUsager {
+    #[serde(rename="nomUsager")]
+    pub nom_usager: String,
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub compte_prive: Option<bool>,
+    pub delegation_globale: Option<String>,
+    pub delegations_version: Option<usize>,
+    pub delegations_date: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandeResetWebauthnUsager {
+    #[serde(rename="userId")]
+    pub user_id: String,
+    #[serde(rename="resetWebauthn")]
+    pub reset_webauthn: Option<bool>,
+    #[serde(rename="evictAllSessions")]
+    pub evict_all_sessions: Option<bool>,
 }

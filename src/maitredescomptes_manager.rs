@@ -15,9 +15,11 @@ use millegrilles_common_rust::middleware::{Middleware, MiddlewareMessages};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 
-
+use crate::maitredescomptes_commands::consommer_commande_maitredescomptes;
 use crate::maitredescomptes_constants::*;
+use crate::maitredescomptes_events::consommer_evenement_maitredescomptes;
 use crate::maitredescomptes_requests::consommer_requete_maitredescomptes;
+use crate::maitredescomptes_transactions::aiguillage_transaction_maitredescomptes;
 
 pub struct MaitreDesComptesManager {}
 
@@ -62,16 +64,14 @@ impl ConsommateurMessagesBus for MaitreDesComptesManager {
     where
         M: Middleware
     {
-        todo!()
-        // consommer_commande(middleware, message, self).await
+        consommer_commande_maitredescomptes(middleware, self, message).await
     }
 
     async fn consommer_evenement<M>(&self, middleware: &M, message: MessageValide) -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where
         M: Middleware
     {
-        todo!()
-        // consommer_evenement(middleware, self, message).await
+        consommer_evenement_maitredescomptes(middleware, message).await
     }
 }
 
@@ -81,14 +81,13 @@ impl AiguillageTransactions for MaitreDesComptesManager {
     where
         M: ValidateurX509 + GenerateurMessages + MongoDao
     {
-        todo!()
-        // aiguillage_transaction(self, middleware, transaction).await
+        aiguillage_transaction_maitredescomptes(middleware, transaction).await
     }
 }
 
 #[async_trait]
 impl GestionnaireDomaineSimple for MaitreDesComptesManager {
-    async fn traiter_cedule<M>(&self, middleware: &M, trigger: &MessageCedule) -> Result<(), CommonError>
+    async fn traiter_cedule<M>(&self, _middleware: &M, _trigger: &MessageCedule) -> Result<(), CommonError>
     where
         M: MiddlewareMessages + BackupStarter + MongoDao
     {
@@ -96,7 +95,7 @@ impl GestionnaireDomaineSimple for MaitreDesComptesManager {
     }
 }
 
-pub fn preparer_queues(manager: &MaitreDesComptesManager) -> Vec<QueueType> {
+pub fn preparer_queues(_manager: &MaitreDesComptesManager) -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     // RK 1.public

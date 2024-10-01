@@ -20,7 +20,7 @@ use millegrilles_common_rust::serde_json::{json, Value};
 
 use crate::maitredescomptes_constants::*;
 use crate::error::Error as CoreError;
-use crate::maitredescomptes_structs::DocChallenge;
+use crate::maitredescomptes_structs::{CompteUsager, CookieSession, DocChallenge, RequeteGetCookieUsager};
 use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
 
 pub async fn consommer_requete_maitredescomptes<M>(middleware: &M, m: MessageValide)
@@ -72,21 +72,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
             Ok(None)
         },
     }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct CompteUsager {
-    #[serde(rename="nomUsager")]
-    nom_usager: String,
-    #[serde(rename="userId")]
-    user_id: String,
-
-    compte_prive: Option<bool>,
-
-    delegation_globale: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", with="optionepochseconds")]
-    delegations_date: Option<DateTime<Utc>>,
-    delegations_version: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -618,47 +603,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     match middleware.build_reponse(&val_reponse) {
         Ok(m) => Ok(Some(m.0)),
         Err(e) => Err(format!("Erreur preparation reponse liste_usagers : {:?}", e))?
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct RequeteGetCookieUsager {
-    user_id: String,
-    hostname: String,
-    challenge: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct CookieSession {
-    user_id: String,
-    hostname: String,
-    challenge: String,
-    #[serde(with = "epochseconds")]
-    expiration: DateTime<Utc>,
-}
-
-impl Into<Value> for CookieSession {
-    fn into(self) -> Value {
-        serde_json::to_value(self).expect("value")
-    }
-}
-
-impl CookieSession {
-    fn new<U,H>(user_id: U, hostname: H, duree_session: i64) -> Self
-    where U: Into<String>, H: Into<String>
-    {
-        let date_expiration = Utc::now() + chrono::Duration::seconds(duree_session);
-
-        let mut buffer_challenge = [0u8; 32];
-        openssl::rand::rand_bytes(&mut buffer_challenge).expect("openssl::random::rand_bytes");
-        let challenge = base64_url::encode(&buffer_challenge[..]);
-
-        Self {
-            user_id: user_id.into(),
-            hostname: hostname.into(),
-            challenge,
-            expiration: date_expiration,
-        }
     }
 }
 

@@ -26,6 +26,8 @@ mod topology_constants;
 mod catalogues_manager;
 mod catalogues_constants;
 mod pki_manager;
+mod maitredescomptes_transactions;
+mod maitredescomptes_common;
 
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;
