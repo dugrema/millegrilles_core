@@ -35,8 +35,11 @@ use millegrilles_common_rust::tokio::sync::mpsc::Sender;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::static_cell::StaticCell;
+use millegrilles_common_rust::tokio;
 use crate::pki_constants::{COLLECTION_CERTIFICAT_NOM, DOMAIN_NAME as PKI_DOMAINE_NOM, PKI_DOCUMENT_CHAMP_FINGERPRINT_PK};
 use crate::pki_structs::CorePkiCertificat;
+
+use millegrilles_common_rust::backup_v2::thread_backup_v2;
 
 // Middleware avec MongoDB et validateur X509 lie a la base de donnees
 pub struct MiddlewareDbPki {
@@ -46,7 +49,7 @@ pub struct MiddlewareDbPki {
     validateur: Arc<ValidateurX509Database>,
     tx_backup: Sender<CommandeBackup>,
     // chiffrage_factory: Arc<ChiffrageFactoryImpl>,
-    cle_chiffrage_handler: CleChiffrageHandlerImpl,
+    cle_chiffrage_handler: &'static CleChiffrageHandlerImpl,
 }
 
 impl MiddlewareDbPki {}
@@ -495,14 +498,12 @@ static MIDDLEWARE_DB_PKI: StaticCell<MiddlewareDbPki> = StaticCell::new();
 /// Version speciale du middleware avec un acces direct au sous-domaine Pki dans MongoDB
 pub fn preparer_middleware_pki() -> MiddlewareHooks {
 
-    let (middleware, futures) = preparer_middleware_db_v2().expect("preparer_middleware_db_v2");
+    let (middleware, mut futures) = preparer_middleware_db_v2().expect("preparer_middleware_db_v2");
 
     let config = middleware.ressources.ressources.configuration.as_ref().as_ref();
     let resources = &middleware.ressources.ressources;
 
     let mongo = Arc::new(initialiser_mongodb(config).expect("initialiser_mongodb"));
-
-    let (tx_backup, _rx_backup) = mpsc::channel::<CommandeBackup>(5);
 
     let redis_dao_validateur = match config.get_configuration_noeud().redis_password {
         Some(_) => Some(RedisDao::new(config.get_configuration_noeud().clone()).expect("connexion redis")),
@@ -520,17 +521,17 @@ pub fn preparer_middleware_pki() -> MiddlewareHooks {
         None => None
     };
 
-    let middleware = MiddlewareDbPki {
+    let middleware_db = MiddlewareDbPki {
         ressources: resources.clone(),
         mongo,
         redis: redis_dao,
         validateur: validateur_db,
-        tx_backup,
-        cle_chiffrage_handler: CleChiffrageHandlerImpl::new()
+        tx_backup: middleware.tx_backup.clone(),
+        cle_chiffrage_handler: &middleware.cle_chiffrage_handler
     };
 
     // Conserver dans static cell pour retourner &'static
-    let middleware = MIDDLEWARE_DB_PKI.try_init(middleware)
+    let middleware = MIDDLEWARE_DB_PKI.try_init(middleware_db)
         .expect("staticell MIDDLEWARE_DB_PKI");
 
     MiddlewareHooks { middleware, futures }

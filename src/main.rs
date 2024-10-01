@@ -57,8 +57,8 @@ fn main() {
     executer()
 }
 
-#[tokio::main(flavor = "current_thread")]
-// #[tokio::main(flavor = "multi_thread", worker_threads = 5)]
+// #[tokio::main(flavor = "current_thread")]
+#[tokio::main(flavor = "multi_thread", worker_threads = 3)]
 async fn executer() { run().await }
 
 #[cfg(test)]
