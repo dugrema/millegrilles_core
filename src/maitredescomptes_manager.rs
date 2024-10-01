@@ -176,29 +176,29 @@ pub fn preparer_queues(_manager: &MaitreDesComptesManager) -> Vec<QueueType> {
         }
     ));
 
-    let mut rk_transactions = Vec::new();
-    let transactions: Vec<&str> = vec![
-        TRANSACTION_INSCRIRE_USAGER,
-        TRANSACTION_AJOUTER_CLE,
-        TRANSACTION_AJOUTER_DELEGATION_SIGNEE,
-        TRANSACTION_MAJ_USAGER_DELEGATIONS,
-        TRANSACTION_SUPPRIMER_CLES,
-        TRANSACTION_RESET_WEBAUTHN_USAGER,
-    ];
-    for transaction in transactions {
-        rk_transactions.push(ConfigRoutingExchange {routing_key: format!("transaction.{}.{}", DOMAIN_NAME, transaction), exchange: Securite::L4Secure});
-    }
-
-    // Queue de transactions
-    queues.push(QueueType::ExchangeQueue (
-        ConfigQueue {
-            nom_queue: NOM_Q_TRANSACTIONS.into(),
-            routing_keys: rk_transactions,
-            ttl: None,
-            durable: true,
-            autodelete: false,
-        }
-    ));
+    // let mut rk_transactions = Vec::new();
+    // let transactions: Vec<&str> = vec![
+    //     TRANSACTION_INSCRIRE_USAGER,
+    //     TRANSACTION_AJOUTER_CLE,
+    //     TRANSACTION_AJOUTER_DELEGATION_SIGNEE,
+    //     TRANSACTION_MAJ_USAGER_DELEGATIONS,
+    //     TRANSACTION_SUPPRIMER_CLES,
+    //     TRANSACTION_RESET_WEBAUTHN_USAGER,
+    // ];
+    // for transaction in transactions {
+    //     rk_transactions.push(ConfigRoutingExchange {routing_key: format!("transaction.{}.{}", DOMAIN_NAME, transaction), exchange: Securite::L4Secure});
+    // }
+    //
+    // // Queue de transactions
+    // queues.push(QueueType::ExchangeQueue (
+    //     ConfigQueue {
+    //         nom_queue: NOM_Q_TRANSACTIONS.into(),
+    //         routing_keys: rk_transactions,
+    //         ttl: None,
+    //         durable: true,
+    //         autodelete: false,
+    //     }
+    // ));
 
     // Queue de triggers pour Pki
     queues.push(QueueType::Triggers (DOMAIN_NAME.into(), Securite::L3Protege));
@@ -209,56 +209,6 @@ pub fn preparer_queues(_manager: &MaitreDesComptesManager) -> Vec<QueueType> {
 pub async fn preparer_index_mongodb<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
 where M: MongoDao + ConfigMessages
 {
-
-    // Transactions
-
-    // Index transactions par uuid-transaction
-    let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from("index_champ_id")),
-        unique: true
-    };
-    let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_ID), direction: 1}
-    );
-    middleware.create_index(
-        middleware,
-        COLLECTION_NAME_TRANSACTIONS,
-        champs_index_transactions,
-        Some(options_unique_transactions)
-    ).await?;
-
-    // Index transactions completes
-    let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from(TRANSACTION_CHAMP_COMPLETE)),
-        unique: false
-    };
-    let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1}
-    );
-    middleware.create_index(
-        middleware,
-        COLLECTION_NAME_TRANSACTIONS,
-        champs_index_transactions,
-        Some(options_unique_transactions)
-    ).await?;
-
-    // Index backup transactions
-    let options_unique_transactions = IndexOptions {
-        nom_index: Some(String::from(BACKUP_CHAMP_BACKUP_TRANSACTIONS)),
-        unique: false
-    };
-    let champs_index_transactions = vec!(
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_TRANSACTION_TRAITEE), direction: 1},
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_BACKUP_FLAG), direction: 1},
-        ChampIndex {nom_champ: String::from(TRANSACTION_CHAMP_EVENEMENT_COMPLETE), direction: 1},
-    );
-    middleware.create_index(
-        middleware,
-        COLLECTION_NAME_TRANSACTIONS,
-        champs_index_transactions,
-        Some(options_unique_transactions)
-    ).await?;
-
     // Index userId
     let options_unique_noeuds = IndexOptions {
         nom_index: Some(String::from(INDEX_ID_USAGER)),
