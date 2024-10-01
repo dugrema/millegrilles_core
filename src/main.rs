@@ -5,7 +5,7 @@
 // mod core_pki;
 // mod core_topologie;
 
-mod ceduleur;
+// mod ceduleur;
 mod validateur_pki_mongo;
 mod webauthn;
 mod error;
@@ -21,6 +21,11 @@ mod maitredescomptes_constants;
 mod pki_constants;
 mod pki_structs;
 mod maitredescomptes_structs;
+mod topology_manager;
+mod topology_constants;
+mod catalogues_manager;
+mod catalogues_constants;
+mod pki_manager;
 
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;

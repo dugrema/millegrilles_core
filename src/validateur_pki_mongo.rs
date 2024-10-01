@@ -1,21 +1,19 @@
-use std::collections::{HashMap, HashSet};
-use std::collections::hash_map::RandomState;
+use std::collections::HashSet;
 use std::error::Error;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-use log::{debug, info, warn, error};
+use log::{debug, warn, error};
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::backup::{BackupStarter, CommandeBackup, thread_backup};
+use millegrilles_common_rust::backup::{BackupStarter, CommandeBackup};
 use millegrilles_common_rust::bson::{doc, Document};
-use millegrilles_common_rust::certificats::{emettre_commande_certificat_maitredescles, ValidateurX509, ValidateurX509Impl, VerificateurPermissions};
+use millegrilles_common_rust::certificats::{ValidateurX509, ValidateurX509Impl};
 use millegrilles_common_rust::chiffrage_cle::{CleChiffrageCache, CleChiffrageHandlerImpl};
-use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMessagesDb, ConfigurationMq, ConfigurationNoeud, ConfigurationPki, IsConfigNoeud};
+use millegrilles_common_rust::configuration::{ConfigMessages, ConfigurationMq, ConfigurationNoeud, ConfigurationPki, IsConfigNoeud};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
 use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait, repondre_certificat, MiddlewareMessage};
-use millegrilles_common_rust::middleware_db::MiddlewareDb;
 use millegrilles_common_rust::middleware_db_v2::preparer as preparer_middleware_db_v2;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
@@ -26,23 +24,18 @@ use millegrilles_common_rust::mongodb::options::FindOptions;
 use millegrilles_common_rust::notifications::NotificationMessageInterne;
 use millegrilles_common_rust::openssl::x509::store::X509Store;
 use millegrilles_common_rust::openssl::x509::X509;
-use millegrilles_common_rust::rabbitmq_dao::{Callback, EventMq, NamedQueue, QueueType, run_rabbitmq, TypeMessageOut};
+use millegrilles_common_rust::rabbitmq_dao::{NamedQueue, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
-use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::json;
-use millegrilles_common_rust::tokio as tokio;
-use millegrilles_common_rust::tokio::sync::{mpsc, mpsc::Receiver, Notify};
+use millegrilles_common_rust::tokio::sync::{mpsc, Notify};
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::redis_dao::RedisDao;
 use millegrilles_common_rust::tokio::sync::mpsc::Sender;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::static_cell::StaticCell;
-use crate::maitredescomptes_manager::MaitreDesComptesManager;
-// use crate::core_pki::PKI_DOCUMENT_CHAMP_FINGERPRINT_PK;
-// use crate::core_pki::{COLLECTION_CERTIFICAT_NOM, CorePkiCertificat, DOMAINE_NOM as PKI_DOMAINE_NOM};
-use crate::pki_constants::{COLLECTION_CERTIFICAT_NOM, DOMAINE_NOM as PKI_DOMAINE_NOM, PKI_DOCUMENT_CHAMP_FINGERPRINT_PK};
+use crate::pki_constants::{COLLECTION_CERTIFICAT_NOM, DOMAIN_NAME as PKI_DOMAINE_NOM, PKI_DOCUMENT_CHAMP_FINGERPRINT_PK};
 use crate::pki_structs::CorePkiCertificat;
 
 // Middleware avec MongoDB et validateur X509 lie a la base de donnees
@@ -90,7 +83,7 @@ impl EmetteurNotificationsTrait for MiddlewareDbPki {
     }
 
     async fn emettre_notification_usager<D, S, N>(
-        &self, user_id: S, contenu: NotificationMessageInterne, niveau: N, domaine: D, expiration: Option<i64>)
+        &self, _user_id: S, _contenu: NotificationMessageInterne, _niveau: N, _domaine: D, _expiration: Option<i64>)
         -> Result<String, millegrilles_common_rust::error::Error>
         where D: AsRef<str> + Send, S: AsRef<str> + Send, N: AsRef<str> + Send
     {
@@ -156,10 +149,10 @@ impl ValidateurX509Database {
         }
     }
 
-    pub async fn entretien(&self) {
-        debug!("ValidateurX509Database: Entretien ValidateurX509Database");
-        self.validateur.entretien_validateur().await;
-    }
+    // pub async fn entretien(&self) {
+    //     debug!("ValidateurX509Database: Entretien ValidateurX509Database");
+    //     self.validateur.entretien_validateur().await;
+    // }
 
     async fn upsert_enveloppe(&self, enveloppe: &EnveloppeCertificat)
         -> Result<(), millegrilles_common_rust::error::Error>
@@ -261,7 +254,7 @@ impl ValidateurX509 for ValidateurX509Database {
             persiste
         };
 
-        /// Retourne le certificat et indicateur qu'il a ete persiste
+        // Retourne le certificat et indicateur qu'il a ete persiste
         Ok((enveloppe, persiste))
     }
 
@@ -402,7 +395,7 @@ impl ValidateurX509 for ValidateurX509Database {
             for certificat in self.validateur.certificats_persister().iter() {
                 let fingerprint = match certificat.fingerprint() {
                     Ok(inner) => inner,
-                    Err(e) => {
+                    Err(_) => {
                         error!("Erreur fingerprint() durant entretien certificat - SKIP");
                         continue  // Skip le certificat
                     }
@@ -509,7 +502,7 @@ pub fn preparer_middleware_pki() -> MiddlewareHooks {
 
     let mongo = Arc::new(initialiser_mongodb(config).expect("initialiser_mongodb"));
 
-    let (tx_backup, rx_backup) = mpsc::channel::<CommandeBackup>(5);
+    let (tx_backup, _rx_backup) = mpsc::channel::<CommandeBackup>(5);
 
     let redis_dao_validateur = match config.get_configuration_noeud().redis_password {
         Some(_) => Some(RedisDao::new(config.get_configuration_noeud().clone()).expect("connexion redis")),
@@ -588,7 +581,7 @@ impl ValidateurX509 for MiddlewareDbPki {
             persiste
         };
 
-        /// Retourne le certificat et indicateur qu'il a ete persiste
+        // Retourne le certificat et indicateur qu'il a ete persiste
         Ok((enveloppe, persiste))
     }
 

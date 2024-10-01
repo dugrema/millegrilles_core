@@ -1,32 +1,23 @@
 use crate::maitredescomptes_manager::{preparer_index_mongodb as preparer_index_mongodb_maitredescomptes, MaitreDesComptesManager};
 use log::{debug, info, warn};
-use millegrilles_common_rust::{chrono, tokio};
-use millegrilles_common_rust::chrono::Utc;
-use millegrilles_common_rust::configuration::{ConfigMessages, IsConfigNoeud};
+use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::domaines_v2::GestionnaireDomaineSimple;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
-use millegrilles_common_rust::middleware_db_v2::preparer as preparer_middleware;
-use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::static_cell::StaticCell;
 use millegrilles_common_rust::tokio::task::JoinHandle;
-use millegrilles_common_rust::tokio::spawn;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::error::Error as CommonError;
-use millegrilles_common_rust::middleware::{charger_certificats_chiffrage, Middleware};
-
-use crate::common::*;
+use millegrilles_common_rust::middleware::Middleware;
+use crate::catalogues_manager::CataloguesManager;
+use crate::pki_manager::PkiManager;
+use crate::topology_manager::TopologyManager;
 use crate::validateur_pki_mongo::preparer_middleware_pki;
-
-// static MAITREDESCOMPTES_MANAGER: StaticCell<MaitreDesComptesManager> = StaticCell::new();
-// static TOPOLOGY_MANAGER: StaticCell<MaitreDesComptesManager> = StaticCell::new();
-// static CATALOGUES_MANAGER: StaticCell<MaitreDesComptesManager> = StaticCell::new();
-// static PKI_MANAGER: StaticCell<MaitreDesComptesManager> = StaticCell::new();
 
 pub struct Managers {
     pub maitredescomptes: MaitreDesComptesManager,
-    // pub topology: TopologyComptesManager,
-    // pub catalogues: CataloguesManager,
-    // pub pki: PkiManager,
+    pub topology: TopologyManager,
+    pub catalogues: CataloguesManager,
+    pub pki: PkiManager,
 }
 
 static MANAGERS: StaticCell<Managers> = StaticCell::new();
@@ -37,7 +28,7 @@ pub async fn run() {
     let futures_middleware = middleware_hooks.futures;
     let middleware = middleware_hooks.middleware;
 
-    let (gestionnaires, futures_domaines) = initialiser(middleware).await
+    let (_gestionnaires, futures_domaines) = initialiser(middleware).await
         .expect("initialiser domaines");
 
     // Test redis connection
@@ -76,14 +67,11 @@ async fn initialiser<M>(middleware: &'static M) -> Result<
     (&'static Managers, FuturesUnordered<JoinHandle<()>>), CommonError>
 where M: Middleware + IsConfigNoeud
 {
-    let config = middleware.get_configuration_noeud();
-    // let instance_id = config.instance_id.as_ref().expect("instance_id").to_string();
-
     let managers = Managers {
         maitredescomptes: MaitreDesComptesManager {},
-        // topology: TopologyComptesManager {},
-        // catalogues: CataloguesManager {},
-        // pki: PkiManager {},
+        topology: TopologyManager {},
+        catalogues: CataloguesManager {},
+        pki: PkiManager {},
     };
 
     let managers = MANAGERS.try_init(managers)
@@ -93,16 +81,22 @@ where M: Middleware + IsConfigNoeud
     let mut futures = FuturesUnordered::new();
     futures.extend(managers.maitredescomptes.initialiser(middleware).await
         .expect("maitredescomptes_manager initialiser"));
-    // futures.extend(topology_manager.initialiser(middleware).await
-    //     .expect("topology_manager initialiser"));
-    // futures.extend(catalogues_manager.initialiser(middleware).await
-    //     .expect("catalogues_manager initialiser"));
-    // futures.extend(pki_manager.initialiser(middleware).await
-    //     .expect("pki_manager initialiser"));
+    futures.extend(managers.topology.initialiser(middleware).await
+        .expect("topology_manager initialiser"));
+    futures.extend(managers.catalogues.initialiser(middleware).await
+        .expect("catalogues_manager initialiser"));
+    futures.extend(managers.pki.initialiser(middleware).await
+        .expect("pki_manager initialiser"));
 
     // Preparer des ressources additionnelles
     preparer_index_mongodb_maitredescomptes(middleware).await
         .expect("preparer_index_maitredescomptes_mongodb");
+    // preparer_index_mongodb_topology(middleware).await
+    //     .expect("preparer_index_mongodb_topology");
+    // preparer_index_mongodb_catalogues(middleware).await
+    //     .expect("preparer_index_mongodb_catalogues");
+    // preparer_index_mongodb_pki(middleware).await
+    //     .expect("preparer_index_mongodb_pki");
 
     Ok((managers, futures))
 }

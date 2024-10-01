@@ -1,7 +1,7 @@
-pub const DOMAINE_NOM: &str = "CorePki";
+pub const DOMAIN_NAME: &str = "CorePki";
 pub const DOMAINE_LEGACY_NOM: &str = "Pki";
 pub const COLLECTION_CERTIFICAT_NOM: &str = "CorePki/certificat";
-pub const NOM_COLLECTION_TRANSACTIONS: &str = DOMAINE_NOM;
+pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 
 pub const NOM_Q_TRANSACTIONS: &str = "CorePki/transactions";
 pub const NOM_Q_VOLATILS: &str = "CorePki/volatils";
