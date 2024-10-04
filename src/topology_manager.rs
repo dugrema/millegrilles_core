@@ -30,7 +30,7 @@ impl GestionnaireDomaineV2 for TopologyManager {
 
     fn get_collections_volatiles(&self) -> Result<Vec<String>, CommonError> {
         Ok(vec![
-            String::from(NOM_COLLECTION_DOMAINES),
+            // String::from(NOM_COLLECTION_DOMAINES),  // table volatile
             String::from(NOM_COLLECTION_NOEUDS),
         ])
     }
