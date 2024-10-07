@@ -139,6 +139,8 @@ pub struct InfoService {
     pub etat: Option<String>,
     pub labels: Option<HashMap<String, String>>,
     pub replicas: Option<usize>,
+    pub image: Option<String>,
+    pub version: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
