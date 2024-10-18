@@ -301,6 +301,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
     let mut projection = doc! {
         "instance_id": 1,
+        "primaire": 1,
         "consignation_url": 1,
         "type_store": 1,
         "url_download": 1,
@@ -393,29 +394,17 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
                             doc! { "primaire": true }
                         }
                     }
-
-                    // // On ne veut pas le primaire si secondaire local est disponible
-                    // let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
-                    // let filtre = doc! { "instance_id": &instance_id };
-                    // let compte_doc = collection.count_documents(filtre.clone(), None).await?;
-                    // if compte_doc > 0 {
-                    //     debug!("requete_consignation_fichiers Utilisation instance_id local {}", instance_id);
-                    //     filtre
-                    // } else {
-                    //     // L'instance n'a pas de fichiers localement, on utilise le primaire
-                    //     doc! { "primaire": true }
-                    // }
                 }
             }
         }
     };
 
     debug!("requete_consignation_fichiers Filtre {:?}", filtre);
-    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+    let collection = middleware.get_collection_typed::<ReponseInformationConsignationFichiers>(NOM_COLLECTION_FICHIERS)?;
     let fiche_consignation = collection.find_one(filtre, Some(options)).await?;
     let reponse = match fiche_consignation {
-        Some(f) => {
-            let mut fiche_reponse: ReponseInformationConsignationFichiers = convertir_bson_deserializable(f)?;
+        Some(mut fiche_reponse) => {
+            // let mut fiche_reponse: ReponseInformationConsignationFichiers = convertir_bson_deserializable(f)?;
             fiche_reponse.ok = Some(true);
             debug!("requete_consignation_fichiers Row consignation : {:?}", fiche_reponse);
 
@@ -423,22 +412,17 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             let filtre = doc! {"instance_id": &fiche_reponse.instance_id};
             let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_INSTANCES)?;
             if let Some(info_instance) = collection.find_one(filtre, None).await? {
-                // let info_instance: InformationMonitor = convertir_bson_deserializable(doc_instance)?;
                 debug!("requete_consignation_fichiers Info instance chargee {:?}", info_instance);
                 let mut domaines = match info_instance.domaines {
                     Some(inner) => inner.clone(),
                     None => Vec::new()
                 };
-                // if let Some(inner) = info_instance.domaine {
-                //     domaines.push(inner);
-                // }
                 if let Some(inner) = info_instance.onion {
                     domaines.push(inner);
                 }
                 fiche_reponse.hostnames = Some(domaines);
             }
 
-            // middleware.formatter_reponse(&fiche_reponse, None)
             middleware.build_reponse(fiche_reponse)?.0
         },
         None => middleware.reponse_err(None, None, None)?
