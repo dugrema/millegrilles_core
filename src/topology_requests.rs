@@ -423,6 +423,8 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
                 fiche_reponse.hostnames = Some(domaines);
             }
 
+            warn!("requete_consignation_fichiers Troubleshoot response: {:?}", fiche_reponse);
+
             middleware.build_reponse(fiche_reponse)?.0
         },
         None => middleware.reponse_err(None, None, None)?
