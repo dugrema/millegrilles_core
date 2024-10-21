@@ -179,6 +179,7 @@ pub struct PresenceMonitor {
     pub system_fans: Option<Value>,
     pub system_temperature: Option<HashMap<String, Value>>,
     pub webapps: Option<Vec<WebAppLink>>,
+    pub consignation_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -203,6 +204,7 @@ pub struct InformationMonitor {
     #[serde(default)]
     pub date_presence: Option<chrono::DateTime<Utc>>,
     pub webapps: Option<Vec<WebAppLink>>,
+    pub consignation_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
