@@ -29,8 +29,8 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler + 
     let minutes = date_epoch.minute();
 
     // Sauvegarder certificats dirty
-    // if minutes % 5 == 2 {
-    {
+    if minutes % 5 == 2 {
+    // {
         if let Err(e) = sauvegarder_certificats_dirty(middleware, gestionnaire).await {
             error!("pki_maintenance.traiter_cedule Erreur sauvegarde certificats dirty : {:?}", e);
         }
