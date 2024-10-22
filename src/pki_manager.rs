@@ -17,6 +17,7 @@ use millegrilles_common_rust::recepteur_messages::MessageValide;
 use crate::pki_commands::consommer_commande_pki;
 use crate::pki_constants::*;
 use crate::pki_events::consommer_evenement_pki;
+use crate::pki_maintenance::traiter_cedule_pki;
 use crate::pki_requests::consommer_requete_pki;
 use crate::pki_transactions::aiguillage_transaction_pki;
 
@@ -86,11 +87,11 @@ impl AiguillageTransactions for PkiManager {
 
 #[async_trait]
 impl GestionnaireDomaineSimple for PkiManager {
-    async fn traiter_cedule<M>(&self, _middleware: &M, _trigger: &MessageCedule) -> Result<(), CommonError>
+    async fn traiter_cedule<M>(&self, middleware: &M, trigger: &MessageCedule) -> Result<(), CommonError>
     where
         M: MiddlewareMessages + BackupStarter + MongoDao
     {
-        Ok(())
+        traiter_cedule_pki(middleware, self, trigger).await
     }
 }
 

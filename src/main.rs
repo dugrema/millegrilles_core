@@ -45,6 +45,7 @@ mod catalogues_events;
 mod catalogues_transactions;
 mod catalogues_structs;
 mod catalogues_maintenance;
+mod pki_maintenance;
 
 use log::{info};
 use millegrilles_common_rust::tokio as tokio;

@@ -6,7 +6,7 @@ use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::serde_json::Value;
 use serde::{Deserialize, Serialize};
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionSetConsignationInstance {

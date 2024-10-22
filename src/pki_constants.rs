@@ -19,3 +19,5 @@ pub const NOM_Q_TRANSACTIONS_VOLATILS: &str = "CorePki/volatils";
 pub const NOM_Q_TRIGGERS_PKI: &str = "CorePki/triggers";
 pub const NOM_DOMAINE_CERTIFICATS: &str = "certificat";
 pub const EVENEMENT_CERTIFICAT_MAITREDESCLES: &str = "certMaitreDesCles";
+
+pub const CONST_CHAMP_DIRTY: &str = "dirty";
