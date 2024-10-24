@@ -18,4 +18,6 @@ pub struct Catalogue {
     pub dependances: Option<Vec<Value>>,
     pub nginx: Option<HashMap<String, Value>>,
     pub web: Option<HashMap<String, Value>>,
+    #[serde(rename="securityLevels")]
+    pub security_levels: Option<Vec<String>>,
 }

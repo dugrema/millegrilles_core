@@ -54,6 +54,8 @@ struct CatalogueApplicationDeps {
     nom: String,
     version: String,
     securite: Option<String>,
+    #[serde(rename="securityLevels")]
+    security_levels: Option<Vec<String>>,
     dependances: Option<Vec<CatalogueDependance>>,
 }
 
@@ -72,6 +74,7 @@ async fn liste_applications<M>(middleware: &M)
         "nom": true,
         "version": true,
         "securite": true,
+        "securityLevels": true,
         "dependances.name": true,
         "dependances.image": true,
     };
