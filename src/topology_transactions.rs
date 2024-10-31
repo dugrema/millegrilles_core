@@ -8,7 +8,7 @@ use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convert
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::serde_json;
 use crate::topology_constants::*;
-use crate::topology_structs::{FilehostServerRow, PresenceDomaine, PresenceMonitor, TransactionConfigurerConsignation, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire, TransactionSupprimerConsignationInstance};
+use crate::topology_structs::{FilehostServerRow, FilehostingCongurationRow, PresenceDomaine, PresenceMonitor, TransactionConfigurerConsignation, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire, TransactionSupprimerConsignationInstance};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseInformationConsignationFichiers;
 use millegrilles_common_rust::constantes::{CHAMP_MODIFICATION, CHAMP_CREATION, Securite};
@@ -487,12 +487,17 @@ where M: GenerateurMessages + MongoDao
     let doc_transaction: FilehostDeleteTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
 
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
-    let filter = doc!{"filehost_id": doc_transaction.filehost_id };
+    let filter = doc!{"filehost_id": &doc_transaction.filehost_id };
     let ops = doc !{
         "$set": {"deleted": true},
         "$currentDate": {"modified": true},
     };
     let result = collection.update_one(filter, ops, None).await?;
+
+    // Delete default filhost configuration item if matches filehost_id
+    let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+    let filtre_configuration = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT, "value": doc_transaction.filehost_id};
+    collection_configuration.delete_one(filtre_configuration, None).await?;
 
     let ok = result.matched_count == 1;
     if ok {

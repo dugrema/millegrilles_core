@@ -6,6 +6,7 @@ use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::serde_json::Value;
 use serde::{Deserialize, Serialize};
 use millegrilles_common_rust::bson;
+use millegrilles_common_rust::common_messages::RequeteFilehostItem;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
 
@@ -181,6 +182,7 @@ pub struct PresenceMonitor {
     pub system_temperature: Option<HashMap<String, Value>>,
     pub webapps: Option<Vec<WebAppLink>>,
     pub consignation_id: Option<String>,
+    pub filehost_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -232,4 +234,26 @@ pub struct FilehostServerRow {
     pub created: DateTime<Utc>,
     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
     pub modified: DateTime<Utc>,
+}
+
+impl Into<RequeteFilehostItem> for FilehostServerRow {
+    fn into(self) -> RequeteFilehostItem {
+        RequeteFilehostItem {
+            filehost_id: self.filehost_id,
+            instance_id: self.instance_id,
+            url_internal: self.url_internal,
+            url_external: self.url_external,
+            deleted: self.deleted,
+            sync_active: self.sync_active,
+            created: self.created,
+            modified: self.modified,
+        }
+    }
+}
+
+
+#[derive(Serialize, Deserialize)]
+pub struct FilehostingCongurationRow {
+    pub name: String,
+    pub value: String,
 }

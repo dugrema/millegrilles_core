@@ -9,6 +9,7 @@ pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 pub const NOM_COLLECTION_TOKENS: &str = "CoreTopologie/tokens";
 pub const NOM_COLLECTION_FILEHOSTS: &str = "CoreTopologie/filehosts";
 pub const NOM_COLLECTION_FILECONTROLERS: &str = "CoreTopologie/filecontrolers";
+pub const NOM_COLLECTION_FILEHOSTINGCONFIGURATION: &str = "CoreTopologie/filehostingConfiguration";
 
 pub const DOMAINE_PRESENCE_NOM: &str = "CoreTopologie";
 pub const DOMAINE_FICHIERS: &str = "fichiers";
@@ -32,6 +33,7 @@ pub const REQUETE_GET_TOKEN_HEBERGEMENT: &str = "getTokenHebergement";
 pub const REQUETE_GET_CLEID_BACKUP_DOMAINE: &str = "getCleidBackupDomaine";
 pub const REQUETE_GET_FILEHOSTS: &str = "getFilehosts";
 pub const REQUETE_GET_FILECONTROLERS: &str = "getFilecontrolers";
+pub const REQUETE_GET_FILEHOST_FOR_EXTERNAL: &str = "getFilehostForExternal";
 
 pub const TRANSACTION_DOMAINE: &str = "domaine";
 pub const TRANSACTION_INSTANCE: &str = "instance";
@@ -81,3 +83,5 @@ pub const ADRESSE_NATURE_IP6: &str = "ip6";
 pub const ADRESSE_NATURE_ONION: &str = "onion";
 
 pub const DEFAULT_CONSIGNATION_URL: &str = "https://fichiers:1443";
+
+pub const FIELD_CONFIGURATION_FILEHOST_DEFAULT: &str = "filehost.default";

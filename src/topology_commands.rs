@@ -7,7 +7,7 @@ use webauthn_rs::prelude::Url;
 use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
@@ -17,13 +17,13 @@ use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageM
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, Middleware};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
-use millegrilles_common_rust::mongo_dao::MongoDao;
+use millegrilles_common_rust::mongo_dao::{convertir_to_bson, MongoDao};
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
-use crate::topology_requests::RequeteFilehostItem;
+use millegrilles_common_rust::common_messages::RequeteFilehostItem;
 use crate::topology_transactions::{FilehostDeleteTransaction, HostfileAddTransaction, FilehostUpdateTransaction, FilehostRestoreTransaction};
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
@@ -603,6 +603,8 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
                         let result = sauvegarder_traiter_transaction_serializable_v2(
                             middleware, &filehost_update, gestionnaire, DOMAINE_TOPOLOGIE, TRANSACTION_FILEHOST_RESTORE).await?.0;
 
+                        check_default_filehost(middleware, inner.filehost_id.as_str()).await?;
+
                         // Load the new filehost, emit as event
                         let filtre = doc!{"filehost_id": &inner.filehost_id};
                         let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
@@ -637,6 +639,9 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
     let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await?;
 
+    // Check if we have a default filehost. If not, set this new filehost as default.
+    check_default_filehost(middleware, message_id.as_str()).await?;
+
     // Load the new filehost, emit as event
     let filtre = doc!{"filehost_id": &message_id};
     let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
@@ -653,6 +658,22 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     Ok(result)
+}
+
+async fn check_default_filehost<M>(middleware: &M, filehost_id: &str) -> Result<(), Error>
+    where M: MongoDao
+{
+    let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+    let count = collection.count_documents(filtre, None).await?;
+    if count == 0 {
+        info!("Initialize default filehost to {}", filehost_id);
+        // Initialize in a volatile way. User can override manually later.
+        let row = FilehostingCongurationRow {name: FIELD_CONFIGURATION_FILEHOST_DEFAULT.into(), value: filehost_id.to_string()};
+        let row_bson = convertir_to_bson(row)?;
+        collection.insert_one(row_bson, None).await?;
+    }
+    Ok(())
 }
 
 async fn command_filehost_update<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)

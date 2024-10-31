@@ -1,12 +1,13 @@
 use std::collections::HashMap;
 use std::str::from_utf8;
 use std::time::Duration;
+use serde::{Deserialize, Serialize};
 use log::{debug, error, info, warn};
 
+use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::{bson, bson::doc};
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
-use millegrilles_common_rust::constantes::{Securite, DOMAINE_TOPOLOGIE, TRANSACTION_CHAMP_IDMG, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET, DELEGATION_GLOBALE_PROPRIETAIRE, securite_enum, securite_cascade_public, RolesCertificats, DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::{chrono, millegrilles_cryptographie, serde_json};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
@@ -18,17 +19,18 @@ use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::url::Url;
 use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::common_messages::{ReponseInformationConsignationFichiers, RequeteConsignationFichiers, PresenceFichiersRepertoire, RequeteDechiffrage};
+use millegrilles_common_rust::common_messages::{ReponseInformationConsignationFichiers, RequeteConsignationFichiers, PresenceFichiersRepertoire, RequeteDechiffrage, RequeteFilehostItem, RequestFilehostForInstanceResponse};
 use millegrilles_common_rust::dechiffrage::DataChiffre;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_v2;
-use serde::{Deserialize, Serialize};
+use millegrilles_common_rust::common_messages::FilehostForInstanceRequest;
+
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetConsignationInstance, WebAppLink};
+use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetConsignationInstance, WebAppLink};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -62,6 +64,8 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         REQUETE_GET_TOKEN_HEBERGEMENT => requete_get_token_hebergement(middleware, m).await,
                         REQUETE_GET_FILEHOSTS => requete_filehosts(middleware, m).await,
                         REQUETE_GET_FILECONTROLERS => requete_filecontrolers(middleware, m).await,
+                        REQUETE_GET_FILEHOST_FOR_INSTANCE => request_filehost_for_instance(middleware, m).await,
+                        REQUETE_GET_FILEHOST_FOR_EXTERNAL => request_filehost_for_external(middleware, m).await,
                         _ => {
                             error!("Message requete/action non autorisee sur 1.public : '{:?}'. Message dropped.", m.type_message);
                             Ok(None)
@@ -1453,36 +1457,6 @@ where M: GenerateurMessages + MongoDao
     Ok(Some(reponse))
 }
 
-
-#[derive(Serialize)]
-pub struct RequeteFilehostItem {
-    pub filehost_id: String,
-    pub instance_id: Option<String>,
-    pub url_internal: Option<String>,
-    pub url_external: Option<String>,
-    pub deleted: bool,
-    pub sync_active: bool,
-    #[serde(with = "epochseconds")]
-    pub created: DateTime<Utc>,
-    #[serde(with = "epochseconds")]
-    pub modified: DateTime<Utc>,
-}
-
-impl From<FilehostServerRow> for RequeteFilehostItem {
-    fn from(value: FilehostServerRow) -> Self {
-        Self {
-            filehost_id: value.filehost_id,
-            instance_id: value.instance_id,
-            url_internal: value.url_internal,
-            url_external: value.url_external,
-            deleted: value.deleted,
-            sync_active: value.sync_active,
-            created: value.created,
-            modified: value.modified,
-        }
-    }
-}
-
 #[derive(Serialize)]
 struct RequeteFilehostListResponse {
     ok: bool,
@@ -1551,4 +1525,159 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
     let response = RequeteFilehostListResponse { ok: true, list };
     Ok(Some(middleware.build_reponse(response)?.0))
+}
+
+async fn request_filehost_for_instance<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let message_ref = message.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: FilehostForInstanceRequest = message_contenu.deserialize()?;
+
+    let certificat = message.certificat.as_ref();
+    let certificate_instance_id = if certificat.verifier_exchanges(vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure])? {
+        // Back-end component, use common name (instance_id)
+        certificat.get_common_name()?
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    };
+
+    // Select the instance_id
+    let instance_id = requete.instance_id.unwrap_or_else(|| certificate_instance_id);
+
+    let collection_filehosts = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+
+    // Identify the filehost_id from the instance_id if possible
+    let filehost_id = match requete.filehost_id {
+        Some(inner) => Some(inner),  // Filehost provided
+        None => {
+            // Check if instance configuration overrides with filehost_id
+            let collection_instances = middleware.get_collection_typed::<PresenceMonitor>(NOM_COLLECTION_INSTANCES)?;
+            let filtre = doc! {"instance_id": &instance_id};
+            match collection_instances.find_one(filtre, None).await? {
+                Some(inner) => match inner.filehost_id {
+                    Some(inner) => Some(inner),
+                    None => {
+                        // Check if there is a filehost directly on this instance
+                        let filtre_filehosts = doc! {"instance_id": &instance_id, "deleted": false};
+                        match collection_filehosts.find_one(filtre_filehosts, None).await? {
+                            Some(inner) => Some(inner.filehost_id),
+                            None => None
+                        }
+                    }
+                },
+                None => None
+            }
+        }
+    };
+
+    let filehost_id = match filehost_id {
+        Some(inner) => Some(inner),  // Alrady got it
+        None => {
+            // Load the default filehost_id
+            let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+            let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
+            match collection_configuration.find_one(filtre, None).await? {
+                Some(inner) => Some(inner.value),
+                None => None
+            }
+        }
+    };
+
+    let filtre = match filehost_id.as_ref() {
+        Some(inner) => doc!{"filehost_id": inner, "deleted": false},
+        None => doc!{"deleted": false, "external_url": {"$exists": true}}  // Pick random with external_url if any available
+    };
+    match collection_filehosts.find_one(filtre, None).await? {
+        Some(inner) => {
+            let filehost: RequeteFilehostItem = inner.into();
+            Ok(Some(middleware.build_reponse(RequestFilehostForInstanceResponse { ok: true, filehost })?.0))
+        }
+        None => {
+            Ok(Some(middleware.reponse_err(Some(404), None, Some("no filehost available"))?))
+        }
+    }
+
+}
+
+#[derive(Deserialize)]
+struct FilehostForExternalRequest {
+    instance_id: Option<String>,
+    filehost_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RequestFilehostForExternalResponse {
+    ok: bool,
+    url_external: String,
+}
+
+async fn request_filehost_for_external<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let message_ref = message.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: FilehostForInstanceRequest = message_contenu.deserialize()?;
+
+    // Select the instance_id
+    let instance_id = requete.instance_id;
+
+    let collection_filehosts = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+
+    // Identify the filehost_id from the instance_id if possible
+    let filehost_id = match requete.filehost_id {
+        Some(inner) => Some(inner),  // Filehost provided
+        None => match instance_id {
+            Some(instance_id) => {
+                // Check if instance configuration overrides with filehost_id
+                let collection_instances = middleware.get_collection_typed::<PresenceMonitor>(NOM_COLLECTION_INSTANCES)?;
+                let filtre = doc! {"instance_id": &instance_id};
+                match collection_instances.find_one(filtre, None).await? {
+                    Some(inner) => match inner.filehost_id {
+                        Some(inner) => Some(inner),
+                        None => {
+                            // Check if there is a filehost directly on this instance
+                            let filtre_filehosts = doc! {"instance_id": &instance_id, "deleted": false};
+                            match collection_filehosts.find_one(filtre_filehosts, None).await? {
+                                Some(inner) => Some(inner.filehost_id),
+                                None => None
+                            }
+                        }
+                    },
+                    None => None
+                }
+            },
+            None => None
+        }
+    };
+
+    let filehost_id = match filehost_id {
+        Some(inner) => Some(inner),  // Alrady got it
+        None => {
+            // Load the default filehost_id
+            let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+            let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
+            match collection_configuration.find_one(filtre, None).await? {
+                Some(inner) => Some(inner.value),
+                None => None
+            }
+        }
+    };
+
+    let filtre = match filehost_id.as_ref() {
+        Some(inner) => doc!{"filehost_id": inner, "external_url": {"$exists": true}, "deleted": false},
+        None => doc!{"deleted": false, "external_url": {"$exists": true}}  // Pick random with external_url if any available
+    };
+
+    match collection_filehosts.find_one(filtre, None).await? {
+        Some(inner) => {
+            let url_external = inner.url_external.expect("url_external");
+            Ok(Some(middleware.build_reponse(RequestFilehostForExternalResponse { ok: true, url_external })?.0))
+        }
+        None => {
+            Ok(Some(middleware.reponse_err(Some(404), None, Some("no filehost available"))?))
+        }
+    }
 }
