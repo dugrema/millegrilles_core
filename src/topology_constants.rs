@@ -7,6 +7,8 @@ pub const NOM_COLLECTION_MILLEGRILLES_ADRESSES: &str = "CoreTopologie/millegrill
 pub const NOM_COLLECTION_FICHIERS: &str = "CoreTopologie/fichiers";
 pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 pub const NOM_COLLECTION_TOKENS: &str = "CoreTopologie/tokens";
+pub const NOM_COLLECTION_FILEHOSTS: &str = "CoreTopologie/filehosts";
+pub const NOM_COLLECTION_FILECONTROLERS: &str = "CoreTopologie/filecontrolers";
 
 pub const DOMAINE_PRESENCE_NOM: &str = "CoreTopologie";
 pub const DOMAINE_FICHIERS: &str = "fichiers";
@@ -28,6 +30,8 @@ pub const REQUETE_CONFIGURATION_FICHIERS: &str = "getConfigurationFichiers";
 pub const REQUETE_GET_CLE_CONFIGURATION: &str = "getCleConfiguration";
 pub const REQUETE_GET_TOKEN_HEBERGEMENT: &str = "getTokenHebergement";
 pub const REQUETE_GET_CLEID_BACKUP_DOMAINE: &str = "getCleidBackupDomaine";
+pub const REQUETE_GET_FILEHOSTS: &str = "getFilehosts";
+pub const REQUETE_GET_FILECONTROLERS: &str = "getFilecontrolers";
 
 pub const TRANSACTION_DOMAINE: &str = "domaine";
 pub const TRANSACTION_INSTANCE: &str = "instance";
@@ -37,6 +41,9 @@ pub const TRANSACTION_SET_FICHIERS_PRIMAIRE: &str = "setFichiersPrimaire";
 pub const TRANSACTION_CONFIGURER_CONSIGNATION: &str = "configurerConsignation";
 pub const TRANSACTION_SET_CONSIGNATION_INSTANCE: &str = "setConsignationInstance";
 pub const TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE: &str = "supprimerConsignation";
+pub const TRANSACTION_FILEHOST_ADD: &str = "filehostAdd";
+pub const TRANSACTION_FILEHOST_UPDATE: &str = "filehostUpdate";
+pub const TRANSACTION_FILEHOST_DELETE: &str = "filehostDelete";
 
 pub const COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE: &str = "ajouterConsignationHebergee";
 pub const COMMANDE_SET_CLEID_BACKUP_DOMAINE: &str = "setCleidBackupDomaine";

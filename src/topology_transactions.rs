@@ -1,6 +1,6 @@
 use log::{debug, error};
 use millegrilles_common_rust::bson::doc;
-use millegrilles_common_rust::certificats::ValidateurX509;
+use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
@@ -8,10 +8,11 @@ use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convert
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::serde_json;
 use crate::topology_constants::*;
-use crate::topology_structs::{PresenceDomaine, PresenceMonitor, TransactionConfigurerConsignation, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire, TransactionSupprimerConsignationInstance};
+use crate::topology_structs::{FilehostServerRow, PresenceDomaine, PresenceMonitor, TransactionConfigurerConsignation, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire, TransactionSupprimerConsignationInstance};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseInformationConsignationFichiers;
 use millegrilles_common_rust::constantes::{CHAMP_MODIFICATION, CHAMP_CREATION, Securite};
+use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, ReturnDocument, UpdateOptions};
 use millegrilles_common_rust::serde_json::json;
 
@@ -41,6 +42,9 @@ where
         TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
         TRANSACTION_SET_CONSIGNATION_INSTANCE => transaction_set_consignation_instance(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_transaction_supprimer_consignation(middleware, transaction).await,
+        TRANSACTION_FILEHOST_ADD => filehost_add(middleware, transaction).await,
+        TRANSACTION_FILEHOST_UPDATE => todo!(),
+        TRANSACTION_FILEHOST_DELETE => filehost_delete(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
@@ -371,4 +375,84 @@ where M: GenerateurMessages + MongoDao
 
     let reponse = middleware.reponse_ok(None, None)?;
     Ok(Some(reponse))
+}
+
+#[derive(Deserialize)]
+pub struct HostfileAddTransaction {
+    pub url_external: Option<String>,
+    pub url_internal: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct HostfileUpdateTransaction {
+    pub filehost_id: String,
+    pub instance_id: Option<String>,
+    pub url_external: Option<String>,
+    pub url_internal: Option<String>,
+    pub sync_active: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct HostfileAddTransactionResponse {
+    ok: bool,
+    filehost_id: String
+}
+
+async fn filehost_add<M>(middleware: &M, transaction: TransactionValide)
+                         -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao
+{
+    let doc_transaction: HostfileAddTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+    let transaction_id = &transaction.transaction.id;
+
+    let mut instance_id = None;
+    if transaction.certificat.verifier_exchanges(vec![Securite::L1Public])? && transaction.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
+        instance_id = Some(transaction.certificat.get_common_name()?);
+    }
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+    let now = Utc::now();
+    let filehost = FilehostServerRow {
+        filehost_id: transaction_id.clone(),  // Assign new hostfile_id from transaction id
+        instance_id,
+        url_internal: doc_transaction.url_internal,
+        url_external: doc_transaction.url_external,
+        deleted: false,
+        sync_active: true,
+        created: now.clone(),
+        modified: now,
+    };
+    let filehost_bson = convertir_to_bson(filehost)?;
+    collection.insert_one(filehost_bson, None).await?;
+
+    let response = HostfileAddTransactionResponse {ok: true, filehost_id: transaction_id.clone()};
+    let response = middleware.build_reponse(response)?.0;
+    Ok(Some(response))
+}
+
+#[derive(Deserialize)]
+pub struct FilehostDeleteTransaction {
+    pub filehost_id: String,
+}
+
+async fn filehost_delete<M>(middleware: &M, transaction: TransactionValide)
+                         -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao
+{
+    let doc_transaction: FilehostDeleteTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+    let filter = doc!{"filehost_id": doc_transaction.filehost_id };
+    let ops = doc !{
+        "$set": {"deleted": true},
+        "$currentDate": {"modified": true},
+    };
+    let result = collection.update_one(filter, ops, None).await?;
+
+    let ok = result.matched_count == 1;
+    if ok {
+        Ok(Some(middleware.reponse_ok(None, None)?))
+    } else {
+        Ok(Some(middleware.reponse_err(Some(404), None, Some("No filehost item updated"))?))
+    }
 }

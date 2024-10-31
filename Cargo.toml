@@ -1,6 +1,6 @@
 [package]
 name = "millegrilles_core"
-version = "2024.7.56"
+version = "2024.8.58"
 edition = "2021"
 
 [dependencies]

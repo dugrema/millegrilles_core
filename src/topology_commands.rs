@@ -23,6 +23,7 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
+use crate::topology_transactions::{FilehostDeleteTransaction, HostfileAddTransaction, HostfileUpdateTransaction};
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -48,6 +49,9 @@ where M: Middleware
         TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire).await,
         TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
         TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_commande_supprimer_consignation_instance(middleware, m, gestionnaire).await,
+        TRANSACTION_FILEHOST_ADD => command_filehost_add(middleware, m, gestionnaire).await,
+        TRANSACTION_FILEHOST_UPDATE => todo!(),
+        TRANSACTION_FILEHOST_DELETE => command_filehost_delete(middleware, m, gestionnaire).await,
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
@@ -552,4 +556,113 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+async fn command_filehost_add<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+                                 -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("command_filehost_add Message : {:?}", &m.type_message);
+    let commande: HostfileAddTransaction = {
+        let message_ref = m.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        message_contenu.deserialize()?
+    };
+
+    let certificat = m.certificat.as_ref();
+    if certificat.verifier_roles_string(vec!["filecontroler".to_string()])? && certificat.verifier_exchanges(vec![Securite::L1Public])?{
+        if commande.url_internal.is_some() {
+            // This is a file controler trying to automatically add a local file host.
+            // Ensure that no file host exists for the instance_id of the file controler.
+            let certificate = m.certificat.as_ref();
+            let instance_id = certificate.get_common_name()?;
+            let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+            let filtre = doc!{"instance_id": instance_id};
+            let count = collection.count_documents(filtre, None).await?;
+            if count > 0 {
+                return Ok(Some(middleware.reponse_err(Some(409), None, Some("Filehost for instance exists"))?))
+            }
+        } else {
+            return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+        }
+    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        if let Some(url_external) = commande.url_external.as_ref() {
+            // Admin adding an external file host.
+            // Ensure no file host exists for this url.
+            let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+            let filtre = doc!{"url_external": url_external};
+            let count = collection.count_documents(filtre, None).await?;
+            if count > 0 {
+                return Ok(Some(middleware.reponse_err(Some(409), None, Some("Url exists"))?))
+            }
+        } else {
+            return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+        }
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await
+}
+
+async fn command_filehost_update<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+                                    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("command_filehost_update Message : {:?}", &m.type_message);
+    let commande: HostfileUpdateTransaction = {
+        let message_ref = m.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        message_contenu.deserialize()?
+    };
+
+    let certificat = m.certificat.as_ref();
+    if certificat.verifier_roles_string(vec!["filecontroler".to_string()])? && certificat.verifier_exchanges(vec![Securite::L1Public])?{
+        // File controler
+    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        // Admin
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    let filehost_id = commande.filehost_id;
+    // Check that filehost exists
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+    let filtre = doc!{"filehost_id": filehost_id};
+    let count = collection.count_documents(filtre, None).await?;
+    if count == 0 {
+        return Ok(Some(middleware.reponse_err(Some(404), None, Some("Filehost does not exist"))?))
+    }
+
+    sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await
+}
+
+async fn command_filehost_delete<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+                                    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("command_filehost_remove Message : {:?}", &m.type_message);
+    let commande: FilehostDeleteTransaction = {
+        let message_ref = m.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        message_contenu.deserialize()?
+    };
+
+    let certificat = m.certificat.as_ref();
+    if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        // Ok, admin removing file host.
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    let filehost_id = commande.filehost_id;
+    // Check that filehost exists and is not deleted (flag).
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+    let filtre = doc!{"filehost_id": filehost_id, "deleted": false};
+    let count = collection.count_documents(filtre, None).await?;
+    if count == 0 {
+        return Ok(Some(middleware.reponse_err(Some(404), None, Some("Filehost does not exist or is already deleted"))?))
+    }
+
+    sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await
 }

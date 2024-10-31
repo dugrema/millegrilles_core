@@ -2656,7 +2656,7 @@ dependencies = [
 
 [[package]]
 name = "millegrilles_core"
-version = "2024.7.56"
+version = "2024.8.58"
 dependencies = [
  "env_logger 0.9.3",
  "log",

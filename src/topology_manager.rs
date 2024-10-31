@@ -134,6 +134,8 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
         REQUETE_APPLICATIONS_TIERS,
         REQUETE_CONSIGNATION_FICHIERS,
         REQUETE_GET_TOKEN_HEBERGEMENT,
+        REQUETE_GET_FILEHOSTS,
+        REQUETE_GET_FILECONTROLERS,
     ];
     for req in requetes_publiques {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L1Public });
@@ -153,6 +155,15 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, commande), exchange: Securite::L3Protege });
+    }
+
+    let commandes_publiques: Vec<&str> = vec![
+        TRANSACTION_FILEHOST_ADD,
+        TRANSACTION_FILEHOST_UPDATE,
+        TRANSACTION_FILEHOST_DELETE,
+    ];
+    for c in commandes_publiques {
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, c), exchange: Securite::L1Public });
     }
 
     for sec in vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure] {

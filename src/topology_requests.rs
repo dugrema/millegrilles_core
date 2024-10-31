@@ -5,7 +5,7 @@ use log::{debug, error, info, warn};
 
 use millegrilles_common_rust::{bson, bson::doc};
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::constantes::{Securite, DOMAINE_TOPOLOGIE, TRANSACTION_CHAMP_IDMG, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET, DELEGATION_GLOBALE_PROPRIETAIRE, securite_enum, securite_cascade_public, RolesCertificats, DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::{chrono, millegrilles_cryptographie, serde_json};
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetConsignationInstance, WebAppLink};
+use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetConsignationInstance, WebAppLink};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -60,6 +60,8 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
                         REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
                         REQUETE_GET_TOKEN_HEBERGEMENT => requete_get_token_hebergement(middleware, m).await,
+                        REQUETE_GET_FILEHOSTS => requete_filehosts(middleware, m).await,
+                        REQUETE_GET_FILECONTROLERS => requete_filecontrolers(middleware, m).await,
                         _ => {
                             error!("Message requete/action non autorisee sur 1.public : '{:?}'. Message dropped.", m.type_message);
                             Ok(None)
@@ -1449,4 +1451,104 @@ where M: GenerateurMessages + MongoDao
     };
 
     Ok(Some(reponse))
+}
+
+
+#[derive(Serialize)]
+struct RequeteFilehostItem {
+    pub filehost_id: String,
+    pub instance_id: Option<String>,
+    pub url_internal: Option<String>,
+    pub url_external: Option<String>,
+    pub deleted: bool,
+    pub sync_active: bool,
+    #[serde(with = "epochseconds")]
+    pub created: DateTime<Utc>,
+    #[serde(with = "epochseconds")]
+    pub modified: DateTime<Utc>,
+}
+
+impl From<FilehostServerRow> for RequeteFilehostItem {
+    fn from(value: FilehostServerRow) -> Self {
+        Self {
+            filehost_id: value.filehost_id,
+            instance_id: value.instance_id,
+            url_internal: value.url_internal,
+            url_external: value.url_external,
+            deleted: value.deleted,
+            sync_active: value.sync_active,
+            created: value.created,
+            modified: value.modified,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct RequeteFilehostListResponse {
+    ok: bool,
+    list: Vec<RequeteFilehostItem>,
+}
+
+#[derive(Deserialize)]
+struct RequeteFilehostListRequest {
+    filehost_id: Option<String>,
+}
+
+async fn requete_filehosts<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let message_ref = message.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteFilehostListRequest = message_contenu.deserialize()?;
+
+    let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+
+    let filtre = match requete.filehost_id {
+        Some(inner) => doc!{"filehost_id": inner},
+        None => doc!{"deleted": false}
+    };
+
+    let mut cursor = collection.find(filtre, None).await?;
+    let mut list = Vec::new();
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        let item: RequeteFilehostItem = row.into();
+        list.push(item);
+    }
+
+    let response = RequeteFilehostListResponse { ok: true, list };
+    Ok(Some(middleware.build_reponse(response)?.0))
+}
+
+#[derive(Deserialize)]
+struct RequeteFilecontrolersListRequest {
+    instance_id: Option<String>,
+}
+
+async fn requete_filecontrolers<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let message_ref = message.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteFilecontrolersListRequest = message_contenu.deserialize()?;
+
+    let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILECONTROLERS)?;
+
+    let filtre = match requete.instance_id {
+        Some(inner) => doc!{"instance_id": inner},
+        None => doc!{"deleted": false}
+    };
+
+    let mut cursor = collection.find(filtre, None).await?;
+    let mut list = Vec::new();
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        let item: RequeteFilehostItem = row.into();
+        list.push(item);
+    }
+
+    let response = RequeteFilehostListResponse { ok: true, list };
+    Ok(Some(middleware.build_reponse(response)?.0))
 }

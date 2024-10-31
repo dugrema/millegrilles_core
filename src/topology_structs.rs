@@ -1,10 +1,11 @@
 use std::collections::HashMap;
 use millegrilles_common_rust::chrono;
-use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::dechiffrage::DataChiffre;
 use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::serde_json::Value;
 use serde::{Deserialize, Serialize};
+use millegrilles_common_rust::bson;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
 
@@ -217,4 +218,18 @@ pub struct PresenceDomaine {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionSupprimerConsignationInstance {
     pub instance_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FilehostServerRow {
+    pub filehost_id: String,
+    pub instance_id: Option<String>,
+    pub url_internal: Option<String>,
+    pub url_external: Option<String>,
+    pub deleted: bool,
+    pub sync_active: bool,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub created: DateTime<Utc>,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub modified: DateTime<Utc>,
 }
