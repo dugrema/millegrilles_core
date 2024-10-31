@@ -45,6 +45,7 @@ where
         TRANSACTION_FILEHOST_ADD => filehost_add(middleware, transaction).await,
         TRANSACTION_FILEHOST_UPDATE => todo!(),
         TRANSACTION_FILEHOST_DELETE => filehost_delete(middleware, transaction).await,
+        TRANSACTION_FILEHOST_RESTORE => filehost_restore(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
@@ -384,12 +385,17 @@ pub struct HostfileAddTransaction {
 }
 
 #[derive(Deserialize)]
-pub struct HostfileUpdateTransaction {
+pub struct FilehostUpdateTransaction {
     pub filehost_id: String,
     pub instance_id: Option<String>,
     pub url_external: Option<String>,
     pub url_internal: Option<String>,
     pub sync_active: Option<bool>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FilehostRestoreTransaction {
+    pub filehost_id: String,
 }
 
 #[derive(Serialize)]
@@ -445,6 +451,28 @@ where M: GenerateurMessages + MongoDao
     let filter = doc!{"filehost_id": doc_transaction.filehost_id };
     let ops = doc !{
         "$set": {"deleted": true},
+        "$currentDate": {"modified": true},
+    };
+    let result = collection.update_one(filter, ops, None).await?;
+
+    let ok = result.matched_count == 1;
+    if ok {
+        Ok(Some(middleware.reponse_ok(None, None)?))
+    } else {
+        Ok(Some(middleware.reponse_err(Some(404), None, Some("No filehost item updated"))?))
+    }
+}
+
+async fn filehost_restore<M>(middleware: &M, transaction: TransactionValide)
+                            -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao
+{
+    let doc_transaction: FilehostRestoreTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+    let filter = doc!{"filehost_id": doc_transaction.filehost_id };
+    let ops = doc !{
+        "$set": {"deleted": false},
         "$currentDate": {"modified": true},
     };
     let result = collection.update_one(filter, ops, None).await?;

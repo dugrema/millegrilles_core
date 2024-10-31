@@ -1455,7 +1455,7 @@ where M: GenerateurMessages + MongoDao
 
 
 #[derive(Serialize)]
-struct RequeteFilehostItem {
+pub struct RequeteFilehostItem {
     pub filehost_id: String,
     pub instance_id: Option<String>,
     pub url_internal: Option<String>,

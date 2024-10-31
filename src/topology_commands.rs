@@ -1,4 +1,4 @@
-use log::{debug, error};
+use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::from_utf8;
@@ -7,11 +7,11 @@ use webauthn_rs::prelude::Url;
 use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{FichePublique, FilehostServerRow, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
-use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, COMMANDE_SAUVEGARDER_CLE, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_NOM_MAITREDESCLES, DOMAINE_RELAIWEB, TOPOLOGIE_NOM_DOMAINE};
+use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, COMMANDE_SAUVEGARDER_CLE, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_NOM_MAITREDESCLES, DOMAINE_RELAIWEB, DOMAINE_TOPOLOGIE, TOPOLOGIE_NOM_DOMAINE};
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
@@ -23,7 +23,8 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
-use crate::topology_transactions::{FilehostDeleteTransaction, HostfileAddTransaction, HostfileUpdateTransaction};
+use crate::topology_requests::RequeteFilehostItem;
+use crate::topology_transactions::{FilehostDeleteTransaction, HostfileAddTransaction, FilehostUpdateTransaction, FilehostRestoreTransaction};
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -563,10 +564,12 @@ async fn command_filehost_add<M>(middleware: &M, m: MessageValide, gestionnaire:
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("command_filehost_add Message : {:?}", &m.type_message);
-    let commande: HostfileAddTransaction = {
+    let (commande, message_id) = {
         let message_ref = m.message.parse()?;
         let message_contenu = message_ref.contenu()?;
-        message_contenu.deserialize()?
+        let message_id = message_ref.id.to_owned();
+        let transaction: HostfileAddTransaction = message_contenu.deserialize()?;
+        (transaction, message_id)
     };
 
     let certificat = m.certificat.as_ref();
@@ -589,11 +592,41 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         if let Some(url_external) = commande.url_external.as_ref() {
             // Admin adding an external file host.
             // Ensure no file host exists for this url.
-            let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+            let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
             let filtre = doc!{"url_external": url_external};
-            let count = collection.count_documents(filtre, None).await?;
-            if count > 0 {
-                return Ok(Some(middleware.reponse_err(Some(409), None, Some("Url exists"))?))
+            match collection.find_one(filtre, None).await? {
+                Some(inner) => {
+                    // Exists, check if deleted (this would be a restore)
+                    if inner.deleted {
+                        info!("command_filehost_add Restoring filehost, rewriting add as update delete=false");
+                        let filehost_update = FilehostRestoreTransaction {filehost_id: inner.filehost_id.clone()};
+                        let result = sauvegarder_traiter_transaction_serializable_v2(
+                            middleware, &filehost_update, gestionnaire, DOMAINE_TOPOLOGIE, TRANSACTION_FILEHOST_RESTORE).await?.0;
+
+                        // Load the new filehost, emit as event
+                        let filtre = doc!{"filehost_id": &inner.filehost_id};
+                        let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+                        match collection.find_one(filtre, None).await? {
+                            Some(inner) => {
+                                let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostRestore", vec![Securite::L1Public])
+                                    .build();
+                                let filehost_item: RequeteFilehostItem = inner.into();
+                                middleware.emettre_evenement(routing, filehost_item).await?;
+                            }
+                            None => {
+                                warn!("command_filehost_add Transaction successful but no item in database for {}", message_id);
+                            }
+                        }
+
+                        return Ok(result);
+                    } else {
+                        // Conflict, already exists
+                        return Ok(Some(middleware.reponse_err(Some(409), None, Some("Url exists"))?))
+                    }
+                }
+                None => {
+                    // Ok, this is a new filehost
+                }
             }
         } else {
             return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
@@ -602,7 +635,24 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
     }
 
-    sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await
+    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await?;
+
+    // Load the new filehost, emit as event
+    let filtre = doc!{"filehost_id": &message_id};
+    let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+    match collection.find_one(filtre, None).await? {
+        Some(inner) => {
+            let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostAdd", vec![Securite::L1Public])
+                .build();
+            let filehost_item: RequeteFilehostItem = inner.into();
+            middleware.emettre_evenement(routing, filehost_item).await?;
+        }
+        None => {
+            warn!("command_filehost_add Transaction successful but no item in database for {}", message_id);
+        }
+    }
+
+    Ok(result)
 }
 
 async fn command_filehost_update<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
@@ -610,7 +660,7 @@ async fn command_filehost_update<M>(middleware: &M, m: MessageValide, gestionnai
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("command_filehost_update Message : {:?}", &m.type_message);
-    let commande: HostfileUpdateTransaction = {
+    let commande: FilehostUpdateTransaction = {
         let message_ref = m.message.parse()?;
         let message_contenu = message_ref.contenu()?;
         message_contenu.deserialize()?
@@ -637,6 +687,9 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await
 }
 
+#[derive(Serialize)]
+struct EventFilehostDeleted { filehost_id: String }
+
 async fn command_filehost_delete<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -658,11 +711,18 @@ async fn command_filehost_delete<M>(middleware: &M, m: MessageValide, gestionnai
     let filehost_id = commande.filehost_id;
     // Check that filehost exists and is not deleted (flag).
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
-    let filtre = doc!{"filehost_id": filehost_id, "deleted": false};
+    let filtre = doc!{"filehost_id": &filehost_id, "deleted": false};
     let count = collection.count_documents(filtre, None).await?;
     if count == 0 {
         return Ok(Some(middleware.reponse_err(Some(404), None, Some("Filehost does not exist or is already deleted"))?))
     }
 
-    sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await
+    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await?;
+
+    let event = EventFilehostDeleted { filehost_id };
+    let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostDelete", vec![Securite::L1Public])
+        .build();
+    middleware.emettre_evenement(routing, event).await?;
+
+    Ok(result)
 }
