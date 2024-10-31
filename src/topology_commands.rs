@@ -51,7 +51,7 @@ where M: Middleware
         TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
         TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_commande_supprimer_consignation_instance(middleware, m, gestionnaire).await,
         TRANSACTION_FILEHOST_ADD => command_filehost_add(middleware, m, gestionnaire).await,
-        TRANSACTION_FILEHOST_UPDATE => todo!(),
+        TRANSACTION_FILEHOST_UPDATE => command_filehost_update(middleware, m, gestionnaire).await,
         TRANSACTION_FILEHOST_DELETE => command_filehost_delete(middleware, m, gestionnaire).await,
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire).await,
@@ -678,13 +678,30 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     let filehost_id = commande.filehost_id;
     // Check that filehost exists
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
-    let filtre = doc!{"filehost_id": filehost_id};
+    let filtre = doc!{"filehost_id": &filehost_id};
     let count = collection.count_documents(filtre, None).await?;
     if count == 0 {
         return Ok(Some(middleware.reponse_err(Some(404), None, Some("Filehost does not exist"))?))
     }
 
-    sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await
+    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await?;
+
+    // Load the new filehost, emit as event
+    let filtre = doc!{"filehost_id": &filehost_id};
+    let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+    match collection.find_one(filtre, None).await? {
+        Some(inner) => {
+            let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostUpdate", vec![Securite::L1Public])
+                .build();
+            let filehost_item: RequeteFilehostItem = inner.into();
+            middleware.emettre_evenement(routing, filehost_item).await?;
+        }
+        None => {
+            warn!("command_filehost_add Transaction successful but no item in database for {}", filehost_id);
+        }
+    }
+
+    Ok(result)
 }
 
 #[derive(Serialize)]

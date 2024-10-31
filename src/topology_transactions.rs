@@ -43,7 +43,7 @@ where
         TRANSACTION_SET_CONSIGNATION_INSTANCE => transaction_set_consignation_instance(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_transaction_supprimer_consignation(middleware, transaction).await,
         TRANSACTION_FILEHOST_ADD => filehost_add(middleware, transaction).await,
-        TRANSACTION_FILEHOST_UPDATE => todo!(),
+        TRANSACTION_FILEHOST_UPDATE => filehost_update(middleware, transaction).await,
         TRANSACTION_FILEHOST_DELETE => filehost_delete(middleware, transaction).await,
         TRANSACTION_FILEHOST_RESTORE => filehost_restore(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
@@ -434,6 +434,45 @@ where M: GenerateurMessages + MongoDao
     let response = HostfileAddTransactionResponse {ok: true, filehost_id: transaction_id.clone()};
     let response = middleware.build_reponse(response)?.0;
     Ok(Some(response))
+}
+
+async fn filehost_update<M>(middleware: &M, transaction: TransactionValide)
+                         -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao
+{
+    let doc_transaction: FilehostUpdateTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+    let filtre = doc! {"filehost_id": doc_transaction.filehost_id};
+    let mut set_ops = doc!{};
+    if let Some(inner) = doc_transaction.instance_id {
+        set_ops.insert("instance_id", inner);
+    }
+    if let Some(inner) = doc_transaction.url_internal {
+        set_ops.insert("url_internal", inner);
+    }
+    if let Some(inner) = doc_transaction.url_external {
+        set_ops.insert("url_external", inner);
+    }
+    if let Some(inner) = doc_transaction.sync_active {
+        set_ops.insert("sync_active", inner);
+    }
+
+    if set_ops.len() == 0 {
+        return Ok(Some(middleware.reponse_err(Some(400), None, Some("No changes"))?));
+    }
+
+    let ops = doc!{
+        "$set": set_ops,
+        "$currentDate": {"modified": true}
+    };
+    let result = collection.update_one(filtre, ops, None).await?;
+
+    if result.matched_count == 1 {
+        Ok(Some(middleware.reponse_ok(None, None)?))
+    } else {
+        Ok(Some(middleware.reponse_err(Some(404), None, Some("No match"))?))
+    }
 }
 
 #[derive(Deserialize)]
