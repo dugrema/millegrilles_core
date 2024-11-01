@@ -1,5 +1,5 @@
 use log::debug;
-use millegrilles_common_rust::bson::{doc, Bson, Array};
+use millegrilles_common_rust::bson::{doc, Bson, Array, DateTime};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::common_messages::PresenceFichiersRepertoire;
@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::topology_common::generer_contenu_fiche_publique;
 use crate::topology_manager::TopologyManager;
 use crate::topology_constants::*;
-use crate::topology_structs::{PresenceDomaine, PresenceMonitor, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{EventFilehostUsage, EventNewFuuid, PresenceDomaine, PresenceMonitor, TransactionSetFichiersPrimaire};
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 
 pub async fn consommer_evenement_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
@@ -53,6 +53,8 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
             }
         },
         EVENEMENT_APPLICATION_DEMARREE | EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
+        EVENEMENT_FILEHOST_USAGE => traiter_evenement_filehost_usage(middleware, m).await,
+        EVENEMENT_FILEHOST_NEWFUUID => traiter_evenement_filehost_newfuuid(middleware, m).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", action))?,
     }
 }
@@ -317,6 +319,61 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 
     // Regenerer fiche publique
     produire_fiche_publique(middleware).await?;
+
+    Ok(None)
+}
+
+async fn traiter_evenement_filehost_usage<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
+{
+    if ! m.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
+        debug!("traiter_evenement_filehost_usage Wrong certificate for event - DROPPED");
+        return Ok(None)
+    }
+
+    let commande: EventFilehostUsage = {
+        let message_ref = m.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        message_contenu.deserialize()?
+    };
+    let filtre = doc! {"filehost_id": &commande.filehost_id};
+    let ops = doc!{
+        "$set": {
+            "stats_updated": &commande.date,
+            "fuuid": convertir_to_bson(commande.fuuid)?,
+        },
+        "$currentDate": {"modified": true}
+    };
+    let options = UpdateOptions::builder().upsert(true).build();
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+    collection.update_one(filtre, ops, Some(options)).await?;
+
+    Ok(None)
+}
+
+async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
+{
+    if ! m.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
+        debug!("traiter_evenement_filehost_newfuuid Wrong certificate for event - DROPPED");
+        return Ok(None)
+    }
+
+    let commande: EventNewFuuid = {
+        let message_ref = m.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        message_contenu.deserialize()?
+    };
+
+    let filtre = doc! {"fuuid": &commande.fuuid, "filehost_id": &commande.filehost_id};
+    let options = UpdateOptions::builder().upsert(true).build();
+    let ops = doc! {
+        "$currentDate": {"visit_time": true}
+    };
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
+    collection.update_one(filtre, ops, Some(options)).await?;
 
     Ok(None)
 }

@@ -163,6 +163,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
         TRANSACTION_FILEHOST_ADD,
         TRANSACTION_FILEHOST_UPDATE,
         TRANSACTION_FILEHOST_DELETE,
+        COMMANDE_FILE_VISIT,
     ];
     for c in commandes_publiques {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, c), exchange: Securite::L1Public });
@@ -181,6 +182,10 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
             rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.*.{}", evnmt), exchange: sec });
         }
     }
+
+    // Evenements publics
+    rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.filecontroler.{}", EVENEMENT_FILEHOST_USAGE), exchange: Securite::L1Public });
+    rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.filecontroler.{}", EVENEMENT_FILEHOST_NEWFUUID), exchange: Securite::L1Public });
 
     // Presence de domaines se fait sur l'evenement du domaine specifique (*)
     rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.*.{}", EVENEMENT_PRESENCE_DOMAINE), exchange: Securite::L3Protege });

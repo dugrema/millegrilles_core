@@ -10,6 +10,7 @@ pub const NOM_COLLECTION_TOKENS: &str = "CoreTopologie/tokens";
 pub const NOM_COLLECTION_FILEHOSTS: &str = "CoreTopologie/filehosts";
 pub const NOM_COLLECTION_FILECONTROLERS: &str = "CoreTopologie/filecontrolers";
 pub const NOM_COLLECTION_FILEHOSTINGCONFIGURATION: &str = "CoreTopologie/filehostingConfiguration";
+pub const NOM_COLLECTION_FILEHOSTING_VISITS: &str = "CoreTopologie/filehostingVisits";
 
 pub const DOMAINE_PRESENCE_NOM: &str = "CoreTopologie";
 pub const DOMAINE_FICHIERS: &str = "fichiers";
@@ -50,6 +51,7 @@ pub const TRANSACTION_FILEHOST_RESTORE: &str = "filehostRestore";
 
 pub const COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE: &str = "ajouterConsignationHebergee";
 pub const COMMANDE_SET_CLEID_BACKUP_DOMAINE: &str = "setCleidBackupDomaine";
+pub const COMMANDE_FILE_VISIT: &str = "fileVisit";
 
 pub const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 pub const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
@@ -59,6 +61,8 @@ pub const EVENEMENT_INSTANCE_CONSIGNATION_SUPPRIMEE: &str = "instanceConsignatio
 pub const EVENEMENT_APPLICATION_DEMARREE: &str = "applicationDemarree";
 pub const EVENEMENT_APPLICATION_ARRETEE: &str = "applicationArretee";
 pub const EVENEMENT_MODIFICATION_CONSIGNATION: &str = "modificationConsignation";
+pub const EVENEMENT_FILEHOST_USAGE: &str = "filehostUsage";
+pub const EVENEMENT_FILEHOST_NEWFUUID: &str = "filehostNewFuuid";
 
 pub const INDEX_DOMAINE: &str = "domaine";
 pub const INDEX_NOEUDS: &str = "noeuds";

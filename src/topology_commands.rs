@@ -7,24 +7,26 @@ use webauthn_rs::prelude::Url;
 use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, FilehostingFileVisit, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
+
+use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, HostfileAddTransaction};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::chrono::{DateTime, Utc};
+use millegrilles_common_rust::common_messages::RequeteFilehostItem;
 use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, COMMANDE_SAUVEGARDER_CLE, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_NOM_MAITREDESCLES, DOMAINE_RELAIWEB, DOMAINE_TOPOLOGIE, TOPOLOGIE_NOM_DOMAINE};
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, Middleware};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
 use millegrilles_common_rust::mongo_dao::{convertir_to_bson, MongoDao};
-use millegrilles_common_rust::mongodb::options::UpdateOptions;
+use millegrilles_common_rust::mongodb::options::{FindOneOptions, FindOptions, UpdateOptions};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
-use millegrilles_common_rust::common_messages::RequeteFilehostItem;
-use crate::topology_transactions::{FilehostDeleteTransaction, HostfileAddTransaction, FilehostUpdateTransaction, FilehostRestoreTransaction};
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -34,11 +36,11 @@ where M: Middleware
     let (_domaine, action) = get_domaine_action!(&m.type_message);
 
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
-    match m.certificat.verifier_exchanges(vec!(Securite::L3Protege, Securite::L4Secure))? {
+    match m.certificat.verifier_exchanges(vec!(Securite::L1Public, Securite::L3Protege, Securite::L4Secure))? {
         true => Ok(()),
         false => match m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
             true => Ok(()),
-            false => Err(format!("Commande autorisation invalide (pas 3.protege ou 4.secure)")),
+            false => Err(format!("Commande autorisation invalide (pas 1.public, 3.protege ou 4.secure)")),
         }
     }?;
 
@@ -55,6 +57,7 @@ where M: Middleware
         TRANSACTION_FILEHOST_DELETE => command_filehost_delete(middleware, m, gestionnaire).await,
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire).await,
+        COMMANDE_FILE_VISIT => command_file_visit(middleware, m, gestionnaire).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
     }
 }
@@ -763,4 +766,41 @@ async fn command_filehost_delete<M>(middleware: &M, m: MessageValide, gestionnai
     middleware.emettre_evenement(routing, event).await?;
 
     Ok(result)
+}
+
+#[derive(Deserialize)]
+struct CommandFileVisit {
+    filehost_id: String,
+    #[serde(with="epochseconds")]
+    visit_time: DateTime<Utc>,
+    fuuids: Vec<String>,
+}
+
+async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("command_file_visit Message : {:?}", &m.type_message);
+
+    if ! m.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    let commande: CommandFileVisit = {
+        let message_ref = m.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        message_contenu.deserialize()?
+    };
+
+    let options = UpdateOptions::builder().upsert(true).build();
+    for fuuid in commande.fuuids {
+        let filtre = doc!{"fuuid": fuuid, "filehost_id": &commande.filehost_id};
+        let ops = doc! {
+            "$set": {"visit_time": &commande.visit_time},
+        };
+        let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
+        collection.update_one(filtre, ops, options.clone()).await?;
+    }
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }

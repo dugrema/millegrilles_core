@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::common_messages::RequeteFilehostItem;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionSetConsignationInstance {
@@ -251,9 +251,36 @@ impl Into<RequeteFilehostItem> for FilehostServerRow {
     }
 }
 
-
 #[derive(Serialize, Deserialize)]
 pub struct FilehostingCongurationRow {
     pub name: String,
     pub value: String,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FilehostingFileVisit {
+    pub fuuid: String,
+    pub filehost_id: String,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub visit_time: DateTime<Utc>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct FileStorageInfo {
+    pub count: u64,
+    pub size: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EventFilehostUsage {
+    pub filehost_id: String,
+    #[serde(with="epochseconds")]
+    pub date: DateTime<Utc>,
+    pub fuuid: Option<FileStorageInfo>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EventNewFuuid {
+    pub filehost_id: String,
+    pub fuuid: String,
 }
