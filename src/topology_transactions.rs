@@ -380,6 +380,7 @@ where M: GenerateurMessages + MongoDao
 
 #[derive(Deserialize)]
 pub struct HostfileAddTransaction {
+    pub tls_external: Option<String>,
     pub url_external: Option<String>,
     pub url_internal: Option<String>,
 }
@@ -388,9 +389,10 @@ pub struct HostfileAddTransaction {
 pub struct FilehostUpdateTransaction {
     pub filehost_id: String,
     pub instance_id: Option<String>,
+    pub sync_active: Option<bool>,
+    pub tls_external: Option<String>,
     pub url_external: Option<String>,
     pub url_internal: Option<String>,
-    pub sync_active: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -423,6 +425,7 @@ where M: GenerateurMessages + MongoDao
         instance_id,
         url_internal: doc_transaction.url_internal,
         url_external: doc_transaction.url_external,
+        tls_external: doc_transaction.tls_external,
         deleted: false,
         sync_active: true,
         created: now.clone(),
@@ -453,6 +456,9 @@ where M: GenerateurMessages + MongoDao
     }
     if let Some(inner) = doc_transaction.url_external {
         set_ops.insert("url_external", inner);
+    }
+    if let Some(inner) = doc_transaction.tls_external {
+        set_ops.insert("tls_external", inner);
     }
     if let Some(inner) = doc_transaction.sync_active {
         set_ops.insert("sync_active", inner);

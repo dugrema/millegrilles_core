@@ -228,6 +228,7 @@ pub struct FilehostServerRow {
     pub instance_id: Option<String>,
     pub url_internal: Option<String>,
     pub url_external: Option<String>,
+    pub tls_external: Option<String>,
     pub deleted: bool,
     pub sync_active: bool,
     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
@@ -243,6 +244,7 @@ impl Into<RequeteFilehostItem> for FilehostServerRow {
             instance_id: self.instance_id,
             url_internal: self.url_internal,
             url_external: self.url_external,
+            tls_external: self.tls_external,
             deleted: self.deleted,
             sync_active: self.sync_active,
             created: self.created,

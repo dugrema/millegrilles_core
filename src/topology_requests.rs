@@ -1611,6 +1611,7 @@ struct FilehostForExternalRequest {
 struct RequestFilehostForExternalResponse {
     ok: bool,
     url_external: String,
+    tls_external: Option<String>,
 }
 
 async fn request_filehost_for_external<M>(middleware: &M, message: MessageValide)
@@ -1674,7 +1675,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     match collection_filehosts.find_one(filtre, None).await? {
         Some(inner) => {
             let url_external = inner.url_external.expect("url_external");
-            Ok(Some(middleware.build_reponse(RequestFilehostForExternalResponse { ok: true, url_external })?.0))
+            Ok(Some(middleware.build_reponse(RequestFilehostForExternalResponse { ok: true, url_external, tls_external: inner.tls_external })?.0))
         }
         None => {
             Ok(Some(middleware.reponse_err(Some(404), None, Some("no filehost available"))?))
