@@ -15,7 +15,8 @@ WORKDIR $APP_FOLDER
 
 COPY target/release/millegrilles_core .
 
-RUN mkdir -p /var/opt/millegrilles/archives && chown 983:980 /var/opt/millegrilles/archives
+RUN mkdir -p /var/opt/millegrilles/archives && chown 983:980 /var/opt/millegrilles/archives && \
+    apt-update && apt-get install -y ca-certificates && apt-get clean
 
 # UID 983 mgissuer et code
 # GID 980 millegrilles
