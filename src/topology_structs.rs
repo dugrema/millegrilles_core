@@ -286,3 +286,11 @@ pub struct EventNewFuuid {
     pub filehost_id: String,
     pub fuuid: String,
 }
+
+
+#[derive(Serialize, Deserialize)]
+pub struct FuuidReclameRow {
+    pub fuuid: String,
+    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub last_claim: DateTime<Utc>,
+}

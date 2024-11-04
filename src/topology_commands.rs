@@ -1,15 +1,17 @@
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::from_utf8;
 use webauthn_rs::prelude::Url;
 
 use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, FilehostingFileVisit, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, FilehostingFileVisit, FuuidReclameRow, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
 
 use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, HostfileAddTransaction};
+
+use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
@@ -22,11 +24,12 @@ use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_seria
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
 use millegrilles_common_rust::mongo_dao::{convertir_to_bson, MongoDao};
-use millegrilles_common_rust::mongodb::options::{FindOneOptions, FindOptions, UpdateOptions};
+use millegrilles_common_rust::mongodb::options::{FindOneOptions, FindOptions, InsertManyOptions, UpdateOptions, WriteConcern};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
+use millegrilles_common_rust::redis::Commands;
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -58,6 +61,7 @@ where M: Middleware
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire).await,
         COMMANDE_FILE_VISIT => command_file_visit(middleware, m, gestionnaire).await,
+        COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS => commande_claim_and_filehost_visits(middleware, m).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
     }
 }
@@ -803,4 +807,111 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
     }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+#[derive(Deserialize)]
+struct RequeteGetVisitesFuuids {
+    fuuids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RowFuuidVisit {
+    fuuid: String,
+    filehost_id: String,
+    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    visit_time: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+struct RowFuuidVisitResponse {
+    fuuid: String,
+    visits: HashMap<String, i64>
+}
+
+#[derive(Deserialize)]
+struct RowFuuid {
+    fuuid: String,
+}
+
+#[derive(Serialize)]
+struct RequeteGetVisitesFuuidsResponse {
+    ok: bool,
+    visits: Vec<RowFuuidVisitResponse>,
+    unknown: Vec<String>
+}
+
+async fn commande_claim_and_filehost_visits<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao
+{
+    debug!("commande_claim_and_filehost_visits Message : {:?}", &m.type_message);
+
+    if ! m.certificat.verifier_exchanges(vec![Securite::L3Protege])? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    let message_ref = m.message.parse()?;
+    let estampille_date = &message_ref.estampille;
+    let message_contenu = message_ref.contenu()?;
+    let requete: RequeteGetVisitesFuuids = message_contenu.deserialize()?;
+
+    let mut fuuids_set = HashSet::new();
+    fuuids_set.extend(requete.fuuids.iter());
+    let mut response_fuuids: HashMap<String, RowFuuidVisitResponse> = HashMap::new();
+
+    let filtre = doc! {"fuuid": {"$in": &requete.fuuids}};
+    let collection = middleware.get_collection_typed::<RowFuuidVisit>(NOM_COLLECTION_FILEHOSTING_VISITS)?;
+    let mut curseur = collection.find(filtre, None).await?;
+    while curseur.advance().await? {
+        let row = curseur.deserialize_current()?;
+        fuuids_set.remove(&row.fuuid);
+        match response_fuuids.get_mut(&row.fuuid) {
+            Some(inner) => {
+                inner.visits.insert(row.fuuid, row.visit_time.timestamp());
+            },
+            None => {
+                let mut map = HashMap::new();
+                map.insert(row.filehost_id, row.visit_time.timestamp());
+                let row_fuuid = RowFuuidVisitResponse { fuuid: row.fuuid.clone(), visits: map};
+                response_fuuids.insert(row.fuuid, row_fuuid);
+            }
+        }
+    }
+
+    // Conserver les reclamations.
+    {
+        let collection_claims = middleware.get_collection_typed::<RowFuuid>(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
+        let filtre_reclamations = doc!{ "fuuid": {"$in": &requete.fuuids} };
+        let ops_reclamations = doc! {"$currentDate": {"last_claim": true}};
+        let update_result = collection_claims.update_many(filtre_reclamations.clone(), ops_reclamations, None).await?;
+        if update_result.matched_count as usize != requete.fuuids.len() {
+            debug!("Mismatch updates {} et claims {}. Inserer nouveaux claims.", requete.fuuids.len(), update_result.matched_count);
+            let mut fuuids_requis = HashSet::new();
+            for f in &requete.fuuids {
+                fuuids_requis.insert(f);
+            }
+            let mut curseur = collection_claims.find(filtre_reclamations, None).await?;
+            while curseur.advance().await? {
+                let row = curseur.deserialize_current()?;
+                fuuids_requis.remove(&row.fuuid);
+            }
+
+            let mut rows = Vec::new();
+            for f in fuuids_requis {
+                debug!("Ajouter nouveau fuuid reclame {}", f);
+                let row = FuuidReclameRow { fuuid: f.to_owned(), last_claim: estampille_date.to_owned() };
+                rows.push(row);
+            }
+            let collection_insert_claims = middleware.get_collection_typed::<FuuidReclameRow>(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
+            collection_insert_claims.insert_many(rows, None).await?;
+        }
+    }
+
+    let reponse = RequeteGetVisitesFuuidsResponse {
+        ok: true,
+        visits: Vec::from_iter(response_fuuids.into_iter().map(|(_,v)| v)),
+        unknown: Vec::from_iter(fuuids_set.into_iter().map(|f|f.to_string()))
+    };
+
+    Ok(Some(middleware.build_reponse(reponse)?.0))
 }

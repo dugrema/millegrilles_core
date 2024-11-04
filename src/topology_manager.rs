@@ -154,6 +154,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
 
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE,
+        COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, commande), exchange: Securite::L3Protege });
@@ -301,6 +302,39 @@ where M: MongoDao + ConfigMessages
         NOM_COLLECTION_FICHIERS,
         champs_index_fichiers,
         Some(options_unique_fichiers),
+    ).await?;
+
+    // Visites
+    // Index table fichiers
+    let options_unique_visits = IndexOptions {
+        nom_index: Some(String::from("fuuids_filehost")),
+        unique: true,
+    };
+    let champs_index_visites = vec!(
+        ChampIndex { nom_champ: String::from("fuuid"), direction: 1 },
+        ChampIndex { nom_champ: String::from("filehost_id"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_FILEHOSTING_VISITS,
+        champs_index_visites,
+        Some(options_unique_visits),
+    ).await?;
+
+    // Claims
+    // Index table fichiers
+    let options_unique_claims = IndexOptions {
+        nom_index: Some(String::from("fuuids")),
+        unique: true,
+    };
+    let champs_index_claims = vec!(
+        ChampIndex { nom_champ: String::from("fuuid"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_FILEHOSTING_CLAIMS,
+        champs_index_claims,
+        Some(options_unique_claims),
     ).await?;
 
     Ok(())
