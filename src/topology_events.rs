@@ -372,7 +372,9 @@ async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide
     let filtre = doc! {"fuuid": &commande.fuuid};
     let options = UpdateOptions::builder().upsert(true).build();
     let ops = doc! {
-        format!("filehost.{}", commande.filehost_id): &estampille,
+        "$set": {
+            format!("filehost.{}", commande.filehost_id): &estampille,
+        }
     };
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
     collection.update_one(filtre, ops, Some(options)).await?;

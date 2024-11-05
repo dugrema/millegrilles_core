@@ -809,8 +809,9 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
     //     }
     // }
 
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+    let options = UpdateOptions::builder().upsert(true).build();
     {
-        let options = UpdateOptions::builder().upsert(true).build();
         let filehost_id = commande.filehost_id.as_str();
         for fuuid in &commande.fuuids {
             let filtre = doc! {"fuuid": fuuid};
@@ -819,7 +820,7 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
                     format!("filehost.{}", filehost_id): &commande.visit_time,
                 },
             };
-            let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+            debug!("command_file_visit Update filtre: {:?}\nOps: {:?}", filtre, ops);
             collection.update_one(filtre, ops, options.clone()).await?;
         }
     }
@@ -915,7 +916,7 @@ where M: GenerateurMessages + MongoDao
     }
 
     // Conserver les reclamations.
-    {
+    if ! response_fuuids.is_empty() {
         // let collection_claims = middleware.get_collection_typed::<RowFuuid>(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
         let collection_claims = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
         let filtre_reclamations = doc!{ "fuuid": {"$in": &requete.fuuids} };
