@@ -15,7 +15,7 @@ use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
-use millegrilles_common_rust::common_messages::RequeteFilehostItem;
+use millegrilles_common_rust::common_messages::{EventFilehost, RequeteFilehostItem};
 use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, COMMANDE_SAUVEGARDER_CLE, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_NOM_MAITREDESCLES, DOMAINE_RELAIWEB, DOMAINE_TOPOLOGIE, TOPOLOGIE_NOM_DOMAINE};
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
@@ -633,6 +633,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
                 .build();
             let filehost_item: RequeteFilehostItem = inner.into();
             middleware.emettre_evenement(routing, filehost_item).await?;
+            emit_filehost_event(middleware, &message_id, EVENEMENT_FILEHOST_EVENTNEW).await?;  // Simple event
         }
         None => {
             warn!("command_filehost_add Transaction successful but no item in database for {}", message_id);
@@ -663,6 +664,7 @@ async fn check_restore_existing_filehost<M>(middleware: &M, gestionnaire: &Topol
                 let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostRestore", vec![Securite::L1Public])
                     .build();
                 let filehost_item: RequeteFilehostItem = inner.into();
+                emit_filehost_event(middleware, &filehost_item.filehost_id, EVENEMENT_FILEHOST_EVENTNEW).await?;  // Simple event
                 middleware.emettre_evenement(routing, filehost_item).await?;
             }
             None => {
@@ -732,7 +734,15 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostUpdate", vec![Securite::L1Public])
                 .build();
             let filehost_item: RequeteFilehostItem = inner.into();
+
+            let event_str = match filehost_item.deleted {
+                true => EVENEMENT_FILEHOST_EVENTDELETE,  // Consider this a delete event
+                false => EVENEMENT_FILEHOST_EVENTUPDATE,
+            };
+            emit_filehost_event(middleware, &filehost_id, event_str).await?;  // Simple event
+
             middleware.emettre_evenement(routing, filehost_item).await?;
+
         }
         None => {
             warn!("command_filehost_add Transaction successful but no item in database for {}", filehost_id);
@@ -774,10 +784,12 @@ async fn command_filehost_delete<M>(middleware: &M, m: MessageValide, gestionnai
 
     let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await?;
 
-    let event = EventFilehostDeleted { filehost_id };
+    let event = EventFilehostDeleted { filehost_id: filehost_id.to_string() };
     let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostDelete", vec![Securite::L1Public])
         .build();
     middleware.emettre_evenement(routing, event).await?;
+
+    emit_filehost_event(middleware, &filehost_id, EVENEMENT_FILEHOST_EVENTDELETE).await?;  // Simple event
 
     Ok(result)
 }
@@ -963,4 +975,14 @@ where M: GenerateurMessages + MongoDao
     };
 
     Ok(Some(middleware.build_reponse(reponse)?.0))
+}
+
+async fn emit_filehost_event<M,S,E>(middleware: &M, filehost_id: S, event_str: E) -> Result<(), Error>
+    where M: GenerateurMessages, S: ToString, E: ToString
+{
+    let event = EventFilehost { filehost_id: filehost_id.to_string(), event: event_str.to_string() };
+    let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOST_EVENT, vec![Securite::L1Public])
+        .build();
+    middleware.emettre_evenement(routage, &event).await?;
+    Ok(())
 }
