@@ -7,7 +7,7 @@ use webauthn_rs::prelude::Url;
 use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, FilehostingFileVisit, FuuidReclameRow, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
 
 use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, HostfileAddTransaction};
 
@@ -30,6 +30,7 @@ use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
 use millegrilles_common_rust::redis::Commands;
+use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -796,14 +797,31 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
         message_contenu.deserialize()?
     };
 
-    let options = UpdateOptions::builder().upsert(true).build();
-    for fuuid in commande.fuuids {
-        let filtre = doc!{"fuuid": fuuid, "filehost_id": &commande.filehost_id};
-        let ops = doc! {
-            "$set": {"visit_time": &commande.visit_time},
-        };
-        let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
-        collection.update_one(filtre, ops, options.clone()).await?;
+    // {
+    //     let options = UpdateOptions::builder().upsert(true).build();
+    //     for fuuid in &commande.fuuids {
+    //         let filtre = doc! {"fuuid": fuuid, "filehost_id": &commande.filehost_id};
+    //         let ops = doc! {
+    //             "$set": {"visit_time": &commande.visit_time},
+    //         };
+    //         let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
+    //         collection.update_one(filtre, ops, options.clone()).await?;
+    //     }
+    // }
+
+    {
+        let options = UpdateOptions::builder().upsert(true).build();
+        let filehost_id = commande.filehost_id.as_str();
+        for fuuid in &commande.fuuids {
+            let filtre = doc! {"fuuid": fuuid};
+            let ops = doc! {
+                "$set": {
+                    format!("filehost.{}", filehost_id): &commande.visit_time,
+                },
+            };
+            let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+            collection.update_one(filtre, ops, options.clone()).await?;
+        }
     }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
@@ -814,18 +832,45 @@ struct RequeteGetVisitesFuuids {
     fuuids: Vec<String>,
 }
 
+// #[derive(Serialize, Deserialize)]
+// struct RowFuuidVisit {
+//     fuuid: String,
+//     filehost_id: String,
+//     #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+//     visit_time: DateTime<Utc>,
+// }
+
 #[derive(Serialize, Deserialize)]
-struct RowFuuidVisit {
+struct RowFilehostFuuid {
     fuuid: String,
-    filehost_id: String,
-    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
-    visit_time: DateTime<Utc>,
+    #[serde(default, with="opt_chrono_datetime_as_bson_datetime")]
+    last_claim_date: Option<DateTime<Utc>>,
+    #[serde(default, with="map_opt_chrono_datetime_as_bson_datetime")]
+    filehost: Option<HashMap<String, Option<DateTime<Utc>>>>,
 }
 
 #[derive(Serialize)]
-struct RowFuuidVisitResponse {
+struct FuuidVisitResponseItem {
     fuuid: String,
     visits: HashMap<String, i64>
+}
+
+impl From<RowFilehostFuuid> for FuuidVisitResponseItem {
+    fn from(value: RowFilehostFuuid) -> Self {
+        let mut visits = HashMap::new();
+        if let Some(filehost) = value.filehost {
+            for (k, v) in filehost {
+                if let Some(date) = v {
+                    visits.insert(k, date.timestamp());
+                }
+            }
+        }
+
+        Self {
+            fuuid: value.fuuid,
+            visits
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -836,7 +881,7 @@ struct RowFuuid {
 #[derive(Serialize)]
 struct RequeteGetVisitesFuuidsResponse {
     ok: bool,
-    visits: Vec<RowFuuidVisitResponse>,
+    visits: Vec<FuuidVisitResponseItem>,
     unknown: Vec<String>
 }
 
@@ -857,32 +902,24 @@ where M: GenerateurMessages + MongoDao
 
     let mut fuuids_set = HashSet::new();
     fuuids_set.extend(requete.fuuids.iter());
-    let mut response_fuuids: HashMap<String, RowFuuidVisitResponse> = HashMap::new();
+    // let mut response_fuuids: HashMap<String, RowFuuidVisitResponse> = HashMap::new();
+    let mut response_fuuids: Vec<FuuidVisitResponseItem> = Vec::new();
 
     let filtre = doc! {"fuuid": {"$in": &requete.fuuids}};
-    let collection = middleware.get_collection_typed::<RowFuuidVisit>(NOM_COLLECTION_FILEHOSTING_VISITS)?;
+    let collection = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
     let mut curseur = collection.find(filtre, None).await?;
     while curseur.advance().await? {
         let row = curseur.deserialize_current()?;
         fuuids_set.remove(&row.fuuid);
-        match response_fuuids.get_mut(&row.fuuid) {
-            Some(inner) => {
-                inner.visits.insert(row.fuuid, row.visit_time.timestamp());
-            },
-            None => {
-                let mut map = HashMap::new();
-                map.insert(row.filehost_id, row.visit_time.timestamp());
-                let row_fuuid = RowFuuidVisitResponse { fuuid: row.fuuid.clone(), visits: map};
-                response_fuuids.insert(row.fuuid, row_fuuid);
-            }
-        }
+        response_fuuids.push(row.into());
     }
 
     // Conserver les reclamations.
     {
-        let collection_claims = middleware.get_collection_typed::<RowFuuid>(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
+        // let collection_claims = middleware.get_collection_typed::<RowFuuid>(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
+        let collection_claims = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
         let filtre_reclamations = doc!{ "fuuid": {"$in": &requete.fuuids} };
-        let ops_reclamations = doc! {"$currentDate": {"last_claim": true}};
+        let ops_reclamations = doc! {"$currentDate": {FIELD_LAST_CLAIM_DATE: true}};
         let update_result = collection_claims.update_many(filtre_reclamations.clone(), ops_reclamations, None).await?;
         if update_result.matched_count as usize != requete.fuuids.len() {
             debug!("Mismatch updates {} et claims {}. Inserer nouveaux claims.", requete.fuuids.len(), update_result.matched_count);
@@ -890,7 +927,10 @@ where M: GenerateurMessages + MongoDao
             for f in &requete.fuuids {
                 fuuids_requis.insert(f);
             }
-            let mut curseur = collection_claims.find(filtre_reclamations, None).await?;
+            let options = FindOptions::builder()
+                .projection(doc!{"fuuid": 1})
+                .build();
+            let mut curseur = collection_claims.find(filtre_reclamations, options).await?;
             while curseur.advance().await? {
                 let row = curseur.deserialize_current()?;
                 fuuids_requis.remove(&row.fuuid);
@@ -899,17 +939,18 @@ where M: GenerateurMessages + MongoDao
             let mut rows = Vec::new();
             for f in fuuids_requis {
                 debug!("Ajouter nouveau fuuid reclame {}", f);
-                let row = FuuidReclameRow { fuuid: f.to_owned(), last_claim: estampille_date.to_owned() };
+                let row = RowFilehostFuuid { fuuid: f.to_owned(), last_claim_date: Some(estampille_date.to_owned()), filehost: None };
                 rows.push(row);
             }
-            let collection_insert_claims = middleware.get_collection_typed::<FuuidReclameRow>(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
+            let collection_insert_claims =
+                middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
             collection_insert_claims.insert_many(rows, None).await?;
         }
     }
 
     let reponse = RequeteGetVisitesFuuidsResponse {
         ok: true,
-        visits: Vec::from_iter(response_fuuids.into_iter().map(|(_,v)| v)),
+        visits: response_fuuids,
         unknown: Vec::from_iter(fuuids_set.into_iter().map(|f|f.to_string()))
     };
 

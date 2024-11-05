@@ -259,13 +259,13 @@ pub struct FilehostingCongurationRow {
     pub value: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct FilehostingFileVisit {
-    pub fuuid: String,
-    pub filehost_id: String,
-    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
-    pub visit_time: DateTime<Utc>,
-}
+// #[derive(Serialize, Deserialize)]
+// pub struct FilehostingFileVisit {
+//     pub fuuid: String,
+//     pub filehost_id: String,
+//     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+//     pub visit_time: DateTime<Utc>,
+// }
 
 #[derive(Serialize, Deserialize)]
 pub struct FileStorageInfo {
@@ -287,10 +287,9 @@ pub struct EventNewFuuid {
     pub fuuid: String,
 }
 
-
-#[derive(Serialize, Deserialize)]
-pub struct FuuidReclameRow {
-    pub fuuid: String,
-    #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
-    pub last_claim: DateTime<Utc>,
-}
+// #[derive(Serialize, Deserialize)]
+// pub struct FuuidReclameRow {
+//     pub fuuid: String,
+//     #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+//     pub last_claim: DateTime<Utc>,
+// }

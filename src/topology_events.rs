@@ -2,6 +2,7 @@ use log::debug;
 use millegrilles_common_rust::bson::{doc, Bson, Array, DateTime};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
+use millegrilles_common_rust::chrono;
 use millegrilles_common_rust::common_messages::PresenceFichiersRepertoire;
 use millegrilles_common_rust::constantes::{Securite, EVENEMENT_PRESENCE_DOMAINE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE, RolesCertificats};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
@@ -361,18 +362,19 @@ async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide
         return Ok(None)
     }
 
-    let commande: EventNewFuuid = {
+    let (commande, estampille): (EventNewFuuid, chrono::DateTime<Utc>) = {
         let message_ref = m.message.parse()?;
         let message_contenu = message_ref.contenu()?;
-        message_contenu.deserialize()?
+        let estampille = message_ref.estampille;
+        (message_contenu.deserialize()?, estampille)
     };
 
-    let filtre = doc! {"fuuid": &commande.fuuid, "filehost_id": &commande.filehost_id};
+    let filtre = doc! {"fuuid": &commande.fuuid};
     let options = UpdateOptions::builder().upsert(true).build();
     let ops = doc! {
-        "$currentDate": {"visit_time": true}
+        format!("filehost.{}", commande.filehost_id): &estampille,
     };
-    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
     collection.update_one(filtre, ops, Some(options)).await?;
 
     Ok(None)

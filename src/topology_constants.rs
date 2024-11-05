@@ -10,8 +10,9 @@ pub const NOM_COLLECTION_TOKENS: &str = "CoreTopologie/tokens";
 pub const NOM_COLLECTION_FILEHOSTS: &str = "CoreTopologie/filehosts";
 pub const NOM_COLLECTION_FILECONTROLERS: &str = "CoreTopologie/filecontrolers";
 pub const NOM_COLLECTION_FILEHOSTINGCONFIGURATION: &str = "CoreTopologie/filehostingConfiguration";
-pub const NOM_COLLECTION_FILEHOSTING_VISITS: &str = "CoreTopologie/filehostingVisits";
-pub const NOM_COLLECTION_FILEHOSTING_CLAIMS: &str = "CoreTopologie/filehostingClaims";
+// pub const NOM_COLLECTION_FILEHOSTING_VISITS: &str = "CoreTopologie/filehostingVisits";
+// pub const NOM_COLLECTION_FILEHOSTING_CLAIMS: &str = "CoreTopologie/filehostingClaims";
+pub const NOM_COLLECTION_FILEHOSTING_FUUIDS: &str = "CoreTopologie/filehostingFuuids";
 
 pub const DOMAINE_PRESENCE_NOM: &str = "CoreTopologie";
 pub const DOMAINE_FICHIERS: &str = "fichiers";
@@ -91,3 +92,4 @@ pub const ADRESSE_NATURE_ONION: &str = "onion";
 pub const DEFAULT_CONSIGNATION_URL: &str = "https://fichiers:1443";
 
 pub const FIELD_CONFIGURATION_FILEHOST_DEFAULT: &str = "filehost.default";
+pub const FIELD_LAST_CLAIM_DATE: &str = "last_claim_date";

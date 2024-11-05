@@ -304,24 +304,7 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_fichiers),
     ).await?;
 
-    // Visites
-    // Index table fichiers
-    let options_unique_visits = IndexOptions {
-        nom_index: Some(String::from("fuuids_filehost")),
-        unique: true,
-    };
-    let champs_index_visites = vec!(
-        ChampIndex { nom_champ: String::from("fuuid"), direction: 1 },
-        ChampIndex { nom_champ: String::from("filehost_id"), direction: 1 },
-    );
-    middleware.create_index(
-        middleware,
-        NOM_COLLECTION_FILEHOSTING_VISITS,
-        champs_index_visites,
-        Some(options_unique_visits),
-    ).await?;
-
-    // Claims
+    // Visites et claims pour fuuids
     // Index table fichiers
     let options_unique_claims = IndexOptions {
         nom_index: Some(String::from("fuuids")),
@@ -332,7 +315,7 @@ where M: MongoDao + ConfigMessages
     );
     middleware.create_index(
         middleware,
-        NOM_COLLECTION_FILEHOSTING_CLAIMS,
+        NOM_COLLECTION_FILEHOSTING_FUUIDS,
         champs_index_claims,
         Some(options_unique_claims),
     ).await?;
