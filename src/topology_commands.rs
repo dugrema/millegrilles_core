@@ -9,7 +9,7 @@ use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
 use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
 
-use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, HostfileAddTransaction};
+use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction};
 
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
@@ -576,7 +576,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         let message_ref = m.message.parse()?;
         let message_contenu = message_ref.contenu()?;
         let message_id = message_ref.id.to_owned();
-        let transaction: HostfileAddTransaction = message_contenu.deserialize()?;
+        let transaction: FilehostAddTransaction = message_contenu.deserialize()?;
         (transaction, message_id)
     };
 
@@ -587,11 +587,14 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             // Ensure that no file host exists for the instance_id of the file controler.
             let certificate = m.certificat.as_ref();
             let instance_id = certificate.get_common_name()?;
-            let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+            let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
             let filtre = doc!{"instance_id": instance_id};
-            let count = collection.count_documents(filtre, None).await?;
-            if count > 0 {
-                return Ok(Some(middleware.reponse_err(Some(409), None, Some("Filehost for instance exists"))?))
+            match collection.find_one(filtre, None).await? {
+                Some(inner) => {
+                    // Exists, check if restore (when deleted) or conflict
+                    return check_restore_existing_filehost(middleware, gestionnaire, &message_id, inner).await
+                },
+                None => ()  // Ok, this is a new filehost
             }
         } else {
             return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
@@ -604,39 +607,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             let filtre = doc!{"url_external": url_external};
             match collection.find_one(filtre, None).await? {
                 Some(inner) => {
-                    // Exists, check if deleted (this would be a restore)
-                    if inner.deleted {
-                        info!("command_filehost_add Restoring filehost, rewriting add as update delete=false");
-                        let filehost_update = FilehostRestoreTransaction {filehost_id: inner.filehost_id.clone()};
-                        let result = sauvegarder_traiter_transaction_serializable_v2(
-                            middleware, &filehost_update, gestionnaire, DOMAINE_TOPOLOGIE, TRANSACTION_FILEHOST_RESTORE).await?.0;
-
-                        check_default_filehost(middleware, inner.filehost_id.as_str()).await?;
-
-                        // Load the new filehost, emit as event
-                        let filtre = doc!{"filehost_id": &inner.filehost_id};
-                        let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
-                        match collection.find_one(filtre, None).await? {
-                            Some(inner) => {
-                                let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostRestore", vec![Securite::L1Public])
-                                    .build();
-                                let filehost_item: RequeteFilehostItem = inner.into();
-                                middleware.emettre_evenement(routing, filehost_item).await?;
-                            }
-                            None => {
-                                warn!("command_filehost_add Transaction successful but no item in database for {}", message_id);
-                            }
-                        }
-
-                        return Ok(result);
-                    } else {
-                        // Conflict, already exists
-                        return Ok(Some(middleware.reponse_err(Some(409), None, Some("Url exists"))?))
-                    }
+                    // Exists, check if restore (when deleted) or conflict
+                    return check_restore_existing_filehost(middleware, gestionnaire, &message_id, inner).await
                 }
-                None => {
-                    // Ok, this is a new filehost
-                }
+                None => ()  // Ok, this is a new filehost
             }
         } else {
             return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
@@ -666,6 +640,41 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     Ok(result)
+}
+
+async fn check_restore_existing_filehost<M>(middleware: &M, gestionnaire: &TopologyManager, message_id: &String, row: FilehostServerRow)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    // Check if deleted (this would be a restore)
+    if row.deleted {
+        info!("command_filehost_add Restoring filehost, rewriting add as update delete=false");
+        let filehost_update = FilehostRestoreTransaction { filehost_id: row.filehost_id.clone() };
+        let result = sauvegarder_traiter_transaction_serializable_v2(
+            middleware, &filehost_update, gestionnaire, DOMAINE_TOPOLOGIE, TRANSACTION_FILEHOST_RESTORE).await?.0;
+
+        check_default_filehost(middleware, row.filehost_id.as_str()).await?;
+
+        // Load the new filehost, emit as event
+        let filtre = doc! {"filehost_id": &row.filehost_id};
+        let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+        match collection.find_one(filtre, None).await? {
+            Some(inner) => {
+                let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostRestore", vec![Securite::L1Public])
+                    .build();
+                let filehost_item: RequeteFilehostItem = inner.into();
+                middleware.emettre_evenement(routing, filehost_item).await?;
+            }
+            None => {
+                warn!("command_filehost_add Transaction successful but no item in database for {}", message_id);
+            }
+        }
+
+        Ok(result)
+    } else {
+        // Conflict, already exists and not deleted
+        Ok(Some(middleware.reponse_err(Some(409), None, Some("Url exists"))?))
+    }
 }
 
 async fn check_default_filehost<M>(middleware: &M, filehost_id: &str) -> Result<(), Error>

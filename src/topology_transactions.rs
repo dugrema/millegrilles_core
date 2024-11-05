@@ -379,7 +379,7 @@ where M: GenerateurMessages + MongoDao
 }
 
 #[derive(Deserialize)]
-pub struct HostfileAddTransaction {
+pub struct FilehostAddTransaction {
     pub tls_external: Option<String>,
     pub url_external: Option<String>,
     pub url_internal: Option<String>,
@@ -410,7 +410,7 @@ async fn filehost_add<M>(middleware: &M, transaction: TransactionValide)
                          -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
-    let doc_transaction: HostfileAddTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+    let doc_transaction: FilehostAddTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
     let transaction_id = &transaction.transaction.id;
 
     let mut instance_id = None;
@@ -520,7 +520,7 @@ where M: GenerateurMessages + MongoDao
     let doc_transaction: FilehostRestoreTransaction = serde_json::from_str(transaction.transaction.contenu.as_str())?;
 
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
-    let filter = doc!{"filehost_id": doc_transaction.filehost_id };
+    let filter = doc!{"filehost_id": &doc_transaction.filehost_id };
     let ops = doc !{
         "$set": {"deleted": false},
         "$currentDate": {"modified": true},
@@ -529,7 +529,9 @@ where M: GenerateurMessages + MongoDao
 
     let ok = result.matched_count == 1;
     if ok {
-        Ok(Some(middleware.reponse_ok(None, None)?))
+        let response = HostfileAddTransactionResponse {ok: true, filehost_id: doc_transaction.filehost_id};
+        let response = middleware.build_reponse(response)?.0;
+        Ok(Some(response))
     } else {
         Ok(Some(middleware.reponse_err(Some(404), None, Some("No filehost item updated"))?))
     }
