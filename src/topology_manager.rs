@@ -304,6 +304,22 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_fichiers),
     ).await?;
 
+    // Filehosts
+    // Index table fichiers
+    let options_unique_filehosts = IndexOptions {
+        nom_index: Some(String::from("filehost_unique")),
+        unique: true,
+    };
+    let champs_index_filehosts = vec!(
+        ChampIndex { nom_champ: String::from("filehost_id"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_FILEHOSTS,
+        champs_index_filehosts,
+        Some(options_unique_filehosts),
+    ).await?;
+
     // Visites et claims pour fuuids
     // Index table fichiers
     let options_unique_claims = IndexOptions {
