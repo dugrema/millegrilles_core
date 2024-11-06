@@ -7,8 +7,8 @@ use millegrilles_common_rust::serde_json::Value;
 use serde::{Deserialize, Serialize};
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::common_messages::RequeteFilehostItem;
-use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
+use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TransactionSetConsignationInstance {
@@ -293,3 +293,30 @@ pub struct EventNewFuuid {
 //     #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
 //     pub last_claim: DateTime<Utc>,
 // }
+
+#[derive(Deserialize)]
+pub struct RowFuuid { pub fuuid: String }
+
+#[derive(Serialize, Deserialize)]
+pub struct FilehostTransfer {
+    pub destination_filehost_id: String,
+    pub fuuid: String,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub created: DateTime<Utc>,
+    #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
+    pub modified: DateTime<Utc>,
+    #[serde(default, with="opt_chrono_datetime_as_bson_datetime")]
+    pub job_picked_up: Option<DateTime<Utc>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct RowFilehostFuuid {
+    pub fuuid: String,
+    #[serde(default, with="opt_chrono_datetime_as_bson_datetime")]
+    pub last_claim_date: Option<DateTime<Utc>>,
+    #[serde(default, with="map_opt_chrono_datetime_as_bson_datetime")]
+    pub filehost: Option<HashMap<String, Option<DateTime<Utc>>>>,
+}
+
+#[derive(Deserialize)]
+pub struct RowFilehostId { pub filehost_id: String }

@@ -1,8 +1,10 @@
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 use log::{debug, error, warn};
-
+use millegrilles_common_rust::bson;
 use crate::topology_constants::*;
 use crate::topology_events::produire_fiche_publique;
-use crate::topology_structs::{FichePublique, InformationMonitor};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, InformationMonitor, RowFilehostFuuid};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::chrono::{Datelike, Timelike, Utc};
@@ -29,6 +31,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler + 
     }
 
     let minutes = date_epoch.minute();
+    let hours = date_epoch.hour();
 
     if minutes % 5 == 1 {
         debug!("Produire fiche publique");
@@ -52,6 +55,13 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler + 
 
     if let Err(e) = verifier_instances_horsligne(middleware).await {
         warn!("Erreur verification etat instances hors ligne {:?}", e);
+    }
+
+    // if minutes == 6 && hours % 3 == 0
+    {
+        if let Err(e) = entretien_transfert_fichiers(middleware).await {
+            error!("core_topoologie.entretien Erreur entretien transferts fichier : {:?}", e);
+        }
     }
 
     Ok(())
@@ -274,5 +284,81 @@ async fn verifier_instances_horsligne<M>(middleware: &M)
         ).await?;
     }
 
+    Ok(())
+}
+
+/// Genere les transferts de fichiers manquants et supprime ceux qui ne s'appliquent plus.
+pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
+    where M: MongoDao
+{
+    debug!("entretien_transfert_fichiers Debut");
+
+    let (filehosts_active, filehosts_inactive) = {
+        let collection_filehosts =
+            middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+        let filtre = doc!{};
+        let mut cursor = collection_filehosts.find(filtre, None).await?;
+
+        let mut filehosts_active = HashMap::new();
+        let mut filehosts_inactive = HashMap::new();
+        while cursor.advance().await? {
+            let row = cursor.deserialize_current()?;
+            let active = row.sync_active && !row.deleted;
+            match active {
+                true => { filehosts_active.insert(row.filehost_id.clone(), row); }
+                false => { filehosts_inactive.insert(row.filehost_id.clone(), row); }
+            }
+        }
+        (filehosts_active, filehosts_inactive)
+    };
+
+    let collection_transfers =
+        middleware.get_collection_typed::<FilehostTransfer>(NOM_COLLECTION_FILEHOSTING_TRANSFERS)?;
+    if filehosts_inactive.len() > 0 {
+        debug!("entretien_transfert_fichiers {} filehosts inactifs", filehosts_inactive.len());
+        let filehost_ids: Vec<&String> = filehosts_inactive.keys().into_iter().collect();
+        let filtre = doc!{"filehost_id": {"$in": filehost_ids}};
+        collection_transfers.delete_many(filtre, None).await?;
+    }
+
+    if filehosts_active.len() > 0 {
+        debug!("entretien_transfert_fichiers {} filehosts actifs", filehosts_active.len());
+        let reclamation_expiration = Utc::now() - Duration::new(7*86_400, 0);
+        let mut filehost_doc = Vec::new();
+        for (filehost_id, _) in &filehosts_active {
+            filehost_doc.push(doc!{format!("filehost.{}", filehost_id): {"$exists": false}});
+        }
+        let filtre = doc!{
+            "$or": filehost_doc,
+            FIELD_LAST_CLAIM_DATE: {"$gte": reclamation_expiration}
+        };
+        debug!("entretien_transfert_fichiers Filtre: {:?}", filtre);
+        let collection_fuuids = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+        let mut cursor = collection_fuuids.find(filtre, None).await?;
+        let filehosts_active_list: HashSet<&String> = filehosts_active.keys().collect();
+        while cursor.advance().await? {
+            let row = cursor.deserialize_current()?;
+            if let Some(filehost) = row.filehost.as_ref() {
+                let fuuid_filehost: HashSet<&String> = filehost.keys().collect();
+                let missing_from = filehosts_active_list.difference(&fuuid_filehost);
+                debug!("entretien_transfert_fichiers File {} missing from {:?}", row.fuuid, missing_from);
+
+                let options = UpdateOptions::builder().upsert(true).build();
+                let ops = doc! {
+                    "$setOnInsert": {"created": Utc::now()},
+                    "$currentDate": {"modified": true},
+                };
+                for missing_from_filehost_id in missing_from {
+                    let filtre = doc! {
+                        "destination_filehost_id": &missing_from_filehost_id,
+                        "fuuid": &row.fuuid,
+                    };
+                    collection_transfers.update_one(filtre, ops.clone(), options.clone()).await?;
+                }
+            }
+        }
+    }
+
+    debug!("entretien_transfert_fichiers Fin");
     Ok(())
 }

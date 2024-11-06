@@ -7,7 +7,7 @@ use webauthn_rs::prelude::Url;
 use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseUrlEtag, RowFilehostFuuid, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
 
 use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction};
 
@@ -862,15 +862,6 @@ struct RequeteGetVisitesFuuids {
 //     visit_time: DateTime<Utc>,
 // }
 
-#[derive(Serialize, Deserialize)]
-struct RowFilehostFuuid {
-    fuuid: String,
-    #[serde(default, with="opt_chrono_datetime_as_bson_datetime")]
-    last_claim_date: Option<DateTime<Utc>>,
-    #[serde(default, with="map_opt_chrono_datetime_as_bson_datetime")]
-    filehost: Option<HashMap<String, Option<DateTime<Utc>>>>,
-}
-
 #[derive(Serialize)]
 struct FuuidVisitResponseItem {
     fuuid: String,
@@ -893,11 +884,6 @@ impl From<RowFilehostFuuid> for FuuidVisitResponseItem {
             visits
         }
     }
-}
-
-#[derive(Deserialize)]
-struct RowFuuid {
-    fuuid: String,
 }
 
 #[derive(Serialize)]

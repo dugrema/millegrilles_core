@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use log::debug;
 use millegrilles_common_rust::bson::{doc, Bson, Array, DateTime};
 use millegrilles_common_rust::chrono::Utc;
@@ -10,7 +11,7 @@ use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_serial
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::{convertir_to_bson, MongoDao};
-use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, UpdateOptions};
+use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOptions, UpdateOptions};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::serde_json::json;
@@ -18,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::topology_common::generer_contenu_fiche_publique;
 use crate::topology_manager::TopologyManager;
 use crate::topology_constants::*;
-use crate::topology_structs::{EventFilehostUsage, EventNewFuuid, PresenceDomaine, PresenceMonitor, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{EventFilehostUsage, EventNewFuuid, PresenceDomaine, PresenceMonitor, RowFilehostFuuid, RowFilehostId, RowFuuid, TransactionSetFichiersPrimaire};
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 
 pub async fn consommer_evenement_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
@@ -355,7 +356,7 @@ async fn traiter_evenement_filehost_usage<M>(middleware: &M, m: MessageValide)
 
 async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
+    where M: MongoDao
 {
     if ! m.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
         debug!("traiter_evenement_filehost_newfuuid Wrong certificate for event - DROPPED");
@@ -373,11 +374,62 @@ async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide
     let options = UpdateOptions::builder().upsert(true).build();
     let ops = doc! {
         "$set": {
-            format!("filehost.{}", commande.filehost_id): &estampille,
+            format!("filehost.{}", &commande.filehost_id): &estampille,
         }
     };
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
     collection.update_one(filtre, ops, Some(options)).await?;
 
+    process_transfers(middleware, commande.filehost_id.as_str(), commande.fuuid.as_str()).await?;
+
     Ok(None)
+}
+
+async fn process_transfers<M>(middleware: &M, filehost_id: &str, fuuid: &str) -> Result<(), millegrilles_common_rust::error::Error>
+    where M: MongoDao
+{
+    // Supprimer le transfert vers ce filehost (si applicable)
+    let filtre_transfer = doc!{"fuuid": fuuid, "destination_filehost_id": filehost_id};
+    let collection_transfers = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_TRANSFERS)?;
+    collection_transfers.delete_one(filtre_transfer, None).await?;
+
+    // Creer les transferts vers filehosts sans ce fuuid
+
+    // Recuperer liste de filehost_ids actifs
+    let collection_filehosts = middleware.get_collection_typed::<RowFilehostId>(NOM_COLLECTION_FILEHOSTS)?;
+    let options = FindOptions::builder().projection(doc!{"filehost_id": 1}).build();
+    let filtre = doc! { "deleted": false, "sync_active": true };
+    let mut curseur = collection_filehosts.find(filtre, options).await?;
+    let mut filehost_ids = HashSet::new();
+    while curseur.advance().await? {
+        let row = curseur.deserialize_current()?;
+        filehost_ids.insert(row.filehost_id);
+    }
+
+    let collection_fuuids = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+    let fuuid_info = collection_fuuids.find_one(doc!{"fuuid": fuuid}, None).await?;
+    if let Some(row) = fuuid_info {
+        if let Some(visits) = row.filehost {
+            let mut filehost_ids_visits: HashSet<String> = visits.into_iter().map(|(k,_)| k).collect();
+            // Ajouter le filehost_id qui vient d'emettre l'evenement newFuuid (meme s'il devrait deja etre dans la liste).
+            filehost_ids_visits.insert(filehost_id.to_owned());
+
+            let mut missing_from = filehost_ids.difference(&filehost_ids_visits);
+            debug!("entretien_transfert_fichiers File {} missing from {:?}", row.fuuid, missing_from);
+            let options = UpdateOptions::builder().upsert(true).build();
+            let ops = doc! {
+                "$setOnInsert": {"created": Utc::now()},
+                "$currentDate": {"modified": true},
+            };
+            for missing_from_filehost_id in missing_from {
+                let filtre = doc! {
+                    "destination_filehost_id": &missing_from_filehost_id,
+                    "fuuid": &row.fuuid,
+                };
+                collection_transfers.update_one(filtre, ops.clone(), options.clone()).await?;
+            }
+        }
+    }
+
+    Ok(())
 }
