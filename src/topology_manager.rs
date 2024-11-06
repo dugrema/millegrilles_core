@@ -336,5 +336,22 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_claims),
     ).await?;
 
+    // Transferts entre filehosts
+    // Index table fichiers
+    let options_unique_transferts_filehostfuuid = IndexOptions {
+        nom_index: Some(String::from("filehost_fuuid")),
+        unique: true,
+    };
+    let champs_index__transferts_filehostfuuid = vec!(
+        ChampIndex { nom_champ: String::from("destination_filehost_id"), direction: 1 },
+        ChampIndex { nom_champ: String::from("fuuid"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_FILEHOSTING_TRANSFERS,
+        champs_index__transferts_filehostfuuid,
+        Some(options_unique_transferts_filehostfuuid),
+    ).await?;
+
     Ok(())
 }

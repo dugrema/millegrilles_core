@@ -8,14 +8,17 @@ use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::chrono::{Datelike, Timelike, Utc};
-use millegrilles_common_rust::constantes::{CHAMP_CREATION, CHAMP_MODIFICATION, TRANSACTION_CHAMP_IDMG};
-use millegrilles_common_rust::generateur_messages::GenerateurMessages;
+use millegrilles_common_rust::common_messages::EventFilehost;
+use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_TOPOLOGIE, TOPOLOGIE_NOM_DOMAINE, TRANSACTION_CHAMP_IDMG};
+use millegrilles_common_rust::error::Error;
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::EmetteurNotificationsTrait;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao};
 use millegrilles_common_rust::mongodb::options::{FindOptions, UpdateOptions};
 use millegrilles_common_rust::notifications::NotificationMessageInterne;
+use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use serde::Deserialize;
 
@@ -55,13 +58,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler + 
 
     if let Err(e) = verifier_instances_horsligne(middleware).await {
         warn!("Erreur verification etat instances hors ligne {:?}", e);
-    }
-
-    // if minutes == 6 && hours % 3 == 0
-    {
-        if let Err(e) = entretien_transfert_fichiers(middleware).await {
-            error!("core_topoologie.entretien Erreur entretien transferts fichier : {:?}", e);
-        }
     }
 
     Ok(())
@@ -289,7 +285,7 @@ async fn verifier_instances_horsligne<M>(middleware: &M)
 
 /// Genere les transferts de fichiers manquants et supprime ceux qui ne s'appliquent plus.
 pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
-    where M: MongoDao
+    where M: GenerateurMessages + MongoDao
 {
     debug!("entretien_transfert_fichiers Debut");
 
@@ -359,6 +355,16 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
         }
     }
 
+    emit_filehost_transfersupdated_event(middleware).await?;
+
     debug!("entretien_transfert_fichiers Fin");
+    Ok(())
+}
+
+async fn emit_filehost_transfersupdated_event<M>(middleware: &M) -> Result<(), Error> where M: GenerateurMessages {
+    let event = json!({});
+    let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOST_TRANSFERSUPDATED, vec![Securite::L1Public])
+        .build();
+    middleware.emettre_evenement(routage, &event).await?;
     Ok(())
 }

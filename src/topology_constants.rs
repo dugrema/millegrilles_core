@@ -72,6 +72,7 @@ pub const EVENEMENT_FILEHOST_EVENT: &str = "filehost";
 pub const EVENEMENT_FILEHOST_EVENTNEW: &str = "new";
 pub const EVENEMENT_FILEHOST_EVENTUPDATE: &str = "update";
 pub const EVENEMENT_FILEHOST_EVENTDELETE: &str = "delete";
+pub const EVENEMENT_FILEHOST_TRANSFERSUPDATED: &str = "transfersUpdated";
 
 pub const INDEX_DOMAINE: &str = "domaine";
 pub const INDEX_NOEUDS: &str = "noeuds";

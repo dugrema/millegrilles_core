@@ -31,6 +31,7 @@ use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
 use millegrilles_common_rust::redis::Commands;
 use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
+use crate::topology_maintenance::entretien_transfert_fichiers;
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -846,6 +847,9 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
         }
     }
 
+    // Mettre a jour tous les transferts de fichier
+    entretien_transfert_fichiers(middleware).await?;
+
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
@@ -959,6 +963,9 @@ where M: GenerateurMessages + MongoDao
         visits: response_fuuids,
         unknown: Vec::from_iter(fuuids_set.into_iter().map(|f|f.to_string()))
     };
+
+    // Mettre a jour tous les transferts de fichier
+    entretien_transfert_fichiers(middleware).await?;
 
     Ok(Some(middleware.build_reponse(reponse)?.0))
 }
