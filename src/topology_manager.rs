@@ -138,6 +138,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
         REQUETE_GET_FILECONTROLERS,
         REQUETE_GET_FILEHOST_FOR_INSTANCE,
         REQUETE_GET_FILEHOST_FOR_EXTERNAL,
+        COMMANDE_FILEHOST_BATCH_TRANSFERS,
     ];
     for req in requetes_publiques {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L1Public });

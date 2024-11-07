@@ -1468,6 +1468,13 @@ struct RequeteFilehostListRequest {
     filehost_id: Option<String>,
 }
 
+#[derive(Serialize)]
+struct RequeteFilecontrolersListResponse {
+    ok: bool,
+    list: Vec<RequeteFilehostItem>,
+    filecontroler_primary: Option<String>,
+}
+
 async fn requete_filehosts<M>(middleware: &M, message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -1509,7 +1516,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     let requete: RequeteFilecontrolersListRequest = message_contenu.deserialize()?;
 
     let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILECONTROLERS)?;
-
     let filtre = match requete.instance_id {
         Some(inner) => doc!{"instance_id": inner},
         None => doc!{"deleted": false}
@@ -1523,7 +1529,15 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         list.push(item);
     }
 
-    let response = RequeteFilehostListResponse { ok: true, list };
+    let collection_config =
+        middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+    let filtre = doc!{"name": FIELD_CONFIGURATION_FILECONTROLER_PRIMARY};
+    let filecontroler_primary = match collection_config.find_one(filtre, None).await? {
+        Some(inner) => Some(inner.value),
+        None => None
+    };
+
+    let response = RequeteFilecontrolersListResponse { ok: true, list, filecontroler_primary };
     Ok(Some(middleware.build_reponse(response)?.0))
 }
 

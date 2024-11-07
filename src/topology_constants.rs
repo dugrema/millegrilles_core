@@ -56,6 +56,7 @@ pub const COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE: &str = "ajouterConsignationHeb
 pub const COMMANDE_SET_CLEID_BACKUP_DOMAINE: &str = "setCleidBackupDomaine";
 pub const COMMANDE_FILE_VISIT: &str = "fileVisit";
 pub const COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS: &str = "claimAndFilehostVisits";
+pub const COMMANDE_FILEHOST_BATCH_TRANSFERS: &str = "batchTransfers";
 
 pub const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 pub const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
@@ -99,4 +100,7 @@ pub const ADRESSE_NATURE_ONION: &str = "onion";
 pub const DEFAULT_CONSIGNATION_URL: &str = "https://fichiers:1443";
 
 pub const FIELD_CONFIGURATION_FILEHOST_DEFAULT: &str = "filehost.default";
+pub const FIELD_CONFIGURATION_FILECONTROLER_PRIMARY: &str = "filecontroler.primary";
 pub const FIELD_LAST_CLAIM_DATE: &str = "last_claim_date";
+
+pub const FIELD_JOB_PICKED_UP: &str = "job_picked_up";

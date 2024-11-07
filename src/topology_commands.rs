@@ -2,12 +2,13 @@ use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::str::from_utf8;
+use std::time::Duration;
 use webauthn_rs::prelude::Url;
 
 use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseUrlEtag, RowFilehostFuuid, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, ReponseUrlEtag, RowFilehostFuuid, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
 
 use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction};
 
@@ -31,6 +32,7 @@ use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
 use millegrilles_common_rust::redis::Commands;
 use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
+use millegrilles_common_rust::mongodb::Cursor;
 use crate::topology_maintenance::entretien_transfert_fichiers;
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
@@ -64,6 +66,7 @@ where M: Middleware
         COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire).await,
         COMMANDE_FILE_VISIT => command_file_visit(middleware, m, gestionnaire).await,
         COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS => commande_claim_and_filehost_visits(middleware, m).await,
+        COMMANDE_FILEHOST_BATCH_TRANSFERS => commande_filehost_batch_transfers(middleware, m).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
     }
 }
@@ -696,6 +699,33 @@ async fn check_default_filehost<M>(middleware: &M, filehost_id: &str) -> Result<
     Ok(())
 }
 
+#[derive(Serialize)]
+struct EvenementPrimaryFilecontroler {
+    filecontroler_id: String
+}
+
+async fn check_primary_filecontroler<M>(middleware: &M, instance_id: &str) -> Result<(), Error>
+where M: GenerateurMessages + MongoDao
+{
+    let filtre = doc!{"name": FIELD_CONFIGURATION_FILECONTROLER_PRIMARY};
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+    let count = collection.count_documents(filtre, None).await?;
+    if count == 0 {
+        info!("Initialize primary filecontroler instance_id to {}", instance_id);
+        // Initialize in a volatile way. User can override manually later.
+        let row = FilehostingCongurationRow {name: FIELD_CONFIGURATION_FILECONTROLER_PRIMARY.into(), value: instance_id.to_string()};
+        let row_bson = convertir_to_bson(row)?;
+        collection.insert_one(row_bson, None).await?;
+
+        // Emettre evenement de changement de filecontroler primary
+        let routage = RoutageMessageAction::builder(TOPOLOGIE_NOM_DOMAINE, "primaryFilecontroler", vec![Securite::L1Public])
+            .build();
+        let event = EvenementPrimaryFilecontroler { filecontroler_id: instance_id.into() };
+        middleware.emettre_evenement(routage, &event).await?;
+    }
+    Ok(())
+}
+
 async fn command_filehost_update<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -809,6 +839,8 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
 {
     debug!("command_file_visit Message : {:?}", &m.type_message);
 
+    let instance_id = m.certificat.get_common_name()?;
+
     if ! m.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
         return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
     }
@@ -818,18 +850,6 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
         let message_contenu = message_ref.contenu()?;
         message_contenu.deserialize()?
     };
-
-    // {
-    //     let options = UpdateOptions::builder().upsert(true).build();
-    //     for fuuid in &commande.fuuids {
-    //         let filtre = doc! {"fuuid": fuuid, "filehost_id": &commande.filehost_id};
-    //         let ops = doc! {
-    //             "$set": {"visit_time": &commande.visit_time},
-    //         };
-    //         let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
-    //         collection.update_one(filtre, ops, options.clone()).await?;
-    //     }
-    // }
 
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
     let options = UpdateOptions::builder().upsert(true).build();
@@ -849,6 +869,9 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
 
     // Mettre a jour tous les transferts de fichier
     entretien_transfert_fichiers(middleware).await?;
+
+    // S'assurer d'avoir un filecontroler primary
+    check_primary_filecontroler(middleware, instance_id.as_str()).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
@@ -978,4 +1001,111 @@ async fn emit_filehost_event<M,S,E>(middleware: &M, filehost_id: S, event_str: E
         .build();
     middleware.emettre_evenement(routage, &event).await?;
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct CommandBatchTransfers {
+    destination_filehost_id: String,
+    batch_size: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct CommandBatchTransfersResponseFuuid {
+    fuuid: String,
+    source_filehost_ids: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct CommandBatchTransfersResponse {
+    ok: bool,
+    destination_filehost_id: String,
+    fuuids: Option<Vec<CommandBatchTransfersResponseFuuid>>
+}
+
+async fn commande_filehost_batch_transfers<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: GenerateurMessages + MongoDao
+{
+    debug!("commande_filehost_batch_transfers Message : {:?}", &m.type_message);
+
+    if !m.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+    if !m.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+
+    let message_ref = m.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: CommandBatchTransfers = message_contenu.deserialize()?;
+    let batch_limit = commande.batch_size.unwrap_or_else(|| 10);
+
+    let collection_transfers =
+        middleware.get_collection_typed::<FilehostTransfer>(NOM_COLLECTION_FILEHOSTING_TRANSFERS)?;
+
+    // Recuperer les nouveaux transferts en premier (job_picked_up = null)
+    let filtre = doc!{
+        "destination_filehost_id": &commande.destination_filehost_id,
+        FIELD_JOB_PICKED_UP: {"$exists": false}
+    };
+    let options = FindOptions::builder().limit(batch_limit as i64).build();
+    let curseur = collection_transfers.find(filtre, options).await?;
+
+    let mut fuuids_list = parse_filehost_visits(middleware, curseur).await?;
+    if fuuids_list.len() < batch_limit {
+        let timeout_transfert = Utc::now() - Duration::new(600, 0);
+        // On n'a pas une batch complete. Aller chercher les transferts a re-essayer.
+        let batch_limit_2 = batch_limit - fuuids_list.len();
+        let filtre = doc! {
+            "destination_filehost_id": &commande.destination_filehost_id,
+            FIELD_JOB_PICKED_UP: {"$lte": timeout_transfert}
+        };
+        let options = FindOptions::builder()
+            .limit(batch_limit_2 as i64)
+            .sort(doc!{FIELD_JOB_PICKED_UP: 1})
+            .build();
+        let curseur = collection_transfers.find(filtre, options).await?;
+        let fuuids_list_2 = parse_filehost_visits(middleware, curseur).await?;
+        fuuids_list.extend(fuuids_list_2);
+    }
+
+    // Marquer tous les fuuids comme inclus dans une job (timestamp).
+    let fichiers_inclus: Vec<&str> = fuuids_list.iter().map(|f| f.fuuid.as_str()).collect();
+    let filtre_jobs = doc!{"fuuid": {"$in": fichiers_inclus}};
+    let ops = doc!{"$current": {FIELD_JOB_PICKED_UP: true}};
+    collection_transfers.update_many(filtre_jobs, ops, None).await?;
+
+    let reponse = CommandBatchTransfersResponse {
+        ok: true,
+        destination_filehost_id: commande.destination_filehost_id,
+        fuuids: Some(fuuids_list),
+    };
+
+    Ok(Some(middleware.build_reponse(reponse)?.0))
+}
+
+async fn parse_filehost_visits<M>(middleware: &M, mut curseur: Cursor<FilehostTransfer>)
+    -> Result<Vec<CommandBatchTransfersResponseFuuid>, Error>
+    where M: MongoDao
+{
+    let collection_fuuids =
+        middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+
+    let mut fuuids_list = Vec::new();
+
+    while curseur.advance().await? {
+        let row = curseur.deserialize_current()?;
+        let fuuid = row.fuuid;
+        let filtre_fuuid = doc! {"fuuid": &fuuid};
+        if let Some(fuuid_info) = collection_fuuids.find_one(filtre_fuuid, None).await? {
+            if let Some(visits) = fuuid_info.filehost {
+                let source_filehost_ids = visits.into_keys().collect();
+                let fuuid_response = CommandBatchTransfersResponseFuuid { fuuid, source_filehost_ids };
+                fuuids_list.push(fuuid_response);
+            }
+        }
+    }
+
+    Ok(fuuids_list)
 }
