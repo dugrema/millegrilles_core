@@ -1035,7 +1035,6 @@ async fn commande_filehost_batch_transfers<M>(middleware: &M, m: MessageValide)
         return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
     }
 
-
     let message_ref = m.message.parse()?;
     let message_contenu = message_ref.contenu()?;
     let commande: CommandBatchTransfers = message_contenu.deserialize()?;
@@ -1071,10 +1070,12 @@ async fn commande_filehost_batch_transfers<M>(middleware: &M, m: MessageValide)
     }
 
     // Marquer tous les fuuids comme inclus dans une job (timestamp).
-    let fichiers_inclus: Vec<&str> = fuuids_list.iter().map(|f| f.fuuid.as_str()).collect();
-    let filtre_jobs = doc!{"fuuid": {"$in": fichiers_inclus}};
-    let ops = doc!{"$current": {FIELD_JOB_PICKED_UP: true}};
-    collection_transfers.update_many(filtre_jobs, ops, None).await?;
+    if fuuids_list.len() > 0 {
+        let fichiers_inclus: Vec<&str> = fuuids_list.iter().map(|f| f.fuuid.as_str()).collect();
+        let filtre_jobs = doc! {"fuuid": {"$in": fichiers_inclus}};
+        let ops = doc! {"$currentDate": {FIELD_JOB_PICKED_UP: true}};
+        collection_transfers.update_many(filtre_jobs, ops, None).await?;
+    }
 
     let reponse = CommandBatchTransfersResponse {
         ok: true,

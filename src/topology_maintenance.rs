@@ -308,6 +308,7 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
         (filehosts_active, filehosts_inactive)
     };
 
+    // Supprimer transferts de filehosts inactifs
     let collection_transfers =
         middleware.get_collection_typed::<FilehostTransfer>(NOM_COLLECTION_FILEHOSTING_TRANSFERS)?;
     if filehosts_inactive.len() > 0 {
@@ -315,6 +316,21 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
         let filehost_ids: Vec<&String> = filehosts_inactive.keys().into_iter().collect();
         let filtre = doc!{"filehost_id": {"$in": filehost_ids}};
         collection_transfers.delete_many(filtre, None).await?;
+    }
+
+    let collection_fuuids = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+
+    // Verifier que chaque transfert restant est toujours applicable
+    let mut curseur_transfers = collection_transfers.find(doc!{}, None).await?;
+    while curseur_transfers.advance().await? {
+        let row = curseur_transfers.deserialize_current()?;
+        let filtre_visite = doc!{"fuuid": &row.fuuid, format!("filehost.{}", row.destination_filehost_id): {"$exists": true}};
+        let count_visite = collection_fuuids.count_documents(filtre_visite, None).await?;
+        if count_visite > 0 {
+            debug!("entretien_transfert_fichiers Le transfert {} vers {} ne s'applique plus", row.fuuid, row.destination_filehost_id);
+            let filtre_delete = doc!{"fuuid": row.fuuid, "destination_filehost_id": row.destination_filehost_id};
+            collection_transfers.delete_one(filtre_delete, None).await?;
+        }
     }
 
     if filehosts_active.len() > 0 {
@@ -329,7 +345,6 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
             FIELD_LAST_CLAIM_DATE: {"$gte": reclamation_expiration}
         };
         debug!("entretien_transfert_fichiers Filtre: {:?}", filtre);
-        let collection_fuuids = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
         let mut cursor = collection_fuuids.find(filtre, None).await?;
         let filehosts_active_list: HashSet<&String> = filehosts_active.keys().collect();
         while cursor.advance().await? {

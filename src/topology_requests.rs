@@ -1487,7 +1487,7 @@ async fn requete_filehosts<M>(middleware: &M, message: MessageValide)
 
     let filtre = match requete.filehost_id {
         Some(inner) => doc!{"filehost_id": inner},
-        None => doc!{"deleted": false}
+        None => doc!{"deleted": false, "sync_active": true}
     };
 
     let mut cursor = collection.find(filtre, None).await?;
