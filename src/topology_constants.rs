@@ -4,7 +4,7 @@ pub const NOM_COLLECTION_INSTANCES: &str = "CoreTopologie/instances";
 pub const NOM_COLLECTION_NOEUDS: &str = NOM_COLLECTION_INSTANCES;
 pub const NOM_COLLECTION_MILLEGRILLES: &str = "CoreTopologie/millegrilles";
 pub const NOM_COLLECTION_MILLEGRILLES_ADRESSES: &str = "CoreTopologie/millegrillesAdresses";
-pub const NOM_COLLECTION_FICHIERS: &str = "CoreTopologie/fichiers";
+// pub const NOM_COLLECTION_FICHIERS: &str = "CoreTopologie/fichiers";
 pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 pub const NOM_COLLECTION_TOKENS: &str = "CoreTopologie/tokens";
 pub const NOM_COLLECTION_FILEHOSTS: &str = "CoreTopologie/filehosts";
@@ -57,6 +57,7 @@ pub const COMMANDE_SET_CLEID_BACKUP_DOMAINE: &str = "setCleidBackupDomaine";
 pub const COMMANDE_FILE_VISIT: &str = "fileVisit";
 pub const COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS: &str = "claimAndFilehostVisits";
 pub const COMMANDE_FILEHOST_BATCH_TRANSFERS: &str = "batchTransfers";
+pub const COMMANDE_FILEHOST_RESET_VISITS_CLAIMS: &str = "resetVisitsClaims";
 
 pub const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 pub const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;

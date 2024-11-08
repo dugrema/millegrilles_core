@@ -62,11 +62,12 @@ where M: Middleware
         TRANSACTION_FILEHOST_ADD => command_filehost_add(middleware, m, gestionnaire).await,
         TRANSACTION_FILEHOST_UPDATE => command_filehost_update(middleware, m, gestionnaire).await,
         TRANSACTION_FILEHOST_DELETE => command_filehost_delete(middleware, m, gestionnaire).await,
-        COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
+        // COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire).await,
         COMMANDE_FILE_VISIT => command_file_visit(middleware, m, gestionnaire).await,
         COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS => commande_claim_and_filehost_visits(middleware, m).await,
         COMMANDE_FILEHOST_BATCH_TRANSFERS => commande_filehost_batch_transfers(middleware, m).await,
+        COMMANDE_FILEHOST_RESET_VISITS_CLAIMS => commande_filehost_reset_visits_claims(middleware, m).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
     }
 }
@@ -419,100 +420,100 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(fiche_publique))
 }
 
-async fn commande_ajouter_consignation_hebergee<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
-                                                   -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    debug!("commande_ajouter_consignation_hebergee : {:?}", &message.type_message);
-
-    // Verifier autorisation
-    if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-        error!("commande_ajouter_consignation_hebergee autorisation acces refuse");
-        return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
-    }
-
-    // Valider commande
-    let commande = {
-        let message_ref = message.message.parse()?;
-        let message_contenu = message_ref.contenu()?;
-        match message_contenu.deserialize::<CommandeAjouterConsignationHebergee>() {
-            Ok(inner) => inner,
-            Err(e) => {
-                error!("commande_ajouter_consignation_hebergee Erreur convertir {:?}", e);
-                return Ok(Some(middleware.reponse_err(2, None, Some("Permission refusee, certificat non autorise"))?))
-            }
-        }
-    };
-
-    let url_connexion = Url::parse(commande.url.as_str())?;
-    let fiche_publique = match charger_fiche(middleware, &url_connexion, None).await {
-        Ok(inner) => match inner {
-            Some(fiche) => fiche,
-            None => {
-                error!("commande_ajouter_consignation_hebergee Erreur acces fiche - non trouvee");
-                return Ok(Some(middleware.reponse_err(Some(3), None, Some("Erreur acces fiche - non trouvee"))?))
-            }
-        },
-        Err(e) => {
-            error!("charger_fiche Erreur chargement fiche : {:?}", e);
-            return Ok(Some(middleware.reponse_err(Some(4), None, Some("Erreur acces fiche"))?))
-        }
-    };
-
-    // Verifier si on a deja une configuration d'hebergement pour cette millegrille
-    let idmg = fiche_publique.idmg.as_str();
-
-    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
-    let filtre = doc!{"instance_id": idmg};
-    if collection.find_one(filtre, None).await?.is_some() {
-        error!("commande_ajouter_consignation_hebergee Erreur ajout consignation existante sur idmg : {}", idmg);
-        return Ok(Some(middleware.reponse_err(Some(6), None, Some("Une configuration d'hebergement existe deja pour cette millegrille"))?))
-    }
-
-    let (jwt, url_verifie) = match demander_jwt_hebergement(middleware, &fiche_publique, Some(url_connexion.clone())).await {
-        Ok(inner) => inner,
-        Err(e) => {
-            error!("charger_fiche Erreur demande JWT pour hebergement : {:?}", e);
-            return Ok(Some(middleware.reponse_err(Some(5), None, Some("Erreur demande tokens"))?))
-        }
-    };
-
-    // Ajouter la consignation
-    let transaction = TransactionConfigurerConsignation {
-        instance_id: idmg.to_owned(),
-        type_store: Some("heberge".to_string()),
-        url_download: None,
-        url_archives: None,
-        consignation_url: Some(url_verifie.to_string()),
-        sync_intervalle: Some(86400),
-        sync_actif: Some(true),
-        supporte_archives: None,
-        data_chiffre: None,
-        hostname_sftp: None,
-        username_sftp: None,
-        port_sftp: None,
-        remote_path_sftp: None,
-        key_type_sftp: None,
-        s3_access_key_id: None,
-        s3_region: None,
-        s3_endpoint: None,
-        s3_bucket: None,
-        type_backup: None,
-        hostname_sftp_backup: None,
-        port_sftp_backup: None,
-        username_sftp_backup: None,
-        remote_path_sftp_backup: None,
-        key_type_sftp_backup: None,
-        backup_intervalle_secs: None,
-        backup_limit_bytes: None,
-    };
-
-    sauvegarder_traiter_transaction_serializable_v2(
-        middleware, &transaction, gestionnaire,
-        TOPOLOGIE_NOM_DOMAINE, TRANSACTION_CONFIGURER_CONSIGNATION).await?;
-
-    Ok(Some(middleware.reponse_ok(None, None)?))
-}
+// async fn commande_ajouter_consignation_hebergee<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
+//                                                    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+// where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     debug!("commande_ajouter_consignation_hebergee : {:?}", &message.type_message);
+//
+//     // Verifier autorisation
+//     if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+//         error!("commande_ajouter_consignation_hebergee autorisation acces refuse");
+//         return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
+//     }
+//
+//     // Valider commande
+//     let commande = {
+//         let message_ref = message.message.parse()?;
+//         let message_contenu = message_ref.contenu()?;
+//         match message_contenu.deserialize::<CommandeAjouterConsignationHebergee>() {
+//             Ok(inner) => inner,
+//             Err(e) => {
+//                 error!("commande_ajouter_consignation_hebergee Erreur convertir {:?}", e);
+//                 return Ok(Some(middleware.reponse_err(2, None, Some("Permission refusee, certificat non autorise"))?))
+//             }
+//         }
+//     };
+//
+//     let url_connexion = Url::parse(commande.url.as_str())?;
+//     let fiche_publique = match charger_fiche(middleware, &url_connexion, None).await {
+//         Ok(inner) => match inner {
+//             Some(fiche) => fiche,
+//             None => {
+//                 error!("commande_ajouter_consignation_hebergee Erreur acces fiche - non trouvee");
+//                 return Ok(Some(middleware.reponse_err(Some(3), None, Some("Erreur acces fiche - non trouvee"))?))
+//             }
+//         },
+//         Err(e) => {
+//             error!("charger_fiche Erreur chargement fiche : {:?}", e);
+//             return Ok(Some(middleware.reponse_err(Some(4), None, Some("Erreur acces fiche"))?))
+//         }
+//     };
+//
+//     // Verifier si on a deja une configuration d'hebergement pour cette millegrille
+//     let idmg = fiche_publique.idmg.as_str();
+//
+//     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+//     let filtre = doc!{"instance_id": idmg};
+//     if collection.find_one(filtre, None).await?.is_some() {
+//         error!("commande_ajouter_consignation_hebergee Erreur ajout consignation existante sur idmg : {}", idmg);
+//         return Ok(Some(middleware.reponse_err(Some(6), None, Some("Une configuration d'hebergement existe deja pour cette millegrille"))?))
+//     }
+//
+//     let (jwt, url_verifie) = match demander_jwt_hebergement(middleware, &fiche_publique, Some(url_connexion.clone())).await {
+//         Ok(inner) => inner,
+//         Err(e) => {
+//             error!("charger_fiche Erreur demande JWT pour hebergement : {:?}", e);
+//             return Ok(Some(middleware.reponse_err(Some(5), None, Some("Erreur demande tokens"))?))
+//         }
+//     };
+//
+//     // Ajouter la consignation
+//     let transaction = TransactionConfigurerConsignation {
+//         instance_id: idmg.to_owned(),
+//         type_store: Some("heberge".to_string()),
+//         url_download: None,
+//         url_archives: None,
+//         consignation_url: Some(url_verifie.to_string()),
+//         sync_intervalle: Some(86400),
+//         sync_actif: Some(true),
+//         supporte_archives: None,
+//         data_chiffre: None,
+//         hostname_sftp: None,
+//         username_sftp: None,
+//         port_sftp: None,
+//         remote_path_sftp: None,
+//         key_type_sftp: None,
+//         s3_access_key_id: None,
+//         s3_region: None,
+//         s3_endpoint: None,
+//         s3_bucket: None,
+//         type_backup: None,
+//         hostname_sftp_backup: None,
+//         port_sftp_backup: None,
+//         username_sftp_backup: None,
+//         remote_path_sftp_backup: None,
+//         key_type_sftp_backup: None,
+//         backup_intervalle_secs: None,
+//         backup_limit_bytes: None,
+//     };
+//
+//     sauvegarder_traiter_transaction_serializable_v2(
+//         middleware, &transaction, gestionnaire,
+//         TOPOLOGIE_NOM_DOMAINE, TRANSACTION_CONFIGURER_CONSIGNATION).await?;
+//
+//     Ok(Some(middleware.reponse_ok(None, None)?))
+// }
 
 #[derive(Deserialize)]
 struct RowCoreTopologieDomaines {
@@ -1109,4 +1110,25 @@ async fn parse_filehost_visits<M>(middleware: &M, mut curseur: Cursor<FilehostTr
     }
 
     Ok(fuuids_list)
+}
+
+async fn commande_filehost_reset_visits_claims<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: GenerateurMessages + MongoDao
+{
+    if m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    let collection_fuuids =
+        middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+    let collection_transfers =
+        middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_TRANSFERS)?;
+
+    collection_fuuids.delete_many(doc!{}, None).await?;
+    collection_transfers.delete_many(doc!{}, None).await?;
+
+    // Emettre evenement reset claims (e.g. GrosFichiers), reload visites (filecontrolers).
+
+    todo!()
 }

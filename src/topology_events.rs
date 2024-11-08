@@ -49,7 +49,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
         EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m, gestionnaire).await,
         EVENEMENT_PRESENCE_MONITOR | EVENEMENT_PRESENCE_FICHIERS => {
             match domaine.as_str() {
-                DOMAINE_FICHIERS => traiter_presence_fichiers(middleware, m, gestionnaire).await,
+                // DOMAINE_FICHIERS => traiter_presence_fichiers(middleware, m, gestionnaire).await,
                 DOMAINE_APPLICATION_INSTANCE => traiter_presence_monitor(middleware, m, gestionnaire).await,
                 _ => Err(format!("Mauvais domaine ({}) pour un evenement de presence", domaine))?,
             }
@@ -129,73 +129,73 @@ struct PresenceFichiers {
     manquant: Option<PresenceFichiersRepertoire>,
 }
 
-async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
-                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    let message_ref = m.message.parse()?;
-    let message_contenu = message_ref.contenu()?;
-    let event: PresenceFichiers = message_contenu.deserialize()?;
-    debug!("traiter_presence_fichiers Presence fichiers : {:?}", event);
-
-    if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers])? {
-        Err(format!("core_topologie.traiter_presence_fichiers Certificat n'a pas le role 'fichiers'"))?
-    }
-    let subject = m.certificat.subject()?;
-    debug!("traiter_presence_fichiers Subject enveloppe : {:?}", subject);
-    let instance_id = match subject.get("commonName") {
-        Some(instance_id) => instance_id.clone(),
-        None => Err(format!("core_topologie.traiter_presence_fichiers organizationalUnit absent du message"))?
-    };
-
-    debug!("traiter_presence_fichiers Presence fichiers recue pour instance_id {}", instance_id);
-
-    let mut unset_ops = doc! {};
-    let mut set_ops = doc! {
-        "principal": event.principal,
-        "archive": event.archive,
-        "orphelin": event.orphelin,
-        "manquant": event.manquant,
-        "supprime": false,
-    };
-
-    let mut ops = doc! {
-        "$setOnInsert": {
-            "instance_id": &instance_id, CHAMP_CREATION: Utc::now(),
-            // Defaut pour nouvelle instance
-            "type_store": "millegrille",
-            "consignation_url": DEFAULT_CONSIGNATION_URL,
-            "sync_actif": true,
-        },
-        "$set": set_ops,
-        "$currentDate": {CHAMP_MODIFICATION: true}
-    };
-    if unset_ops.len() > 0 {
-        ops.insert("$unset", unset_ops);
-    }
-
-    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
-    let filtre = doc! {"instance_id": &instance_id};
-    let options = UpdateOptions::builder()
-        .upsert(true)
-        .build();
-    let resultat = collection.update_one(filtre, ops, options).await?;
-    debug!("traiter_presence_fichiers Resultat update : {:?}", resultat);
-
-    // Verifier si on a un primaire - sinon generer transaction pour set primaire par defaut
-    let filtre = doc! {"primaire": true};
-    let resultat = collection.find_one(filtre, None).await?;
-    if resultat.is_none() {
-        debug!("traiter_presence_fichiers Assigne le role de fichiers primaire a {}", instance_id);
-        let transaction = TransactionSetFichiersPrimaire { instance_id };
-
-        // Sauvegarder la transaction
-        sauvegarder_traiter_transaction_serializable_v2(
-            middleware, &transaction, gestionnaire, DOMAIN_NAME, TRANSACTION_SET_FICHIERS_PRIMAIRE).await?;
-    }
-
-    Ok(None)
-}
+// async fn traiter_presence_fichiers<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+//                                       -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+// where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     let message_ref = m.message.parse()?;
+//     let message_contenu = message_ref.contenu()?;
+//     let event: PresenceFichiers = message_contenu.deserialize()?;
+//     debug!("traiter_presence_fichiers Presence fichiers : {:?}", event);
+//
+//     if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers])? {
+//         Err(format!("core_topologie.traiter_presence_fichiers Certificat n'a pas le role 'fichiers'"))?
+//     }
+//     let subject = m.certificat.subject()?;
+//     debug!("traiter_presence_fichiers Subject enveloppe : {:?}", subject);
+//     let instance_id = match subject.get("commonName") {
+//         Some(instance_id) => instance_id.clone(),
+//         None => Err(format!("core_topologie.traiter_presence_fichiers organizationalUnit absent du message"))?
+//     };
+//
+//     debug!("traiter_presence_fichiers Presence fichiers recue pour instance_id {}", instance_id);
+//
+//     let mut unset_ops = doc! {};
+//     let mut set_ops = doc! {
+//         "principal": event.principal,
+//         "archive": event.archive,
+//         "orphelin": event.orphelin,
+//         "manquant": event.manquant,
+//         "supprime": false,
+//     };
+//
+//     let mut ops = doc! {
+//         "$setOnInsert": {
+//             "instance_id": &instance_id, CHAMP_CREATION: Utc::now(),
+//             // Defaut pour nouvelle instance
+//             "type_store": "millegrille",
+//             "consignation_url": DEFAULT_CONSIGNATION_URL,
+//             "sync_actif": true,
+//         },
+//         "$set": set_ops,
+//         "$currentDate": {CHAMP_MODIFICATION: true}
+//     };
+//     if unset_ops.len() > 0 {
+//         ops.insert("$unset", unset_ops);
+//     }
+//
+//     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+//     let filtre = doc! {"instance_id": &instance_id};
+//     let options = UpdateOptions::builder()
+//         .upsert(true)
+//         .build();
+//     let resultat = collection.update_one(filtre, ops, options).await?;
+//     debug!("traiter_presence_fichiers Resultat update : {:?}", resultat);
+//
+//     // Verifier si on a un primaire - sinon generer transaction pour set primaire par defaut
+//     let filtre = doc! {"primaire": true};
+//     let resultat = collection.find_one(filtre, None).await?;
+//     if resultat.is_none() {
+//         debug!("traiter_presence_fichiers Assigne le role de fichiers primaire a {}", instance_id);
+//         let transaction = TransactionSetFichiersPrimaire { instance_id };
+//
+//         // Sauvegarder la transaction
+//         sauvegarder_traiter_transaction_serializable_v2(
+//             middleware, &transaction, gestionnaire, DOMAIN_NAME, TRANSACTION_SET_FICHIERS_PRIMAIRE).await?;
+//     }
+//
+//     Ok(None)
+// }
 
 async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>

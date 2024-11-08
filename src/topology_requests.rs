@@ -60,7 +60,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                     match action.as_str() {
                         REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
                         REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
-                        REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
+                        // REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
                         REQUETE_GET_TOKEN_HEBERGEMENT => requete_get_token_hebergement(middleware, m).await,
                         REQUETE_GET_FILEHOSTS => requete_filehosts(middleware, m).await,
                         REQUETE_GET_FILECONTROLERS => requete_filecontrolers(middleware, m).await,
@@ -88,8 +88,8 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, m).await,
                         REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
                         REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
-                        REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
-                        REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
+                        // REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
+                        // REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
                         _ => {
                             error!("Message requete/action inconnue : '{}'. Message dropped.", action);
                             Ok(None)
@@ -108,8 +108,8 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                     match action.as_str() {
                         REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
                         REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, m).await,
-                        REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, m).await,
-                        REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
+                        // REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, m).await,
+                        // REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
                         REQUETE_GET_CLEID_BACKUP_DOMAINE => requete_get_cleid_backup_domaine(middleware, m).await,
                         _ => {
                             error!("Message requete/action inconnue : '{}'. Message dropped.", action);
@@ -291,151 +291,151 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(middleware.build_reponse(json!({"fiches": fiches}))?.0))
 }
 
-async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide)
-                                          -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    let message_ref = message.message.parse()?;
-    let message_contenu = message_ref.contenu()?;
-    let requete: RequeteConsignationFichiers = message_contenu.deserialize()?;
-    debug!("requete_consignation_fichiers Parsed : {:?}", requete);
-
-    let instance_id = match message.certificat.subject()?.get("commonName") {
-        Some(inner) => inner.clone(),
-        None => Err(format!("requete_consignation_fichiers Erreur chargement, certificat sans commonName"))?
-    };
-
-    let mut projection = doc! {
-        "instance_id": 1,
-        "primaire": 1,
-        "consignation_url": 1,
-        "type_store": 1,
-        "url_download": 1,
-        "url_archives": 1,
-        "sync_intervalle": 1,
-        "sync_actif": 1,
-        "supporte_archives": 1,
-        "data_chiffre": 1,
-        "hostname_sftp": 1,
-        "username_sftp": 1,
-        "remote_path_sftp": 1,
-        "key_type_sftp": 1,
-        "s3_access_key_id": 1,
-        "s3_region": 1,
-        "s3_endpoint": 1,
-        "s3_bucket": 1,
-        "type_backup": 1,
-        "hostname_sftp_backup": 1,
-        "username_sftp_backup": 1,
-        "remote_path_sftp_backup": 1,
-        "key_type_sftp_backup": 1,
-        "backup_intervalle_secs": 1,
-        "backup_limit_bytes": 1,
-        "supprime": 1,
-    };
-
-    if let Some(true) = requete.stats {
-        // Inclure information des fichiers et espace
-        projection.insert("principal", 1);
-        projection.insert("archive", 1);
-        projection.insert("orphelin", 1);
-        projection.insert("manquant", 1);
-    }
-
-    let options = FindOneOptions::builder()
-        .projection(projection)
-        .build();
-
-    let filtre = match requete.instance_id {
-        Some(inner) => doc! { "instance_id": inner },
-        None => match requete.hostname {
-            Some(inner) => {
-                // Trouver une instance avec le hostname demande
-                let collection = middleware.get_collection(NOM_COLLECTION_INSTANCES)?;
-                let filtre = doc! {"$or": [{"domaine": &inner}, {"onion": &inner}]};
-                match collection.find_one(filtre, None).await? {
-                    Some(inner) => {
-                        let info_instance: InformationMonitor = convertir_bson_deserializable(inner)?;
-                        doc! { "instance_id": info_instance.instance_id }
-                    },
-                    None => {
-                        //let reponse = json!({"ok": false});
-                        //return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
-                        return Ok(Some(middleware.reponse_err(None, None, None)?))
-                    }
-                }
-            }
-            None => {
-                if let Some(true) = requete.primaire {
-                    doc! { "primaire": true, }
-                } else {
-                    // Determiner la consignation a utiliser
-                    // Charger instance et lire consignation_id. Si None, comportement par defaut.
-                    let filtre_instance = doc! { CHAMP_INSTANCE_ID: &instance_id };
-                    let collection_instance = middleware.get_collection_typed::<TransactionSetConsignationInstance>(
-                        NOM_COLLECTION_INSTANCES)?;
-                    match collection_instance.find_one(filtre_instance.clone(), None).await? {
-                        Some(instance_info) => {
-                            match instance_info.consignation_id {
-                                Some(consignation_id) => {
-                                    debug!("requete_consignation_fichiers Utilisation consignation_id {} pour instance_id {}", consignation_id, instance_id);
-                                    doc! { CHAMP_INSTANCE_ID: consignation_id }
-                                },
-                                None => {
-                                    // Determiner si l'instance possede un serveur de consignation de fichiers
-                                    let collection_fichiers = middleware.get_collection_typed::<TransactionConfigurerConsignation>(
-                                        NOM_COLLECTION_FICHIERS)?;
-                                    match collection_fichiers.find_one(filtre_instance.clone(), None).await? {
-                                        Some(inner) => filtre_instance,
-                                        None => {
-                                            // L'instance n'a pas de serveur de consignation de fichiers, utiliser primaire
-                                            doc! { "primaire": true }
-                                        }
-                                    }
-                                }
-                            }
-                        },
-                        None => {
-                            // L'instance est inconnue (anormal...), on selectionne le primaire
-                            doc! { "primaire": true }
-                        }
-                    }
-                }
-            }
-        }
-    };
-
-    debug!("requete_consignation_fichiers Filtre {:?}", filtre);
-    let collection = middleware.get_collection_typed::<ReponseInformationConsignationFichiers>(NOM_COLLECTION_FICHIERS)?;
-    let fiche_consignation = collection.find_one(filtre, Some(options)).await?;
-    let reponse = match fiche_consignation {
-        Some(mut fiche_reponse) => {
-            // let mut fiche_reponse: ReponseInformationConsignationFichiers = convertir_bson_deserializable(f)?;
-            fiche_reponse.ok = Some(true);
-            debug!("requete_consignation_fichiers Row consignation : {:?}", fiche_reponse);
-
-            // Recuperer info instance pour domaine et onion
-            let filtre = doc! {"instance_id": &fiche_reponse.instance_id};
-            let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_INSTANCES)?;
-            if let Some(info_instance) = collection.find_one(filtre, None).await? {
-                debug!("requete_consignation_fichiers Info instance chargee {:?}", info_instance);
-                let mut domaines = match info_instance.domaines {
-                    Some(inner) => inner.clone(),
-                    None => Vec::new()
-                };
-                if let Some(inner) = info_instance.onion {
-                    domaines.push(inner);
-                }
-                fiche_reponse.hostnames = Some(domaines);
-            }
-
-            middleware.build_reponse(fiche_reponse)?.0
-        },
-        None => middleware.reponse_err(None, None, None)?
-    };
-
-    Ok(Some(reponse))
-}
+// async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide)
+//                                           -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+// where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     let message_ref = message.message.parse()?;
+//     let message_contenu = message_ref.contenu()?;
+//     let requete: RequeteConsignationFichiers = message_contenu.deserialize()?;
+//     debug!("requete_consignation_fichiers Parsed : {:?}", requete);
+//
+//     let instance_id = match message.certificat.subject()?.get("commonName") {
+//         Some(inner) => inner.clone(),
+//         None => Err(format!("requete_consignation_fichiers Erreur chargement, certificat sans commonName"))?
+//     };
+//
+//     let mut projection = doc! {
+//         "instance_id": 1,
+//         "primaire": 1,
+//         "consignation_url": 1,
+//         "type_store": 1,
+//         "url_download": 1,
+//         "url_archives": 1,
+//         "sync_intervalle": 1,
+//         "sync_actif": 1,
+//         "supporte_archives": 1,
+//         "data_chiffre": 1,
+//         "hostname_sftp": 1,
+//         "username_sftp": 1,
+//         "remote_path_sftp": 1,
+//         "key_type_sftp": 1,
+//         "s3_access_key_id": 1,
+//         "s3_region": 1,
+//         "s3_endpoint": 1,
+//         "s3_bucket": 1,
+//         "type_backup": 1,
+//         "hostname_sftp_backup": 1,
+//         "username_sftp_backup": 1,
+//         "remote_path_sftp_backup": 1,
+//         "key_type_sftp_backup": 1,
+//         "backup_intervalle_secs": 1,
+//         "backup_limit_bytes": 1,
+//         "supprime": 1,
+//     };
+//
+//     if let Some(true) = requete.stats {
+//         // Inclure information des fichiers et espace
+//         projection.insert("principal", 1);
+//         projection.insert("archive", 1);
+//         projection.insert("orphelin", 1);
+//         projection.insert("manquant", 1);
+//     }
+//
+//     let options = FindOneOptions::builder()
+//         .projection(projection)
+//         .build();
+//
+//     let filtre = match requete.instance_id {
+//         Some(inner) => doc! { "instance_id": inner },
+//         None => match requete.hostname {
+//             Some(inner) => {
+//                 // Trouver une instance avec le hostname demande
+//                 let collection = middleware.get_collection(NOM_COLLECTION_INSTANCES)?;
+//                 let filtre = doc! {"$or": [{"domaine": &inner}, {"onion": &inner}]};
+//                 match collection.find_one(filtre, None).await? {
+//                     Some(inner) => {
+//                         let info_instance: InformationMonitor = convertir_bson_deserializable(inner)?;
+//                         doc! { "instance_id": info_instance.instance_id }
+//                     },
+//                     None => {
+//                         //let reponse = json!({"ok": false});
+//                         //return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+//                         return Ok(Some(middleware.reponse_err(None, None, None)?))
+//                     }
+//                 }
+//             }
+//             None => {
+//                 if let Some(true) = requete.primaire {
+//                     doc! { "primaire": true, }
+//                 } else {
+//                     // Determiner la consignation a utiliser
+//                     // Charger instance et lire consignation_id. Si None, comportement par defaut.
+//                     let filtre_instance = doc! { CHAMP_INSTANCE_ID: &instance_id };
+//                     let collection_instance = middleware.get_collection_typed::<TransactionSetConsignationInstance>(
+//                         NOM_COLLECTION_INSTANCES)?;
+//                     match collection_instance.find_one(filtre_instance.clone(), None).await? {
+//                         Some(instance_info) => {
+//                             match instance_info.consignation_id {
+//                                 Some(consignation_id) => {
+//                                     debug!("requete_consignation_fichiers Utilisation consignation_id {} pour instance_id {}", consignation_id, instance_id);
+//                                     doc! { CHAMP_INSTANCE_ID: consignation_id }
+//                                 },
+//                                 None => {
+//                                     // Determiner si l'instance possede un serveur de consignation de fichiers
+//                                     let collection_fichiers = middleware.get_collection_typed::<TransactionConfigurerConsignation>(
+//                                         NOM_COLLECTION_FICHIERS)?;
+//                                     match collection_fichiers.find_one(filtre_instance.clone(), None).await? {
+//                                         Some(inner) => filtre_instance,
+//                                         None => {
+//                                             // L'instance n'a pas de serveur de consignation de fichiers, utiliser primaire
+//                                             doc! { "primaire": true }
+//                                         }
+//                                     }
+//                                 }
+//                             }
+//                         },
+//                         None => {
+//                             // L'instance est inconnue (anormal...), on selectionne le primaire
+//                             doc! { "primaire": true }
+//                         }
+//                     }
+//                 }
+//             }
+//         }
+//     };
+//
+//     debug!("requete_consignation_fichiers Filtre {:?}", filtre);
+//     let collection = middleware.get_collection_typed::<ReponseInformationConsignationFichiers>(NOM_COLLECTION_FICHIERS)?;
+//     let fiche_consignation = collection.find_one(filtre, Some(options)).await?;
+//     let reponse = match fiche_consignation {
+//         Some(mut fiche_reponse) => {
+//             // let mut fiche_reponse: ReponseInformationConsignationFichiers = convertir_bson_deserializable(f)?;
+//             fiche_reponse.ok = Some(true);
+//             debug!("requete_consignation_fichiers Row consignation : {:?}", fiche_reponse);
+//
+//             // Recuperer info instance pour domaine et onion
+//             let filtre = doc! {"instance_id": &fiche_reponse.instance_id};
+//             let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_INSTANCES)?;
+//             if let Some(info_instance) = collection.find_one(filtre, None).await? {
+//                 debug!("requete_consignation_fichiers Info instance chargee {:?}", info_instance);
+//                 let mut domaines = match info_instance.domaines {
+//                     Some(inner) => inner.clone(),
+//                     None => Vec::new()
+//                 };
+//                 if let Some(inner) = info_instance.onion {
+//                     domaines.push(inner);
+//                 }
+//                 fiche_reponse.hostnames = Some(domaines);
+//             }
+//
+//             middleware.build_reponse(fiche_reponse)?.0
+//         },
+//         None => middleware.reponse_err(None, None, None)?
+//     };
+//
+//     Ok(Some(reponse))
+// }
 
 #[derive(Deserialize)]
 struct RequeteGetTokenHebergement {
@@ -1222,93 +1222,93 @@ pub struct ReponseConsignationSatellite {
     pub supprime: Option<bool>,
 }
 
-async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
-                                          -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: GenerateurMessages + MongoDao
-{
-    debug!("requete_get_cle_configuration Message : {:?}", &m.type_message);
-    let message_ref = m.message.parse()?;
-    let message_contenu = message_ref.contenu()?;
-    let requete: ParametresGetCleConfiguration = message_contenu.deserialize()?;
-    debug!("requete_get_cle_configuration cle parsed : {:?}", requete);
-
-    if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers])? {
-        // let reponse = json!({"err": true, "message": "certificat doit etre de role fichiers"});
-        // return Ok(Some(middleware.formatter_reponse(reponse, None)?));
-        return Ok(Some(middleware.reponse_err(None, Some("Certificat doit etre de role fichiers"), None)?))
-    }
-
-    // Utiliser certificat du message client (requete) pour demande de rechiffrage
-    let instance_id = m.certificat.get_common_name()?;
-    let pem_rechiffrage = m.certificat.chaine_pem()?;
-    // let pem_rechiffrage: Vec<String> = fp_certs.into_iter().map(|cert| cert.pem).collect();
-
-    // Recuperer information de dechiffrage (avec cle_id) pour cette instance
-    let filtre = doc!("instance_id": &instance_id);
-    let collection = middleware.get_collection_typed::<ReponseConsignationSatellite>(NOM_COLLECTION_FICHIERS)?;
-    let consignation_instance = match collection.find_one(filtre, None).await? {
-        Some(inner) => inner,
-        None => {
-            info!("requete_get_cle_configuration Aucune configuration pour fichiers sur instance {}", instance_id);
-            return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration de fichiers trouvees"))?))
-        }
-    };
-
-    let data_chiffre = match consignation_instance.data_chiffre {
-        Some(inner) => inner,
-        None => {
-            info!("requete_get_cle_configuration Aucune configuration pour fichiers sur instance {}", instance_id);
-            return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration chiffree trouvee pour les fichiers"))?))
-        }
-    };
-
-    let cle_id = match data_chiffre.cle_id {
-        Some(inner) => inner,
-        None => match data_chiffre.ref_hachage_bytes {
-            Some(inner) => inner,
-            None => {
-                info!("requete_get_cle_configuration Aucune configuration cle_id/ref_hachage_bytes trouve pour {}", instance_id);
-                return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration cle_id/ref_hachage_bytes trouve trouvee pour les fichiers"))?))
-            }
-        }
-    };
-
-    let permission = RequeteDechiffrage {
-        domaine: DOMAIN_NAME.to_string(),
-        liste_hachage_bytes: None,
-        cle_ids: Some(vec![cle_id]),
-        certificat_rechiffrage: Some(pem_rechiffrage),
-        inclure_signature: None,
-    };
-
-    let (reply_to, correlation_id) = match &m.type_message {
-        TypeMessageOut::Requete(r) => {
-            let reply_q = match r.reply_to.as_ref() {
-                Some(inner) => inner.as_str(),
-                None => Err(String::from("requete_get_cle_configuration Reply to manquant"))?
-            };
-            let correlation_id = match r.correlation_id.as_ref() {
-                Some(inner) => inner.as_str(),
-                None => Err(String::from("requete_get_cle_configuration Correlation id manquant"))?
-            };
-            (reply_q, correlation_id)
-        }
-        _ => Err(String::from("requete_get_cle_configuration Mauvais type de message"))?
-    };
-
-    let routage = RoutageMessageAction::builder(
-        DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, vec![Securite::L3Protege]
-    )
-        .reply_to(reply_to)
-        .correlation_id(correlation_id)
-        .blocking(false)
-        .build();
-
-    debug!("requete_get_cle_configuration Transmettre requete permission dechiffrage cle : {:?}", permission);
-    middleware.transmettre_requete(routage, &permission).await?;
-
-    Ok(None)  // Aucune reponse a transmettre, c'est le maitre des cles qui va repondre
-}
+// async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
+//                                           -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+// where M: GenerateurMessages + MongoDao
+// {
+//     debug!("requete_get_cle_configuration Message : {:?}", &m.type_message);
+//     let message_ref = m.message.parse()?;
+//     let message_contenu = message_ref.contenu()?;
+//     let requete: ParametresGetCleConfiguration = message_contenu.deserialize()?;
+//     debug!("requete_get_cle_configuration cle parsed : {:?}", requete);
+//
+//     if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers])? {
+//         // let reponse = json!({"err": true, "message": "certificat doit etre de role fichiers"});
+//         // return Ok(Some(middleware.formatter_reponse(reponse, None)?));
+//         return Ok(Some(middleware.reponse_err(None, Some("Certificat doit etre de role fichiers"), None)?))
+//     }
+//
+//     // Utiliser certificat du message client (requete) pour demande de rechiffrage
+//     let instance_id = m.certificat.get_common_name()?;
+//     let pem_rechiffrage = m.certificat.chaine_pem()?;
+//     // let pem_rechiffrage: Vec<String> = fp_certs.into_iter().map(|cert| cert.pem).collect();
+//
+//     // Recuperer information de dechiffrage (avec cle_id) pour cette instance
+//     let filtre = doc!("instance_id": &instance_id);
+//     let collection = middleware.get_collection_typed::<ReponseConsignationSatellite>(NOM_COLLECTION_FICHIERS)?;
+//     let consignation_instance = match collection.find_one(filtre, None).await? {
+//         Some(inner) => inner,
+//         None => {
+//             info!("requete_get_cle_configuration Aucune configuration pour fichiers sur instance {}", instance_id);
+//             return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration de fichiers trouvees"))?))
+//         }
+//     };
+//
+//     let data_chiffre = match consignation_instance.data_chiffre {
+//         Some(inner) => inner,
+//         None => {
+//             info!("requete_get_cle_configuration Aucune configuration pour fichiers sur instance {}", instance_id);
+//             return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration chiffree trouvee pour les fichiers"))?))
+//         }
+//     };
+//
+//     let cle_id = match data_chiffre.cle_id {
+//         Some(inner) => inner,
+//         None => match data_chiffre.ref_hachage_bytes {
+//             Some(inner) => inner,
+//             None => {
+//                 info!("requete_get_cle_configuration Aucune configuration cle_id/ref_hachage_bytes trouve pour {}", instance_id);
+//                 return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration cle_id/ref_hachage_bytes trouve trouvee pour les fichiers"))?))
+//             }
+//         }
+//     };
+//
+//     let permission = RequeteDechiffrage {
+//         domaine: DOMAIN_NAME.to_string(),
+//         liste_hachage_bytes: None,
+//         cle_ids: Some(vec![cle_id]),
+//         certificat_rechiffrage: Some(pem_rechiffrage),
+//         inclure_signature: None,
+//     };
+//
+//     let (reply_to, correlation_id) = match &m.type_message {
+//         TypeMessageOut::Requete(r) => {
+//             let reply_q = match r.reply_to.as_ref() {
+//                 Some(inner) => inner.as_str(),
+//                 None => Err(String::from("requete_get_cle_configuration Reply to manquant"))?
+//             };
+//             let correlation_id = match r.correlation_id.as_ref() {
+//                 Some(inner) => inner.as_str(),
+//                 None => Err(String::from("requete_get_cle_configuration Correlation id manquant"))?
+//             };
+//             (reply_q, correlation_id)
+//         }
+//         _ => Err(String::from("requete_get_cle_configuration Mauvais type de message"))?
+//     };
+//
+//     let routage = RoutageMessageAction::builder(
+//         DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, vec![Securite::L3Protege]
+//     )
+//         .reply_to(reply_to)
+//         .correlation_id(correlation_id)
+//         .blocking(false)
+//         .build();
+//
+//     debug!("requete_get_cle_configuration Transmettre requete permission dechiffrage cle : {:?}", permission);
+//     middleware.transmettre_requete(routage, &permission).await?;
+//
+//     Ok(None)  // Aucune reponse a transmettre, c'est le maitre des cles qui va repondre
+// }
 
 #[derive(Clone, Deserialize)]
 struct MessageInstanceId {
@@ -1367,39 +1367,39 @@ pub struct ReponseConfigurationFichiers {
     ok: bool,
 }
 
-async fn requete_configuration_fichiers<M>(middleware: &M, message: MessageValide)
-                                           -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    let message_ref = message.message.parse()?;
-    let message_contenu = message_ref.contenu()?;
-    let requete: RequeteConfigurationFichiers = message_contenu.deserialize()?;
-    debug!("requete_configuration_fichiers Parsed : {:?}", requete);
-
-    let mut liste = Vec::new();
-
-    let filtre = doc! {};
-    let collection = middleware.get_collection_typed::<ReponseConsignationSatellite>(NOM_COLLECTION_FICHIERS)?;
-    let mut curseur = collection.find(filtre, None).await?;
-    while let Some(fiche) = curseur.next().await {
-        // let doc_inner = inner?;
-        let fiche = fiche?;
-
-        // Extraire date BSON separement
-        // let date_modif = match doc_inner.get(CHAMP_MODIFICATION) {
-        //     Some(inner) => Some(DateEpochSeconds::try_from(inner.to_owned())?),
-        //     None => None
-        // };
-
-        // let fiche: ReponseConsignationSatellite = convertir_bson_deserializable(doc_inner)?;
-        // fiche.derniere_modification = date_modif;  // Re-injecter date
-
-        liste.push(fiche);
-    }
-
-    let reponse = ReponseConfigurationFichiers { liste, ok: true };
-    Ok(Some(middleware.build_reponse(reponse)?.0))
-}
+// async fn requete_configuration_fichiers<M>(middleware: &M, message: MessageValide)
+//                                            -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+// where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     let message_ref = message.message.parse()?;
+//     let message_contenu = message_ref.contenu()?;
+//     let requete: RequeteConfigurationFichiers = message_contenu.deserialize()?;
+//     debug!("requete_configuration_fichiers Parsed : {:?}", requete);
+//
+//     let mut liste = Vec::new();
+//
+//     let filtre = doc! {};
+//     let collection = middleware.get_collection_typed::<ReponseConsignationSatellite>(NOM_COLLECTION_FICHIERS)?;
+//     let mut curseur = collection.find(filtre, None).await?;
+//     while let Some(fiche) = curseur.next().await {
+//         // let doc_inner = inner?;
+//         let fiche = fiche?;
+//
+//         // Extraire date BSON separement
+//         // let date_modif = match doc_inner.get(CHAMP_MODIFICATION) {
+//         //     Some(inner) => Some(DateEpochSeconds::try_from(inner.to_owned())?),
+//         //     None => None
+//         // };
+//
+//         // let fiche: ReponseConsignationSatellite = convertir_bson_deserializable(doc_inner)?;
+//         // fiche.derniere_modification = date_modif;  // Re-injecter date
+//
+//         liste.push(fiche);
+//     }
+//
+//     let reponse = ReponseConfigurationFichiers { liste, ok: true };
+//     Ok(Some(middleware.build_reponse(reponse)?.0))
+// }
 
 #[derive(Deserialize)]
 struct RequeteGetCleidBackupDomaine {

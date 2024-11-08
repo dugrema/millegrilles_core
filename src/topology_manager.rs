@@ -155,6 +155,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE,
         COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS,
+        COMMANDE_FILEHOST_RESET_VISITS_CLAIMS,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, commande), exchange: Securite::L3Protege });
@@ -288,21 +289,6 @@ where M: MongoDao + ConfigMessages
         NOM_COLLECTION_MILLEGRILLES_ADRESSES,
         champs_index_mg_adresses,
         Some(options_unique_mg_adresses),
-    ).await?;
-
-    // Index table fichiers
-    let options_unique_fichiers = IndexOptions {
-        nom_index: Some(String::from(INDEX_INSTANCE_ID)),
-        unique: true,
-    };
-    let champs_index_fichiers = vec!(
-        ChampIndex { nom_champ: String::from(CHAMP_INSTANCE_ID), direction: 1 },
-    );
-    middleware.create_index(
-        middleware,
-        NOM_COLLECTION_FICHIERS,
-        champs_index_fichiers,
-        Some(options_unique_fichiers),
     ).await?;
 
     // Filehosts

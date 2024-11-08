@@ -38,10 +38,10 @@ where
         TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
         TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
-        TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
-        TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
+        // TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
+        // TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
         TRANSACTION_SET_CONSIGNATION_INSTANCE => transaction_set_consignation_instance(middleware, transaction).await,
-        TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_transaction_supprimer_consignation(middleware, transaction).await,
+        // TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_transaction_supprimer_consignation(middleware, transaction).await,
         TRANSACTION_FILEHOST_ADD => filehost_add(middleware, transaction).await,
         TRANSACTION_FILEHOST_UPDATE => filehost_update(middleware, transaction).await,
         TRANSACTION_FILEHOST_DELETE => filehost_delete(middleware, transaction).await,
@@ -151,169 +151,169 @@ where M: GenerateurMessages + MongoDao
     Ok(Some(reponse))
 }
 
-async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: TransactionValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-    where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let transaction = match serde_json::from_str::<TransactionSetFichiersPrimaire>(transaction.transaction.contenu.as_str()) {
-        Ok(t) => t,
-        Err(e) => Err(format!("transaction_set_fichiers_primaire Erreur convertir {:?}\n{}", e, transaction.transaction.contenu))?
-    };
-    debug!("transaction_set_fichiers_primaire Set fichiers primaire : {:?}", transaction);
+// async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: TransactionValide)
+//     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+//     where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+//     let transaction = match serde_json::from_str::<TransactionSetFichiersPrimaire>(transaction.transaction.contenu.as_str()) {
+//         Ok(t) => t,
+//         Err(e) => Err(format!("transaction_set_fichiers_primaire Erreur convertir {:?}\n{}", e, transaction.transaction.contenu))?
+//     };
+//     debug!("transaction_set_fichiers_primaire Set fichiers primaire : {:?}", transaction);
+//
+//     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+//
+//     // Retirer le flag primaire de toutes les instances
+//     let filtre = doc! {"instance_id": {"$ne": &transaction.instance_id}};
+//     let ops = doc!{
+//         "$set": {"primaire": false},
+//         "$currentDate": {CHAMP_MODIFICATION: true},
+//     };
+//     if let Err(e) = collection.update_many(filtre, ops, None).await {
+//         Err(format!("transaction_set_fichiers_primaire Erreur update_many : {:?}", e))?
+//     }
+//
+//     // Set flag primaire sur la bonne instance
+//     let filtre = doc! {"instance_id": &transaction.instance_id};
+//     let ops = doc!{
+//         "$set": {"primaire": true, "supprime": false},
+//         "$currentDate": {CHAMP_MODIFICATION: true},
+//     };
+//     if let Err(e) = collection.update_one(filtre, ops, None).await {
+//         Err(format!("transaction_set_fichiers_primaire Erreur update_one : {:?}", e))?
+//     }
+//
+//     // Emettre evenement de changement de consignation primaire
+//     let routage = RoutageMessageAction::builder(DOMAIN_NAME, "changementConsignationPrimaire", vec![Securite::L2Prive])
+//         .build();
+//     middleware.emettre_evenement(routage, &transaction).await?;
+//
+//     Ok(Some(middleware.reponse_ok(None, None)?))
+// }
 
-    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
-
-    // Retirer le flag primaire de toutes les instances
-    let filtre = doc! {"instance_id": {"$ne": &transaction.instance_id}};
-    let ops = doc!{
-        "$set": {"primaire": false},
-        "$currentDate": {CHAMP_MODIFICATION: true},
-    };
-    if let Err(e) = collection.update_many(filtre, ops, None).await {
-        Err(format!("transaction_set_fichiers_primaire Erreur update_many : {:?}", e))?
-    }
-
-    // Set flag primaire sur la bonne instance
-    let filtre = doc! {"instance_id": &transaction.instance_id};
-    let ops = doc!{
-        "$set": {"primaire": true, "supprime": false},
-        "$currentDate": {CHAMP_MODIFICATION: true},
-    };
-    if let Err(e) = collection.update_one(filtre, ops, None).await {
-        Err(format!("transaction_set_fichiers_primaire Erreur update_one : {:?}", e))?
-    }
-
-    // Emettre evenement de changement de consignation primaire
-    let routage = RoutageMessageAction::builder(DOMAIN_NAME, "changementConsignationPrimaire", vec![Securite::L2Prive])
-        .build();
-    middleware.emettre_evenement(routage, &transaction).await?;
-
-    Ok(Some(middleware.reponse_ok(None, None)?))
-}
-
-async fn transaction_configurer_consignation<M>(middleware: &M, transaction: TransactionValide)
-                                                -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    debug!("transaction_configurer_consignation Contenu de la transaction\n{}", transaction.transaction.contenu);
-    let transaction = match serde_json::from_str::<TransactionConfigurerConsignation>(transaction.transaction.contenu.as_str()) {
-        Ok(t) => t,
-        Err(e) => Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
-    };
-    debug!("transaction_configurer_consignation Transaction : {:?}", transaction);
-
-    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
-
-    let data_chiffre = match transaction.data_chiffre {
-        Some(d) => match convertir_to_bson(d) {
-            Ok(d) => Some(d),
-            Err(e) => Err(format!("transaction_configurer_consignation Erreur conversion data_chiffre {:?}", e))?
-        },
-        None => None
-    };
-
-    // Defaults
-    let consignation_url = match transaction.consignation_url.as_ref() {
-        Some(inner) => inner.as_str(),
-        None => DEFAULT_CONSIGNATION_URL
-    };
-    let supporte_archives = match transaction.supporte_archives.as_ref() {
-        Some(inner) => inner.to_owned(),
-        None => true
-    };
-    let sync_actif = match transaction.sync_actif.as_ref() {
-        Some(inner) => inner.to_owned(),
-        None => true
-    };
-
-    let port_sftp = match transaction.port_sftp {
-        Some(inner) => Some(inner as i64),
-        None => None,
-    };
-
-    let port_sftp_backup = match transaction.port_sftp_backup {
-        Some(inner) => Some(inner as i64),
-        None => None,
-    };
-
-    let set_ops = doc! {
-        "type_store": transaction.type_store,
-        "url_download": transaction.url_download,
-        "url_archives": transaction.url_archives,
-        "consignation_url": consignation_url,
-        "sync_intervalle": transaction.sync_intervalle,
-        "sync_actif": sync_actif,
-        "supporte_archives": supporte_archives,
-        "data_chiffre": data_chiffre,
-        "port_sftp": port_sftp,
-        "hostname_sftp": transaction.hostname_sftp,
-        "username_sftp": transaction.username_sftp,
-        "remote_path_sftp": transaction.remote_path_sftp,
-        "key_type_sftp": transaction.key_type_sftp,
-        "s3_access_key_id": transaction.s3_access_key_id,
-        "s3_region": transaction.s3_region,
-        "s3_endpoint": transaction.s3_endpoint,
-        "s3_bucket": transaction.s3_bucket,
-        "type_backup": transaction.type_backup,
-        "hostname_sftp_backup": transaction.hostname_sftp_backup,
-        "port_sftp_backup": port_sftp_backup,
-        "username_sftp_backup": transaction.username_sftp_backup,
-        "remote_path_sftp_backup": transaction.remote_path_sftp_backup,
-        "key_type_sftp_backup": transaction.key_type_sftp_backup,
-        "backup_intervalle_secs": transaction.backup_intervalle_secs,
-        "backup_limit_bytes": transaction.backup_limit_bytes,
-        "supprime": false,
-    };
-
-    let ops = doc! {
-        "$set": set_ops,
-        "$setOnInsert": {
-            "instance_id": &transaction.instance_id,
-            CHAMP_CREATION: Utc::now(),
-            "primaire": false,
-        },
-        "$currentDate": {CHAMP_MODIFICATION: true}
-    };
-
-    let options = FindOneAndUpdateOptions::builder()
-        .return_document(ReturnDocument::After)
-        .upsert(true)
-        .build();
-
-    let filtre = doc!{ "instance_id": &transaction.instance_id };
-    let configuration = match collection.find_one_and_update(filtre, ops, Some(options)).await {
-        Ok(inner) => match inner {
-            Some(inner) => match convertir_bson_deserializable::<ReponseInformationConsignationFichiers>(inner) {
-                Ok(inner) => inner,
-                Err(e) => Err(format!("transaction_configurer_consignation Erreur mapper reponse : {:?}", e))?
-            },
-            None => Err(String::from("transaction_configurer_consignation Erreur sauvegarde configuration consignation : Aucun doc conserve"))?
-        },
-        Err(e) => Err(format!("transaction_configurer_consignation Erreur sauvegarde configuration consignation : {:?}", e))?
-    };
-
-    // Emettre commande de modification de configuration pour fichiers
-    let routage = RoutageMessageAction::builder("fichiers", "modifierConfiguration", vec![Securite::L2Prive])
-        .partition(transaction.instance_id.as_str())
-        .blocking(false)
-        .build();
-
-    // Transmettre commande non-blocking
-    middleware.transmettre_commande(routage, &configuration).await?;
-
-    // Emettre evenement changement de consignation
-    let routage = RoutageMessageAction::builder(DOMAIN_NAME, EVENEMENT_MODIFICATION_CONSIGNATION, vec![Securite::L1Public])
-        .build();
-    let evenement = json!({
-        CHAMP_INSTANCE_ID: transaction.instance_id,
-        "consignation_url": transaction.consignation_url,
-    });
-    middleware.emettre_evenement(routage, &evenement).await?;
-
-    Ok(Some(middleware.reponse_ok(None, None)?))
-}
+// async fn transaction_configurer_consignation<M>(middleware: &M, transaction: TransactionValide)
+//                                                 -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+// where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+//     debug!("transaction_configurer_consignation Contenu de la transaction\n{}", transaction.transaction.contenu);
+//     let transaction = match serde_json::from_str::<TransactionConfigurerConsignation>(transaction.transaction.contenu.as_str()) {
+//         Ok(t) => t,
+//         Err(e) => Err(format!("transaction_configurer_consignation Erreur convertir {:?}", e))?
+//     };
+//     debug!("transaction_configurer_consignation Transaction : {:?}", transaction);
+//
+//     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+//
+//     let data_chiffre = match transaction.data_chiffre {
+//         Some(d) => match convertir_to_bson(d) {
+//             Ok(d) => Some(d),
+//             Err(e) => Err(format!("transaction_configurer_consignation Erreur conversion data_chiffre {:?}", e))?
+//         },
+//         None => None
+//     };
+//
+//     // Defaults
+//     let consignation_url = match transaction.consignation_url.as_ref() {
+//         Some(inner) => inner.as_str(),
+//         None => DEFAULT_CONSIGNATION_URL
+//     };
+//     let supporte_archives = match transaction.supporte_archives.as_ref() {
+//         Some(inner) => inner.to_owned(),
+//         None => true
+//     };
+//     let sync_actif = match transaction.sync_actif.as_ref() {
+//         Some(inner) => inner.to_owned(),
+//         None => true
+//     };
+//
+//     let port_sftp = match transaction.port_sftp {
+//         Some(inner) => Some(inner as i64),
+//         None => None,
+//     };
+//
+//     let port_sftp_backup = match transaction.port_sftp_backup {
+//         Some(inner) => Some(inner as i64),
+//         None => None,
+//     };
+//
+//     let set_ops = doc! {
+//         "type_store": transaction.type_store,
+//         "url_download": transaction.url_download,
+//         "url_archives": transaction.url_archives,
+//         "consignation_url": consignation_url,
+//         "sync_intervalle": transaction.sync_intervalle,
+//         "sync_actif": sync_actif,
+//         "supporte_archives": supporte_archives,
+//         "data_chiffre": data_chiffre,
+//         "port_sftp": port_sftp,
+//         "hostname_sftp": transaction.hostname_sftp,
+//         "username_sftp": transaction.username_sftp,
+//         "remote_path_sftp": transaction.remote_path_sftp,
+//         "key_type_sftp": transaction.key_type_sftp,
+//         "s3_access_key_id": transaction.s3_access_key_id,
+//         "s3_region": transaction.s3_region,
+//         "s3_endpoint": transaction.s3_endpoint,
+//         "s3_bucket": transaction.s3_bucket,
+//         "type_backup": transaction.type_backup,
+//         "hostname_sftp_backup": transaction.hostname_sftp_backup,
+//         "port_sftp_backup": port_sftp_backup,
+//         "username_sftp_backup": transaction.username_sftp_backup,
+//         "remote_path_sftp_backup": transaction.remote_path_sftp_backup,
+//         "key_type_sftp_backup": transaction.key_type_sftp_backup,
+//         "backup_intervalle_secs": transaction.backup_intervalle_secs,
+//         "backup_limit_bytes": transaction.backup_limit_bytes,
+//         "supprime": false,
+//     };
+//
+//     let ops = doc! {
+//         "$set": set_ops,
+//         "$setOnInsert": {
+//             "instance_id": &transaction.instance_id,
+//             CHAMP_CREATION: Utc::now(),
+//             "primaire": false,
+//         },
+//         "$currentDate": {CHAMP_MODIFICATION: true}
+//     };
+//
+//     let options = FindOneAndUpdateOptions::builder()
+//         .return_document(ReturnDocument::After)
+//         .upsert(true)
+//         .build();
+//
+//     let filtre = doc!{ "instance_id": &transaction.instance_id };
+//     let configuration = match collection.find_one_and_update(filtre, ops, Some(options)).await {
+//         Ok(inner) => match inner {
+//             Some(inner) => match convertir_bson_deserializable::<ReponseInformationConsignationFichiers>(inner) {
+//                 Ok(inner) => inner,
+//                 Err(e) => Err(format!("transaction_configurer_consignation Erreur mapper reponse : {:?}", e))?
+//             },
+//             None => Err(String::from("transaction_configurer_consignation Erreur sauvegarde configuration consignation : Aucun doc conserve"))?
+//         },
+//         Err(e) => Err(format!("transaction_configurer_consignation Erreur sauvegarde configuration consignation : {:?}", e))?
+//     };
+//
+//     // Emettre commande de modification de configuration pour fichiers
+//     let routage = RoutageMessageAction::builder("fichiers", "modifierConfiguration", vec![Securite::L2Prive])
+//         .partition(transaction.instance_id.as_str())
+//         .blocking(false)
+//         .build();
+//
+//     // Transmettre commande non-blocking
+//     middleware.transmettre_commande(routage, &configuration).await?;
+//
+//     // Emettre evenement changement de consignation
+//     let routage = RoutageMessageAction::builder(DOMAIN_NAME, EVENEMENT_MODIFICATION_CONSIGNATION, vec![Securite::L1Public])
+//         .build();
+//     let evenement = json!({
+//         CHAMP_INSTANCE_ID: transaction.instance_id,
+//         "consignation_url": transaction.consignation_url,
+//     });
+//     middleware.emettre_evenement(routage, &evenement).await?;
+//
+//     Ok(Some(middleware.reponse_ok(None, None)?))
+// }
 
 async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: TransactionValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -351,32 +351,32 @@ async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: T
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
-async fn traiter_transaction_supprimer_consignation<M>(middleware: &M, transaction: TransactionValide)
-                                                       -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-where M: GenerateurMessages + MongoDao
-{
-    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let mut doc_transaction: TransactionSupprimerConsignationInstance = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
-        Ok(d) => d,
-        Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_consignation Erreur conversion transaction monitor : {:?}", e))?
-    };
-
-    let instance_id = doc_transaction.instance_id;
-
-    let filtre = doc! {CHAMP_INSTANCE_ID: &instance_id};
-    let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
-    let ops = doc!{
-        "$set": {"supprime": true},
-        "$currentDate": {CHAMP_MODIFICATION: true}
-    };
-    match collection.update_one(filtre, ops, None).await {
-        Ok(_) => (),
-        Err(e) => Err(format!("traiter_transaction_supprimer_consignation Erreur maj transaction topologie domaine : {:?}", e))?
-    }
-
-    let reponse = middleware.reponse_ok(None, None)?;
-    Ok(Some(reponse))
-}
+// async fn traiter_transaction_supprimer_consignation<M>(middleware: &M, transaction: TransactionValide)
+//                                                        -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+// where M: GenerateurMessages + MongoDao
+// {
+//     // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+//     let mut doc_transaction: TransactionSupprimerConsignationInstance = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+//         Ok(d) => d,
+//         Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_consignation Erreur conversion transaction monitor : {:?}", e))?
+//     };
+//
+//     let instance_id = doc_transaction.instance_id;
+//
+//     let filtre = doc! {CHAMP_INSTANCE_ID: &instance_id};
+//     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
+//     let ops = doc!{
+//         "$set": {"supprime": true},
+//         "$currentDate": {CHAMP_MODIFICATION: true}
+//     };
+//     match collection.update_one(filtre, ops, None).await {
+//         Ok(_) => (),
+//         Err(e) => Err(format!("traiter_transaction_supprimer_consignation Erreur maj transaction topologie domaine : {:?}", e))?
+//     }
+//
+//     let reponse = middleware.reponse_ok(None, None)?;
+//     Ok(Some(reponse))
+// }
 
 #[derive(Deserialize)]
 pub struct FilehostAddTransaction {
