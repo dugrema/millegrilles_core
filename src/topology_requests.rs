@@ -60,7 +60,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                     match action.as_str() {
                         REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
                         REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
-                        // REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
+                        REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
                         REQUETE_GET_TOKEN_HEBERGEMENT => requete_get_token_hebergement(middleware, m).await,
                         REQUETE_GET_FILEHOSTS => requete_filehosts(middleware, m).await,
                         REQUETE_GET_FILECONTROLERS => requete_filecontrolers(middleware, m).await,
@@ -88,7 +88,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, m).await,
                         REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
                         REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
-                        // REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
+                        REQUETE_CONSIGNATION_FICHIERS => requete_consignation_fichiers(middleware, m).await,
                         // REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
                         _ => {
                             error!("Message requete/action inconnue : '{}'. Message dropped.", action);
@@ -289,6 +289,15 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     Ok(Some(middleware.build_reponse(json!({"fiches": fiches}))?.0))
+}
+
+async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide)
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let enveloppe = message.certificat;
+    warn!("requete_consignation_fichiers **OBSOLETE** : {:?}", enveloppe.subject());
+    Ok(Some(middleware.reponse_err(Some(400), None, Some("OBSOLETE"))?))
 }
 
 // async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide)
