@@ -1116,7 +1116,7 @@ async fn commande_filehost_reset_visits_claims<M>(middleware: &M, m: MessageVali
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {
-    if m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+    if ! m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
     }
 
@@ -1129,6 +1129,9 @@ async fn commande_filehost_reset_visits_claims<M>(middleware: &M, m: MessageVali
     collection_transfers.delete_many(doc!{}, None).await?;
 
     // Emettre evenement reset claims (e.g. GrosFichiers), reload visites (filecontrolers).
+    let routage_reset_claims = RoutageMessageAction::builder(
+        TOPOLOGIE_NOM_DOMAINE, EVENEMENT_RESET_VISITS_CLAIMS, vec![Securite::L1Public]).build();
+    middleware.emettre_evenement(routage_reset_claims, &doc!{}).await?;
 
-    todo!()
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
