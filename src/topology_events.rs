@@ -4,8 +4,8 @@ use millegrilles_common_rust::bson::{doc, Bson, Array, DateTime};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono;
-use millegrilles_common_rust::common_messages::PresenceFichiersRepertoire;
-use millegrilles_common_rust::constantes::{Securite, EVENEMENT_PRESENCE_DOMAINE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE, RolesCertificats};
+use millegrilles_common_rust::common_messages::{BackupEvent, PresenceFichiersRepertoire};
+use millegrilles_common_rust::constantes::{Securite, EVENEMENT_PRESENCE_DOMAINE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE, RolesCertificats, BACKUP_EVENEMENT_MAJ};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_serializable_v2;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
@@ -16,6 +16,7 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::serde_json::json;
 use serde::{Deserialize, Serialize};
+
 use crate::topology_common::generer_contenu_fiche_publique;
 use crate::topology_manager::TopologyManager;
 use crate::topology_constants::*;
@@ -57,6 +58,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
         EVENEMENT_APPLICATION_DEMARREE | EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
         EVENEMENT_FILEHOST_USAGE => traiter_evenement_filehost_usage(middleware, m).await,
         EVENEMENT_FILEHOST_NEWFUUID => traiter_evenement_filehost_newfuuid(middleware, m).await,
+        BACKUP_EVENEMENT_MAJ => traiter_evenement_backup_maj(middleware, m).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", action))?,
     }
 }
@@ -432,4 +434,40 @@ async fn process_transfers<M>(middleware: &M, filehost_id: &str, fuuid: &str) ->
     }
 
     Ok(())
+}
+
+async fn traiter_evenement_backup_maj<M>(middleware: &M, m: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: MongoDao
+{
+    if !m.certificat.verifier_exchanges(vec![Securite::L3Protege])? {
+        debug!("traiter_evenement_backup_maj Wrong security level for event - DROPPED");
+        return Ok(None)
+    }
+
+    let message_ref = m.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let event: BackupEvent = message_contenu.deserialize()?;
+
+    let domaine = event.domaine.as_str();
+
+    if !m.certificat.verifier_domaines(vec![domaine.to_owned()])? {
+        debug!("traiter_evenement_backup_maj Wrong domain for event - DROPPED");
+        return Ok(None)
+    }
+
+    if event.ok && event.done {
+        if let Some(version) = event.version {
+            // Backup complete et on a une version - conserver pour le domaine
+            let filtre = doc!{"domaine": domaine};
+            let ops = doc!{
+                "$set": {"backup_version": &version},
+                "$currentDate": {CHAMP_MODIFICATION: true},
+            };
+            let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
+            collection.update_one(filtre, ops, None).await?;
+        }
+    }
+
+    Ok(None)
 }

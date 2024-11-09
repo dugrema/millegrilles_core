@@ -66,6 +66,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         REQUETE_GET_FILECONTROLERS => requete_filecontrolers(middleware, m).await,
                         REQUETE_GET_FILEHOST_FOR_INSTANCE => request_filehost_for_instance(middleware, m).await,
                         REQUETE_GET_FILEHOST_FOR_EXTERNAL => request_filehost_for_external(middleware, m).await,
+                        REQUETE_GET_DOMAINS_BACKUP_VERSIONS => request_domains_backup_versions(middleware, m).await,
                         _ => {
                             error!("Message requete/action non autorisee sur 1.public : '{:?}'. Message dropped.", m.type_message);
                             Ok(None)
@@ -569,6 +570,8 @@ struct DomaineRowOwned {
     #[serde(skip_serializing_if = "Option::is_none")]
     dirty: Option<bool>,
     reclame_fuuids: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    backup_version: Option<String>
 }
 
 #[derive(Serialize)]
@@ -1704,4 +1707,46 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             Ok(Some(middleware.reponse_err(Some(404), None, Some("no filehost available"))?))
         }
     }
+}
+
+// #[derive(Deserialize)]
+// struct RequestDomainsBackupVersions {}
+
+#[derive(Serialize)]
+struct RequestDomainsBackupVersionItem {
+    domain: String,
+    version: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RequestDomainsBackupVersionResponse {
+    ok: bool,
+    domains: Vec<RequestDomainsBackupVersionItem>
+}
+
+async fn request_domains_backup_versions<M>(middleware: &M, message: MessageValide)
+                                            -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    if ! message.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+    if ! message.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    // let message_ref = message.message.parse()?;
+    // let message_contenu = message_ref.contenu()?;
+    // let request: RequestDomainsBackupVersions = message_contenu.deserialize()?;
+
+    let collection = middleware.get_collection_typed::<DomaineRowOwned>(NOM_COLLECTION_DOMAINES)?;
+    let mut cursor = collection.find(doc!{}, None).await?;
+    let mut list = Vec::new();
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        list.push(RequestDomainsBackupVersionItem {domain: row.domaine, version: row.backup_version});
+    }
+
+    let response = RequestDomainsBackupVersionResponse {ok: true, domains: list};
+    Ok(Some(middleware.build_reponse(response)?.0))
 }

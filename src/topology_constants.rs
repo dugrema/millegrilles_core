@@ -38,6 +38,7 @@ pub const REQUETE_GET_CLEID_BACKUP_DOMAINE: &str = "getCleidBackupDomaine";
 pub const REQUETE_GET_FILEHOSTS: &str = "getFilehosts";
 pub const REQUETE_GET_FILECONTROLERS: &str = "getFilecontrolers";
 pub const REQUETE_GET_FILEHOST_FOR_EXTERNAL: &str = "getFilehostForExternal";
+pub const REQUETE_GET_DOMAINS_BACKUP_VERSIONS: &str = "getDomainBackupVersions";
 
 pub const TRANSACTION_DOMAINE: &str = "domaine";
 pub const TRANSACTION_INSTANCE: &str = "instance";
