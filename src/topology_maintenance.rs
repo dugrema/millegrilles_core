@@ -324,7 +324,13 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
     let mut curseur_transfers = collection_transfers.find(doc!{}, None).await?;
     while curseur_transfers.advance().await? {
         let row = curseur_transfers.deserialize_current()?;
-        let filtre_visite = doc!{"fuuid": &row.fuuid, format!("filehost.{}", row.destination_filehost_id): {"$exists": true}};
+        let filtre_visite = doc!{
+            "fuuid": &row.fuuid,
+            "$or": {
+                "filehost": {},
+                format!("filehost.{}", row.destination_filehost_id): {"$exists": true}
+            }
+        };
         let count_visite = collection_fuuids.count_documents(filtre_visite, None).await?;
         if count_visite > 0 {
             debug!("entretien_transfert_fichiers Le transfert {} vers {} ne s'applique plus", row.fuuid, row.destination_filehost_id);
@@ -350,6 +356,10 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
         while cursor.advance().await? {
             let row = cursor.deserialize_current()?;
             if let Some(filehost) = row.filehost.as_ref() {
+                if filehost.len() == 0 {
+                    // File not present on any filehost, skip
+                    continue
+                }
                 let fuuid_filehost: HashSet<&String> = filehost.keys().collect();
                 let missing_from = filehosts_active_list.difference(&fuuid_filehost);
                 debug!("entretien_transfert_fichiers File {} missing from {:?}", row.fuuid, missing_from);
