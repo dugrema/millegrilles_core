@@ -326,10 +326,10 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
         let row = curseur_transfers.deserialize_current()?;
         let filtre_visite = doc!{
             "fuuid": &row.fuuid,
-            "$or": {
-                "filehost": {},
-                format!("filehost.{}", row.destination_filehost_id): {"$exists": true}
-            }
+            "$or": [
+                {"filehost": {}},
+                {format!("filehost.{}", row.destination_filehost_id): {"$exists": true}}
+            ]
         };
         let count_visite = collection_fuuids.count_documents(filtre_visite, None).await?;
         if count_visite > 0 {
