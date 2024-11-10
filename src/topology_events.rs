@@ -22,9 +22,10 @@ use crate::topology_manager::TopologyManager;
 use crate::topology_constants::*;
 use crate::topology_structs::{EventFilehostUsage, EventNewFuuid, PresenceDomaine, PresenceMonitor, RowFilehostFuuid, RowFilehostId, RowFuuid, TransactionSetFichiersPrimaire};
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
+use crate::topology_maintenance::emit_filehost_transfersupdated_event;
 
 pub async fn consommer_evenement_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
-                                -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+                                             -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
     debug!("Consommer evenement : {:?}", &m.type_message);
@@ -358,7 +359,7 @@ async fn traiter_evenement_filehost_usage<M>(middleware: &M, m: MessageValide)
 
 async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-    where M: MongoDao
+    where M: GenerateurMessages + MongoDao
 {
     if ! m.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
         debug!("traiter_evenement_filehost_newfuuid Wrong certificate for event - DROPPED");
@@ -388,7 +389,7 @@ async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide
 }
 
 async fn process_transfers<M>(middleware: &M, filehost_id: &str, fuuid: &str) -> Result<(), millegrilles_common_rust::error::Error>
-    where M: MongoDao
+    where M: GenerateurMessages + MongoDao
 {
     // Supprimer le transfert vers ce filehost (si applicable)
     let filtre_transfer = doc!{"fuuid": fuuid, "destination_filehost_id": filehost_id};
@@ -432,6 +433,8 @@ async fn process_transfers<M>(middleware: &M, filehost_id: &str, fuuid: &str) ->
             }
         }
     }
+
+    emit_filehost_transfersupdated_event(middleware).await?;
 
     Ok(())
 }
