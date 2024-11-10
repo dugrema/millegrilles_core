@@ -33,7 +33,6 @@ use millegrilles_common_rust::{get_domaine_action, serde_json};
 use millegrilles_common_rust::redis::Commands;
 use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
 use millegrilles_common_rust::mongodb::Cursor;
-use crate::topology_maintenance::entretien_transfert_fichiers;
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -869,7 +868,7 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
     }
 
     // Mettre a jour tous les transferts de fichier
-    entretien_transfert_fichiers(middleware).await?;
+    // entretien_transfert_fichiers(middleware).await?;
 
     // S'assurer d'avoir un filecontroler primary
     check_primary_filecontroler(middleware, instance_id.as_str()).await?;
@@ -989,7 +988,7 @@ where M: GenerateurMessages + MongoDao
     };
 
     // Mettre a jour tous les transferts de fichier
-    entretien_transfert_fichiers(middleware).await?;
+    // entretien_transfert_fichiers(middleware).await?;
 
     Ok(Some(middleware.build_reponse(reponse)?.0))
 }

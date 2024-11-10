@@ -60,6 +60,13 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler + 
         warn!("Erreur verification etat instances hors ligne {:?}", e);
     }
 
+    if minutes % 15 == 6
+    {
+        if let Err(e) = entretien_transfert_fichiers(middleware).await {
+            error!("core_topologie.entretien Erreur entretien transferts fichiers : {:?}", e);
+        }
+    }
+
     Ok(())
 }
 
