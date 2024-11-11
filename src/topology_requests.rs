@@ -30,7 +30,7 @@ use millegrilles_common_rust::common_messages::FilehostForInstanceRequest;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, TransactionConfigurerConsignation, TransactionSetConsignationInstance, WebAppLink};
+use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, TransactionConfigurerConsignation, WebAppLink};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -1499,7 +1499,7 @@ async fn requete_filehosts<M>(middleware: &M, message: MessageValide)
 
     let filtre = match requete.filehost_id {
         Some(inner) => doc!{"filehost_id": inner},
-        None => doc!{"deleted": false, "sync_active": true}
+        None => doc!{"deleted": false}
     };
 
     let mut cursor = collection.find(filtre, None).await?;

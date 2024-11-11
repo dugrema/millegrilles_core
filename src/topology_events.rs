@@ -256,7 +256,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
     // Retirer champ cle
     set_ops.remove("instance_id");
-    set_ops.remove("consignation_id");  // Ce setting est manuel
+    set_ops.remove("filehost_id");  // Ce setting est manuel
     set_ops.insert("applications", applications);
     set_ops.insert("date_presence", estampille);
 

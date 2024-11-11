@@ -8,7 +8,7 @@ use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convert
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::serde_json;
 use crate::topology_constants::*;
-use crate::topology_structs::{FilehostServerRow, FilehostingCongurationRow, PresenceDomaine, PresenceMonitor, TransactionConfigurerConsignation, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire, TransactionSupprimerConsignationInstance};
+use crate::topology_structs::{FilehostServerRow, FilehostingCongurationRow, PresenceDomaine, PresenceMonitor, TransactionConfigurerConsignation, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance, TransactionSupprimerConsignationInstance};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseInformationConsignationFichiers;
 use millegrilles_common_rust::constantes::{CHAMP_MODIFICATION, CHAMP_CREATION, Securite};
@@ -40,7 +40,7 @@ where
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
         // TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
         // TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
-        TRANSACTION_SET_CONSIGNATION_INSTANCE => transaction_set_consignation_instance(middleware, transaction).await,
+        TRANSACTION_SET_FILEHOST_FOR_INSTANCE => transaction_set_filehost_instance(middleware, transaction).await,
         // TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_transaction_supprimer_consignation(middleware, transaction).await,
         TRANSACTION_FILEHOST_ADD => filehost_add(middleware, transaction).await,
         TRANSACTION_FILEHOST_UPDATE => filehost_update(middleware, transaction).await,
@@ -315,12 +315,12 @@ where M: GenerateurMessages + MongoDao
 //     Ok(Some(middleware.reponse_ok(None, None)?))
 // }
 
-async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: TransactionValide)
+async fn transaction_set_filehost_instance<M>(middleware: &M, transaction: TransactionValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let transaction = match serde_json::from_str::<TransactionSetConsignationInstance>(transaction.transaction.contenu.as_str()) {
+    let transaction = match serde_json::from_str::<TransactionSetFilehostInstance>(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
         Err(e) => Err(format!("transaction_set_consignation_instance Erreur convertir {:?}", e))?
     };
@@ -328,7 +328,7 @@ async fn transaction_set_consignation_instance<M>(middleware: &M, transaction: T
 
     let filtre = doc! { CHAMP_INSTANCE_ID: &transaction.instance_id };
     let set_ops = doc! {
-        CHAMP_CONSIGNATION_ID: transaction.consignation_id.as_ref(),
+        "filehost_id": transaction.filehost_id.as_ref(),
         "supprime": false,
     };
     let ops = doc! {
@@ -430,6 +430,7 @@ where M: GenerateurMessages + MongoDao
         sync_active: true,
         created: now.clone(),
         modified: now,
+        fuuid: None,
     };
     let filehost_bson = convertir_to_bson(filehost)?;
     collection.insert_one(filehost_bson, None).await?;

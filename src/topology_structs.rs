@@ -6,14 +6,14 @@ use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::serde_json::Value;
 use serde::{Deserialize, Serialize};
 use millegrilles_common_rust::bson;
-use millegrilles_common_rust::common_messages::RequeteFilehostItem;
+use millegrilles_common_rust::common_messages::{FileUsage, RequeteFilehostItem};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TransactionSetConsignationInstance {
+pub struct TransactionSetFilehostInstance {
     pub instance_id: String,
-    pub consignation_id: Option<String>,
+    pub filehost_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -235,6 +235,7 @@ pub struct FilehostServerRow {
     pub created: DateTime<Utc>,
     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
     pub modified: DateTime<Utc>,
+    pub fuuid: Option<FileUsage>,
 }
 
 impl Into<RequeteFilehostItem> for FilehostServerRow {
@@ -249,6 +250,7 @@ impl Into<RequeteFilehostItem> for FilehostServerRow {
             sync_active: self.sync_active,
             created: self.created,
             modified: self.modified,
+            fuuid: self.fuuid,
         }
     }
 }

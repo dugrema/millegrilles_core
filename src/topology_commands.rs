@@ -8,7 +8,7 @@ use webauthn_rs::prelude::Url;
 use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, ReponseUrlEtag, RowFilehostFuuid, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetConsignationInstance, TransactionSetFichiersPrimaire};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, ReponseUrlEtag, RowFilehostFuuid, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
 
 use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction};
 
@@ -56,7 +56,8 @@ where M: Middleware
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire).await,
-        TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
+        // TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
+        TRANSACTION_SET_FILEHOST_FOR_INSTANCE => traiter_commande_set_filehost_for_instance(middleware, m, gestionnaire).await,
         TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_commande_supprimer_consignation_instance(middleware, m, gestionnaire).await,
         TRANSACTION_FILEHOST_ADD => command_filehost_add(middleware, m, gestionnaire).await,
         TRANSACTION_FILEHOST_UPDATE => command_filehost_update(middleware, m, gestionnaire).await,
@@ -237,16 +238,16 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await
 }
 
-async fn traiter_commande_set_consignation_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
+async fn traiter_commande_set_filehost_for_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
                                                        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    debug!("traiter_commande_set_consignation_instance : {:?}", &message.type_message);
+    debug!("traiter_commande_set_filehost_for_instance : {:?}", &message.type_message);
 
     // Verifier autorisation
     if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
         // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("traiter_commande_set_consignation_instance autorisation acces refuse");
+        debug!("traiter_commande_set_filehost_for_instance autorisation acces refuse");
         // match middleware.formatter_reponse(&err,None) {
         //     Ok(m) => return Ok(Some(m)),
         //     Err(e) => Err(format!("core_topologie.traiter_commande_set_fichiers_primaire Erreur preparation reponse  : {:?}", e))?
@@ -258,7 +259,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     {
         let message_ref = message.message.parse()?;
         let message_contenu = message_ref.contenu()?;
-        if let Err(e) = message_contenu.deserialize::<TransactionSetConsignationInstance>() {
+        if let Err(e) = message_contenu.deserialize::<TransactionSetFilehostInstance>() {
             Err(format!("traiter_commande_set_consignation_instance Erreur convertir {:?}", e))?;
         };
     }
@@ -285,7 +286,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     let instance_id = {
         let message_ref = message.message.parse()?;
         let message_contenu = message_ref.contenu()?;
-        let contenu = match message_contenu.deserialize::<TransactionSetConsignationInstance>() {
+        let contenu = match message_contenu.deserialize::<TransactionSetFilehostInstance>() {
             Ok(inner) => inner,
             Err(e) => Err(format!("traiter_commande_supprimer_consignation_instance Erreur convertir {:?}", e))?
         };
