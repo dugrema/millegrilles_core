@@ -321,7 +321,7 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
     if filehosts_inactive.len() > 0 {
         debug!("entretien_transfert_fichiers {} filehosts inactifs", filehosts_inactive.len());
         let filehost_ids: Vec<&String> = filehosts_inactive.keys().into_iter().collect();
-        let filtre = doc!{"filehost_id": {"$in": filehost_ids}};
+        let filtre = doc!{"destination_filehost_id": {"$in": filehost_ids}};
         collection_transfers.delete_many(filtre, None).await?;
     }
 

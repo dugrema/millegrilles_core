@@ -62,6 +62,7 @@ pub const COMMANDE_FILE_VISIT: &str = "fileVisit";
 pub const COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS: &str = "claimAndFilehostVisits";
 pub const COMMANDE_FILEHOST_BATCH_TRANSFERS: &str = "batchTransfers";
 pub const COMMANDE_FILEHOST_RESET_VISITS_CLAIMS: &str = "resetVisitsClaims";
+pub const COMMANDE_FILEHOST_RESET_TRANSFERS: &str = "resetTransfers";
 
 pub const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 pub const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;

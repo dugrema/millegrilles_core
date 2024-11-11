@@ -34,6 +34,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use millegrilles_common_rust::redis::Commands;
 use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
 use millegrilles_common_rust::mongodb::Cursor;
+use crate::topology_maintenance::entretien_transfert_fichiers;
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -70,6 +71,7 @@ where M: Middleware
         COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS => commande_claim_and_filehost_visits(middleware, m).await,
         COMMANDE_FILEHOST_BATCH_TRANSFERS => commande_filehost_batch_transfers(middleware, m).await,
         COMMANDE_FILEHOST_RESET_VISITS_CLAIMS => commande_filehost_reset_visits_claims(middleware, m).await,
+        COMMANDE_FILEHOST_RESET_TRANSFERS => commande_filehost_reset_transfers(middleware, m).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
     }
 }
@@ -1175,4 +1177,30 @@ pub async fn command_filehost_set_default<M>(middleware: &M, message: MessageVal
     middleware.emettre_evenement(routage, doc!{}).await?;
 
     Ok(reponse)
+}
+
+async fn commande_filehost_reset_transfers<M>(middleware: &M, m: MessageValide)
+                                              -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao
+{
+    if ! m.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    // Retirer le champ job_picked_up pour permettre aux controleurs de reprendre les jobs immediatement
+    let collection_transfers =
+        middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_TRANSFERS)?;
+    let filtre = doc!{"job_picked_up": {"$exists":true}};
+    let ops = doc! {"$unset": {"job_picked_up": true}, "$currentDate": {"modified": true}};
+    collection_transfers.update_many(filtre, ops, None).await?;
+
+    // Reverifie chaque transfert, enleve ceux qui ne s'appliquent plus et cree les nouveaux
+    entretien_transfert_fichiers(middleware).await?;
+
+    // Emettre evenement de mise a jour de filehosts. Va declencher une verification des transferts.
+    let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOSTING_UPDATE, vec![Securite::L1Public])
+        .build();
+    middleware.emettre_evenement(routage, doc!{}).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
