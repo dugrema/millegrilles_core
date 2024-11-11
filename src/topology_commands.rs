@@ -10,7 +10,7 @@ use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
 use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, ReponseUrlEtag, RowFilehostFuuid, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
 
-use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction};
+use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction, TransactionFilehostSetDefault};
 
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
@@ -30,6 +30,7 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
+use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use millegrilles_common_rust::redis::Commands;
 use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
 use millegrilles_common_rust::mongodb::Cursor;
@@ -62,6 +63,7 @@ where M: Middleware
         TRANSACTION_FILEHOST_ADD => command_filehost_add(middleware, m, gestionnaire).await,
         TRANSACTION_FILEHOST_UPDATE => command_filehost_update(middleware, m, gestionnaire).await,
         TRANSACTION_FILEHOST_DELETE => command_filehost_delete(middleware, m, gestionnaire).await,
+        TRANSACTION_FILEHOST_DEFAULT => command_filehost_set_default(middleware, m, gestionnaire).await,
         // COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire).await,
         COMMANDE_FILE_VISIT => command_file_visit(middleware, m, gestionnaire).await,
@@ -265,7 +267,14 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     // Sauvegarder la transaction, marquer complete et repondre
-    sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await
+    let reponse = sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await?;
+
+    // Emettre evenement de mise a jour de filehosts
+    let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOSTING_UPDATE, vec![Securite::L1Public])
+        .build();
+    middleware.emettre_evenement(routage, doc!{}).await?;
+
+    Ok(reponse)
 }
 
 async fn traiter_commande_supprimer_consignation_instance<M>(
@@ -1134,4 +1143,36 @@ async fn commande_filehost_reset_visits_claims<M>(middleware: &M, m: MessageVali
     middleware.emettre_evenement(routage_reset_claims, &doc!{}).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+pub async fn command_filehost_set_default<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied")) ? ))
+    }
+
+    let transaction: TransactionFilehostSetDefault = deser_message_buffer!(message.message);
+
+    // Verifier que la valeur n'est pas la meme
+    let collection_config =
+        middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+    let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
+    if let Some(entry) = collection_config.find_one(filtre, None).await? {
+        if entry.value.as_str() == transaction.filehost_id.as_str() {
+            // Already done, send back ok
+            return Ok(Some(middleware.reponse_ok(None, None)?))
+        }
+    }
+
+    // Sauvegarder la transaction, marquer complete et repondre
+    let reponse = sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await?;
+
+    // Emettre evenement de mise a jour de filehosts
+    let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOSTING_UPDATE, vec![Securite::L1Public])
+        .build();
+    middleware.emettre_evenement(routage, doc!{}).await?;
+
+    Ok(reponse)
 }

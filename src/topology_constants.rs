@@ -35,6 +35,7 @@ pub const REQUETE_CONFIGURATION_FICHIERS: &str = "getConfigurationFichiers";
 pub const REQUETE_GET_CLE_CONFIGURATION: &str = "getCleConfiguration";
 pub const REQUETE_GET_TOKEN_HEBERGEMENT: &str = "getTokenHebergement";
 pub const REQUETE_GET_CLEID_BACKUP_DOMAINE: &str = "getCleidBackupDomaine";
+pub const REQUETE_CONFIGURATION_FILEHOSTS: &str = "getFilehostConfiguration";
 pub const REQUETE_GET_FILEHOSTS: &str = "getFilehosts";
 pub const REQUETE_GET_FILECONTROLERS: &str = "getFilecontrolers";
 pub const REQUETE_GET_FILEHOST_FOR_EXTERNAL: &str = "getFilehostForExternal";
@@ -53,6 +54,7 @@ pub const TRANSACTION_FILEHOST_ADD: &str = "filehostAdd";
 pub const TRANSACTION_FILEHOST_UPDATE: &str = "filehostUpdate";
 pub const TRANSACTION_FILEHOST_DELETE: &str = "filehostDelete";
 pub const TRANSACTION_FILEHOST_RESTORE: &str = "filehostRestore";
+pub const TRANSACTION_FILEHOST_DEFAULT: &str = "setDefaultFilehost";
 
 pub const COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE: &str = "ajouterConsignationHebergee";
 pub const COMMANDE_SET_CLEID_BACKUP_DOMAINE: &str = "setCleidBackupDomaine";
@@ -78,6 +80,7 @@ pub const EVENEMENT_FILEHOST_EVENTUPDATE: &str = "update";
 pub const EVENEMENT_FILEHOST_EVENTDELETE: &str = "delete";
 pub const EVENEMENT_FILEHOST_TRANSFERSUPDATED: &str = "transfersUpdated";
 pub const EVENEMENT_RESET_VISITS_CLAIMS: &str = "resetVisitsClaims";
+pub const EVENEMENT_FILEHOSTING_UPDATE: &str = "filehostingUpdate";
 
 pub const INDEX_DOMAINE: &str = "domaine";
 pub const INDEX_NOEUDS: &str = "noeuds";

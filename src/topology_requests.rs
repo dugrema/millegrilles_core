@@ -112,6 +112,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         // REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, m).await,
                         // REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
                         REQUETE_GET_CLEID_BACKUP_DOMAINE => requete_get_cleid_backup_domaine(middleware, m).await,
+                        REQUETE_CONFIGURATION_FILEHOSTS => requete_configuration_filehosts(middleware, m).await,
                         _ => {
                             error!("Message requete/action inconnue : '{}'. Message dropped.", action);
                             Ok(None)
@@ -1748,5 +1749,34 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     let response = RequestDomainsBackupVersionResponse {ok: true, domains: list};
+    Ok(Some(middleware.build_reponse(response)?.0))
+}
+
+
+#[derive(Serialize)]
+struct RequeteConfigurationFilehostsResponse {
+    ok: bool,
+    configuration: HashMap<String, String>,
+}
+
+async fn requete_configuration_filehosts<M>(middleware: &M, message: MessageValide)
+                                            -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    let collection_config =
+        middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+    let mut curseur = collection_config.find(doc!{}, None).await?;
+
+    let mut configuration = HashMap::new();
+    while curseur.advance().await? {
+        let row = curseur.deserialize_current()?;
+        configuration.insert(row.name, row.value);
+    }
+
+    let response = RequeteConfigurationFilehostsResponse { ok: true, configuration };
     Ok(Some(middleware.build_reponse(response)?.0))
 }

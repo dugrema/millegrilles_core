@@ -108,6 +108,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
         REQUETE_LISTE_NOEUDS,
         REQUETE_CONFIGURATION_FICHIERS,
         REQUETE_GET_CLEID_BACKUP_DOMAINE,
+        REQUETE_CONFIGURATION_FILEHOSTS,
     ];
     for req in requetes_protegees {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L3Protege });
@@ -152,6 +153,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
         TRANSACTION_SET_FICHIERS_PRIMAIRE,
         TRANSACTION_SET_FILEHOST_FOR_INSTANCE,
         TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE,
+        TRANSACTION_FILEHOST_DEFAULT,
 
         COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE,

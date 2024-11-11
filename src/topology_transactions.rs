@@ -46,6 +46,7 @@ where
         TRANSACTION_FILEHOST_UPDATE => filehost_update(middleware, transaction).await,
         TRANSACTION_FILEHOST_DELETE => filehost_delete(middleware, transaction).await,
         TRANSACTION_FILEHOST_RESTORE => filehost_restore(middleware, transaction).await,
+        TRANSACTION_FILEHOST_DEFAULT => transaction_set_filehost_default(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
@@ -536,4 +537,30 @@ where M: GenerateurMessages + MongoDao
     } else {
         Ok(Some(middleware.reponse_err(Some(404), None, Some("No filehost item updated"))?))
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TransactionFilehostSetDefault {
+    pub filehost_id: String,
+}
+
+async fn transaction_set_filehost_default<M>(middleware: &M, transaction: TransactionValide)
+                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let transaction = match serde_json::from_str::<TransactionFilehostSetDefault>(transaction.transaction.contenu.as_str()) {
+        Ok(t) => t,
+        Err(e) => Err(format!("transaction_set_filehost_default Erreur convertir {:?}", e))?
+    };
+
+    let collection_config =
+        middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+    let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
+    let ops = doc! {
+        "$set": {"value": transaction.filehost_id},
+    };
+    let options = UpdateOptions::builder().upsert(true).build();
+    collection_config.update_one(filtre, ops, options).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
