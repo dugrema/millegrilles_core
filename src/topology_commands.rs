@@ -961,18 +961,19 @@ where M: GenerateurMessages + MongoDao
         response_fuuids.push(row.into());
     }
 
+    // Dedupe fuuids
+    let mut fuuids_requis = HashSet::new();
+    for f in &requete.fuuids {
+        fuuids_requis.insert(f);
+    }
+
     // Conserver les reclamations.
-    // let collection_claims = middleware.get_collection_typed::<RowFuuid>(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
     let collection_claims = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
     let filtre_reclamations = doc!{ "fuuid": {"$in": &requete.fuuids} };
     let ops_reclamations = doc! {"$currentDate": {FIELD_LAST_CLAIM_DATE: true}};
     let update_result = collection_claims.update_many(filtre_reclamations.clone(), ops_reclamations, None).await?;
-    if update_result.matched_count as usize != requete.fuuids.len() {
-        debug!("Mismatch updates {} et claims {}. Inserer nouveaux claims.", requete.fuuids.len(), update_result.matched_count);
-        let mut fuuids_requis = HashSet::new();
-        for f in &requete.fuuids {
-            fuuids_requis.insert(f);
-        }
+    if update_result.matched_count as usize != fuuids_requis.len() {
+        info!("Mismatch updates {} et claims {}. Inserer nouveaux claims.", requete.fuuids.len(), update_result.matched_count);
         let options = FindOptions::builder()
             .projection(doc!{"fuuid": 1})
             .build();
@@ -982,15 +983,17 @@ where M: GenerateurMessages + MongoDao
             fuuids_requis.remove(&row.fuuid);
         }
 
-        let mut rows = Vec::new();
-        for f in fuuids_requis {
-            debug!("Ajouter nouveau fuuid reclame {}", f);
-            let row = RowFilehostFuuid { fuuid: f.to_owned(), last_claim_date: Some(estampille_date.to_owned()), filehost: Some(HashMap::new()) };
-            rows.push(row);
+        if ! fuuids_requis.is_empty() {
+            let mut rows = Vec::new();
+            for f in fuuids_requis {
+                debug!("Ajouter nouveau fuuid reclame {}", f);
+                let row = RowFilehostFuuid { fuuid: f.to_owned(), last_claim_date: Some(estampille_date.to_owned()), filehost: Some(HashMap::new()) };
+                rows.push(row);
+            }
+            let collection_insert_claims =
+                middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+            collection_insert_claims.insert_many(rows, None).await?;
         }
-        let collection_insert_claims =
-            middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
-        collection_insert_claims.insert_many(rows, None).await?;
     }
 
     let reponse = RequeteGetVisitesFuuidsResponse {
