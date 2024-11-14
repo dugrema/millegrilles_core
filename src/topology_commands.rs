@@ -17,7 +17,7 @@ use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::common_messages::{EventFilehost, RequeteFilehostItem};
-use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, COMMANDE_SAUVEGARDER_CLE, DELEGATION_GLOBALE_PROPRIETAIRE, DOMAINE_NOM_MAITREDESCLES, DOMAINE_RELAIWEB, DOMAINE_TOPOLOGIE, TOPOLOGIE_NOM_DOMAINE};
+use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
@@ -72,6 +72,7 @@ where M: Middleware
         COMMANDE_FILEHOST_BATCH_TRANSFERS => commande_filehost_batch_transfers(middleware, m).await,
         COMMANDE_FILEHOST_RESET_VISITS_CLAIMS => commande_filehost_reset_visits_claims(middleware, m).await,
         COMMANDE_FILEHOST_RESET_TRANSFERS => commande_filehost_reset_transfers(middleware, m).await,
+        COMMANDE_BACKUP_SET_DOMAIN_VERSION => command_set_domain_backup_version(middleware, m).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
     }
 }
@@ -1206,4 +1207,41 @@ where M: GenerateurMessages + MongoDao
     middleware.emettre_evenement(routage, doc!{}).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+#[derive(Deserialize)]
+struct CommandSetDomainBackupVersion {
+    domaine: String,
+    version: String,
+}
+
+async fn command_set_domain_backup_version<M>(middleware: &M, message: MessageValide)
+                                              -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao
+{
+    if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    let command: CommandSetDomainBackupVersion = deser_message_buffer!(message.message);
+    let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
+    let filtre = doc!{"domaine": &command.domaine};
+    let ops = doc! {
+        "$set": {"backup_version": &command.version},
+        "$currentDate": {"modified": true},
+    };
+    let result = collection.update_one(filtre, ops, None).await?;
+
+    if result.matched_count == 1 {
+
+        // Emettre evenement de mise a jour de backup.
+        // Va declencher une synchronisation des fichiers de backup.
+        let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, BACKUP_EVENEMENT_MAJ, vec![Securite::L1Public])
+            .build();
+        middleware.emettre_evenement(routage, doc!{}).await?;
+
+        Ok(Some(middleware.reponse_ok(None, None)?))
+    } else {
+        Ok(Some(middleware.reponse_err(Some(404), None, Some("Domain not found"))?))
+    }
 }

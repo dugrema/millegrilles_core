@@ -1729,11 +1729,16 @@ async fn request_domains_backup_versions<M>(middleware: &M, message: MessageVali
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    if ! message.certificat.verifier_exchanges(vec![Securite::L1Public])? {
-        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
-    }
-    if ! message.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
-        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+
+    if message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        // Ok
+    } else {
+        if !message.certificat.verifier_exchanges(vec![Securite::L1Public])? {
+            return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+        }
+        if !message.certificat.verifier_roles_string(vec!["filecontroler".to_string()])? {
+            return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+        }
     }
 
     // let message_ref = message.message.parse()?;

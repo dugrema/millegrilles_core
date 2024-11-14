@@ -160,6 +160,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
         COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS,
         COMMANDE_FILEHOST_RESET_VISITS_CLAIMS,
         COMMANDE_FILEHOST_RESET_TRANSFERS,
+        COMMANDE_BACKUP_SET_DOMAIN_VERSION,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, commande), exchange: Securite::L3Protege });
