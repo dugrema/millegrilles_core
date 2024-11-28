@@ -15,6 +15,12 @@ pub const NOM_COLLECTION_FILEHOSTINGCONFIGURATION: &str = "CoreTopologie/filehos
 pub const NOM_COLLECTION_FILEHOSTING_FUUIDS: &str = "CoreTopologie/filehostingFuuids";
 pub const NOM_COLLECTION_FILEHOSTING_TRANSFERS: &str = "CoreTopologie/filehostingTransfers";
 
+pub const NOM_COLLECTION_INSTANCE_STATUS: &str = "CoreTopologie/instances/status";
+pub const NOM_COLLECTION_INSTANCE_CONTAINERS: &str = "CoreTopologie/instances/containers";
+pub const NOM_COLLECTION_INSTANCE_SERVICES: &str = "CoreTopologie/instances/services";
+pub const NOM_COLLECTION_INSTANCE_WEBAPPS: &str = "CoreTopologie/instances/webapps";
+
+
 pub const DOMAINE_PRESENCE_NOM: &str = "CoreTopologie";
 pub const DOMAINE_FICHIERS: &str = "fichiers";
 
@@ -67,6 +73,8 @@ pub const COMMANDE_BACKUP_SET_DOMAIN_VERSION: &str = "setBackupDomainVersion";
 
 pub const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 pub const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
+pub const EVENEMENT_PRESENCE_INSTANCE: &str = "presenceInstance";
+pub const EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS: &str = "presenceInstanceApplications";
 pub const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 pub const EVENEMENT_INSTANCE_SUPPRIMEE: &str = "instanceSupprimee";
 pub const EVENEMENT_INSTANCE_CONSIGNATION_SUPPRIMEE: &str = "instanceConsignationSupprimee";

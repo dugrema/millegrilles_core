@@ -200,6 +200,11 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
     rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.{}.{}", DOMAINE_FICHIERS, EVENEMENT_PRESENCE_FICHIERS), exchange: Securite::L2Prive });
     rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.*.{}", BACKUP_EVENEMENT_MAJ), exchange: Securite::L1Public });
 
+    for exchange in vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege] {
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.{}", EVENEMENT_PRESENCE_INSTANCE), exchange: exchange.clone() });
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.{}", EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS), exchange });
+    }
+
     let mut queues = Vec::new();
 
     // Queue de messages volatils (requete, commande, evenements)
