@@ -401,7 +401,7 @@ where M: MongoDao + ValidateurX509 + CleChiffrageHandler
                             },
                             None => None
                         };
-                        let mut app_v2 = ApplicationsV2 {
+                        let app_v2 = ApplicationsV2 {
                             instances: HashMap::new(),
                             name: label,
                             securite: securite.get_str().to_owned(),

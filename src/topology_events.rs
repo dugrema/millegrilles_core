@@ -581,12 +581,19 @@ struct PresenceInstanceWebApplication {
     url: Option<String>,
 }
 
+#[derive(Serialize, Deserialize)]
+struct PresenceInstanceConfiguredApplications {
+    name: String,
+    version: Option<String>,
+}
+
 #[derive(Deserialize)]
 struct PresenceInstanceApplicationsEvent {
     complete: bool,
     containers: HashMap<String, PresenceInstanceContainer>,
     services: HashMap<String, PresenceInstanceService>,
     webapps: Vec<PresenceInstanceWebApplication>,
+    configured_applications: Vec<PresenceInstanceConfiguredApplications>,
 }
 
 async fn process_presence_instance_applications<M>(middleware: &M, message: MessageValide)
@@ -658,6 +665,29 @@ async fn process_presence_instance_applications<M>(middleware: &M, message: Mess
         let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_WEBAPPS)?;
         let mut names = Vec::new();
         for webapp in event.webapps {
+            names.push(webapp.name.clone());
+            let filtre = doc!{"instance_id": &instance_id, "app_name": &webapp.name};
+            let mut set_ops = convertir_to_bson(webapp)?;
+            set_ops.insert("timestamp", timestamp);
+            let ops = doc! {
+                "$set": set_ops,
+                "$setOnInsert": {CHAMP_CREATION: timestamp},
+                "$currentDate": {CHAMP_MODIFICATION: true},
+            };
+            let options = UpdateOptions::builder().upsert(true).build();
+            collection.update_one(filtre, ops, options).await?;
+        }
+
+        if event.complete {
+            let filtre = doc!{"instance_id": &instance_id, "app_name": {"$not": {"$in": names}}};
+            collection.delete_many(filtre, None).await?;
+        }
+    }
+
+    {
+        let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS)?;
+        let mut names = Vec::new();
+        for webapp in event.configured_applications {
             names.push(webapp.name.clone());
             let filtre = doc!{"instance_id": &instance_id, "app_name": &webapp.name};
             let mut set_ops = convertir_to_bson(webapp)?;

@@ -105,7 +105,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
     // RK 3.protege seulement
     let requetes_protegees = vec![
         REQUETE_LISTE_DOMAINES,
-        REQUETE_LISTE_NOEUDS,
+        REQUEST_SERVER_INSTANCES,
         REQUETE_CONFIGURATION_FICHIERS,
         REQUETE_GET_CLEID_BACKUP_DOMAINE,
         REQUETE_CONFIGURATION_FILEHOSTS,
@@ -202,7 +202,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
 
     for exchange in vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege] {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.{}", EVENEMENT_PRESENCE_INSTANCE), exchange: exchange.clone() });
-        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.{}", EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS), exchange });
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.*.{}", EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS), exchange });
     }
 
     let mut queues = Vec::new();

@@ -186,6 +186,22 @@ pub struct PresenceMonitor {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ServerInstanceStatus {
+    pub instance_id: String,
+    pub disk: Option<Vec<Value>>,
+    pub hostname: Option<String>,
+    pub hostnames: Option<Vec<String>>,
+    pub ip: Option<String>,
+    pub load_average: Option<Vec<f32>>,
+    pub security: Option<String>,
+    pub system_battery: Option<Value>,
+    pub system_fans: Option<Value>,
+    pub system_temperature: Option<HashMap<String, Value>>,
+    #[serde(default, serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
+    pub timestamp: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct InformationApplication {
     pub application: String,
     pub securite: Option<String>,

@@ -26,11 +26,11 @@ use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_v2;
 use millegrilles_common_rust::common_messages::FilehostForInstanceRequest;
-
+use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, TransactionConfigurerConsignation, WebAppLink};
+use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, ServerInstanceStatus, TransactionConfigurerConsignation, WebAppLink};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -109,6 +109,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                     match action.as_str() {
                         REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
                         REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, m).await,
+                        REQUEST_SERVER_INSTANCES => request_server_instances(middleware, m).await,
                         // REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, m).await,
                         // REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
                         REQUETE_GET_CLEID_BACKUP_DOMAINE => requete_get_cleid_backup_domaine(middleware, m).await,
@@ -301,152 +302,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     warn!("requete_consignation_fichiers **OBSOLETE** : {:?}", enveloppe.subject());
     Ok(Some(middleware.reponse_err(Some(400), None, Some("OBSOLETE"))?))
 }
-
-// async fn requete_consignation_fichiers<M>(middleware: &M, message: MessageValide)
-//                                           -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-// where M: ValidateurX509 + GenerateurMessages + MongoDao
-// {
-//     let message_ref = message.message.parse()?;
-//     let message_contenu = message_ref.contenu()?;
-//     let requete: RequeteConsignationFichiers = message_contenu.deserialize()?;
-//     debug!("requete_consignation_fichiers Parsed : {:?}", requete);
-//
-//     let instance_id = match message.certificat.subject()?.get("commonName") {
-//         Some(inner) => inner.clone(),
-//         None => Err(format!("requete_consignation_fichiers Erreur chargement, certificat sans commonName"))?
-//     };
-//
-//     let mut projection = doc! {
-//         "instance_id": 1,
-//         "primaire": 1,
-//         "consignation_url": 1,
-//         "type_store": 1,
-//         "url_download": 1,
-//         "url_archives": 1,
-//         "sync_intervalle": 1,
-//         "sync_actif": 1,
-//         "supporte_archives": 1,
-//         "data_chiffre": 1,
-//         "hostname_sftp": 1,
-//         "username_sftp": 1,
-//         "remote_path_sftp": 1,
-//         "key_type_sftp": 1,
-//         "s3_access_key_id": 1,
-//         "s3_region": 1,
-//         "s3_endpoint": 1,
-//         "s3_bucket": 1,
-//         "type_backup": 1,
-//         "hostname_sftp_backup": 1,
-//         "username_sftp_backup": 1,
-//         "remote_path_sftp_backup": 1,
-//         "key_type_sftp_backup": 1,
-//         "backup_intervalle_secs": 1,
-//         "backup_limit_bytes": 1,
-//         "supprime": 1,
-//     };
-//
-//     if let Some(true) = requete.stats {
-//         // Inclure information des fichiers et espace
-//         projection.insert("principal", 1);
-//         projection.insert("archive", 1);
-//         projection.insert("orphelin", 1);
-//         projection.insert("manquant", 1);
-//     }
-//
-//     let options = FindOneOptions::builder()
-//         .projection(projection)
-//         .build();
-//
-//     let filtre = match requete.instance_id {
-//         Some(inner) => doc! { "instance_id": inner },
-//         None => match requete.hostname {
-//             Some(inner) => {
-//                 // Trouver une instance avec le hostname demande
-//                 let collection = middleware.get_collection(NOM_COLLECTION_INSTANCES)?;
-//                 let filtre = doc! {"$or": [{"domaine": &inner}, {"onion": &inner}]};
-//                 match collection.find_one(filtre, None).await? {
-//                     Some(inner) => {
-//                         let info_instance: InformationMonitor = convertir_bson_deserializable(inner)?;
-//                         doc! { "instance_id": info_instance.instance_id }
-//                     },
-//                     None => {
-//                         //let reponse = json!({"ok": false});
-//                         //return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
-//                         return Ok(Some(middleware.reponse_err(None, None, None)?))
-//                     }
-//                 }
-//             }
-//             None => {
-//                 if let Some(true) = requete.primaire {
-//                     doc! { "primaire": true, }
-//                 } else {
-//                     // Determiner la consignation a utiliser
-//                     // Charger instance et lire consignation_id. Si None, comportement par defaut.
-//                     let filtre_instance = doc! { CHAMP_INSTANCE_ID: &instance_id };
-//                     let collection_instance = middleware.get_collection_typed::<TransactionSetConsignationInstance>(
-//                         NOM_COLLECTION_INSTANCES)?;
-//                     match collection_instance.find_one(filtre_instance.clone(), None).await? {
-//                         Some(instance_info) => {
-//                             match instance_info.consignation_id {
-//                                 Some(consignation_id) => {
-//                                     debug!("requete_consignation_fichiers Utilisation consignation_id {} pour instance_id {}", consignation_id, instance_id);
-//                                     doc! { CHAMP_INSTANCE_ID: consignation_id }
-//                                 },
-//                                 None => {
-//                                     // Determiner si l'instance possede un serveur de consignation de fichiers
-//                                     let collection_fichiers = middleware.get_collection_typed::<TransactionConfigurerConsignation>(
-//                                         NOM_COLLECTION_FICHIERS)?;
-//                                     match collection_fichiers.find_one(filtre_instance.clone(), None).await? {
-//                                         Some(inner) => filtre_instance,
-//                                         None => {
-//                                             // L'instance n'a pas de serveur de consignation de fichiers, utiliser primaire
-//                                             doc! { "primaire": true }
-//                                         }
-//                                     }
-//                                 }
-//                             }
-//                         },
-//                         None => {
-//                             // L'instance est inconnue (anormal...), on selectionne le primaire
-//                             doc! { "primaire": true }
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-//     };
-//
-//     debug!("requete_consignation_fichiers Filtre {:?}", filtre);
-//     let collection = middleware.get_collection_typed::<ReponseInformationConsignationFichiers>(NOM_COLLECTION_FICHIERS)?;
-//     let fiche_consignation = collection.find_one(filtre, Some(options)).await?;
-//     let reponse = match fiche_consignation {
-//         Some(mut fiche_reponse) => {
-//             // let mut fiche_reponse: ReponseInformationConsignationFichiers = convertir_bson_deserializable(f)?;
-//             fiche_reponse.ok = Some(true);
-//             debug!("requete_consignation_fichiers Row consignation : {:?}", fiche_reponse);
-//
-//             // Recuperer info instance pour domaine et onion
-//             let filtre = doc! {"instance_id": &fiche_reponse.instance_id};
-//             let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_INSTANCES)?;
-//             if let Some(info_instance) = collection.find_one(filtre, None).await? {
-//                 debug!("requete_consignation_fichiers Info instance chargee {:?}", info_instance);
-//                 let mut domaines = match info_instance.domaines {
-//                     Some(inner) => inner.clone(),
-//                     None => Vec::new()
-//                 };
-//                 if let Some(inner) = info_instance.onion {
-//                     domaines.push(inner);
-//                 }
-//                 fiche_reponse.hostnames = Some(domaines);
-//             }
-//
-//             middleware.build_reponse(fiche_reponse)?.0
-//         },
-//         None => middleware.reponse_err(None, None, None)?
-//     };
-//
-//     Ok(Some(reponse))
-// }
 
 #[derive(Deserialize)]
 struct RequeteGetTokenHebergement {
@@ -648,7 +503,7 @@ struct ReponseApplicationDeployee {
     #[serde(skip_serializing_if = "Option::is_none")]
     supporte_usagers: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    labels: Option<HashMap<String, Value>>,
+    labels: Option<HashMap<String, HashMap<String, String>>>,
 }
 
 #[derive(Serialize)]
@@ -661,6 +516,7 @@ async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
                                          -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
+    todo!();
     // Recuperer instance_id
     let certificat = message.certificat.as_ref();
     let instance_id = certificat.get_common_name()?;
@@ -766,16 +622,28 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(reponse))
 }
 
+#[derive(Serialize, Deserialize)]
+struct InstanceWebappsRow {
+    instance_id: String,
+    app_name: String,
+    securite: String,
+    url: Option<String>,
+    onion: Option<String>,
+    name_property: Option<String>,
+    supporte_usagers: Option<bool>,
+    labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
+}
+
 async fn liste_userapps_deployees<M>(middleware: &M, message: MessageValide)
                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     // Recuperer instance_id
     let certificat = message.certificat.as_ref();
-    let instance_id = certificat.get_common_name()?;
+    let user_name = certificat.get_common_name()?;
     let extensions = certificat.extensions()?;
     let exchanges = extensions.exchanges.as_ref();
-    debug!("liste_userapps_deployees Instance_id {}, exchanges : {:?}", instance_id, exchanges);
+    debug!("liste_userapps_deployees user_name {}, exchanges : {:?}", user_name, exchanges);
 
     let niveau_securite = if certificat.verifier_exchanges(vec![Securite::L3Protege])? {
         Securite::L3Protege
@@ -796,71 +664,102 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     // Retour de toutes les applications (maitrecomptes est toujours sur exchange 2.prive)
     let sec_cascade = securite_cascade_public(niveau_securite);
 
-    let mut curseur = {
-        let filtre = doc! {};
-        let projection = doc! {"instance_id": true, "domaine": true, "securite": true, "applications": true, "onion": true, "webapps": true};
-        let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
-        let ops = FindOptions::builder().projection(Some(projection)).build();
-        match collection.find(filtre, Some(ops)).await {
-            Ok(c) => c,
-            Err(e) => Err(format!("topology_requests.liste_userapps_deployees Erreur chargement applications : {:?}", e))?
+    // let mut curseur = {
+    //     let filtre = doc! {};
+    //     let projection = doc! {"instance_id": true, "domaine": true, "securite": true, "applications": true, "onion": true, "webapps": true};
+    //     let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
+    //     let ops = FindOptions::builder().projection(Some(projection)).build();
+    //     match collection.find(filtre, Some(ops)).await {
+    //         Ok(c) => c,
+    //         Err(e) => Err(format!("topology_requests.liste_userapps_deployees Erreur chargement applications : {:?}", e))?
+    //     }
+    // };
+    //
+    // // Extraire liste d'applications
+    // let mut resultats = Vec::new();
+    // while let Some(row) = curseur.next().await {
+    //     let info_monitor = row?;
+    //     let instance_id = info_monitor.instance_id.as_str();
+    //
+    //     if let Some(applications) = info_monitor.webapps {
+    //         for app in applications {
+    //             let securite = match securite_enum(app.securite.as_str()) {
+    //                 Ok(s) => s,
+    //                 Err(e) => continue   // Skip
+    //             };
+    //
+    //             debug!("liste_userapps_deployees App {} securite {:?}", app.name, securite);
+    //
+    //             // Verifier si le demandeur a le niveau de securite approprie
+    //             if sec_cascade.contains(&securite) {
+    //                 // Preparer la valeur a exporter pour les applications
+    //                 let onion = match info_monitor.onion.as_ref() {
+    //                     Some(onion) => {
+    //                         let mut url_onion = Url::parse(app.url.as_str())?;
+    //                         if let Err(e) = url_onion.set_host(Some(onion.as_str())) {
+    //                             warn!("liste_userapps_deployees Error parsing onion url: {:?}", e);
+    //                             None
+    //                         } else {
+    //                             Some(url_onion.as_str().to_owned())
+    //                         }
+    //                     },
+    //                     None => None
+    //                 };
+    //
+    //                 let info_app = ReponseApplicationDeployee {
+    //                     instance_id: instance_id.to_owned(),
+    //                     application: app.name.clone(),
+    //                     securite: securite.get_str().to_owned(),
+    //                     url: Some(app.url.clone()),
+    //                     onion: onion.to_owned(),
+    //                     name_property: Some(app.name.clone()),
+    //                     supporte_usagers: Some(true),
+    //                     labels: Some(app.labels),
+    //                 };
+    //
+    //                 resultats.push(info_app);
+    //             } else {
+    //                 debug!("liste_userapps_deployees App {} refuse, securite insuffisante", app.name);
+    //             }
+    //         }
+    //     }
+    // }
+
+    let collection = middleware.get_collection_typed::<InstanceWebappsRow>(NOM_COLLECTION_INSTANCE_WEBAPPS)?;
+    let filtre = doc!{};
+    let mut curseur = collection.find(filtre, None).await?;
+    let mut app_list = Vec::new();
+    while curseur.advance().await? {
+        let row = curseur.deserialize_current()?;
+        let securite = match securite_enum(row.securite.as_str()) {
+            Ok(s) => s,
+            Err(_) => continue   // Skip
+        };
+
+        if ! sec_cascade.contains(&securite) {
+            continue;  // Application not of the proper security level
         }
-    };
 
-    // Extraire liste d'applications
-    let mut resultats = Vec::new();
-    while let Some(row) = curseur.next().await {
-        let info_monitor = row?;
-        let instance_id = info_monitor.instance_id.as_str();
+        let info_app = ReponseApplicationDeployee {
+            instance_id: row.instance_id.to_owned(),
+            application: row.app_name.clone(),
+            securite: securite.get_str().to_owned(),
+            url: row.url.clone(),
+            onion: None,  // onion.to_owned(),
+            name_property: Some(row.app_name.clone()),
+            supporte_usagers: Some(true),
+            labels: row.labels,
+        };
 
-        if let Some(applications) = info_monitor.webapps {
-            for app in applications {
-                let securite = match securite_enum(app.securite.as_str()) {
-                    Ok(s) => s,
-                    Err(e) => continue   // Skip
-                };
-
-                debug!("liste_userapps_deployees App {} securite {:?}", app.name, securite);
-
-                // Verifier si le demandeur a le niveau de securite approprie
-                if sec_cascade.contains(&securite) {
-                    // Preparer la valeur a exporter pour les applications
-                    let onion = match info_monitor.onion.as_ref() {
-                        Some(onion) => {
-                            let mut url_onion = Url::parse(app.url.as_str())?;
-                            if let Err(e) = url_onion.set_host(Some(onion.as_str())) {
-                                warn!("liste_userapps_deployees Error parsing onion url: {:?}", e);
-                                None
-                            } else {
-                                Some(url_onion.as_str().to_owned())
-                            }
-                        },
-                        None => None
-                    };
-
-                    let info_app = ReponseApplicationDeployee {
-                        instance_id: instance_id.to_owned(),
-                        application: app.name.clone(),
-                        securite: securite.get_str().to_owned(),
-                        url: Some(app.url.clone()),
-                        onion: onion.to_owned(),
-                        name_property: Some(app.name.clone()),
-                        supporte_usagers: Some(true),
-                        labels: Some(app.labels),
-                    };
-
-                    resultats.push(info_app);
-                } else {
-                    debug!("liste_userapps_deployees App {} refuse, securite insuffisante", app.name);
-                }
-            }
-        }
+        app_list.push(info_app);
     }
 
     let liste = ReponseListeApplicationsDeployees {
         ok: true,
-        resultats,
+        resultats: app_list,
     };
+
+    debug!("liste_userapps_deployees Responding application list: {:?}", serde_json::to_string(&liste));
 
     let reponse = match middleware.build_reponse(liste) {
         Ok(m) => m.0,
@@ -1369,6 +1268,48 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse noeuds : {:?}", e))?
     };
     Ok(Some(reponse))
+}
+
+#[derive(Serialize)]
+struct RequestServerInstancesResponse {
+    ok: bool,
+    server_instances: Vec<ServerInstanceStatus>,
+}
+
+async fn request_server_instances<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    if message.certificat.verifier_exchanges(vec!(Securite::L3Protege))? {
+        // Ok
+    } else if message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        // Ok
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access refused"))?))
+    }
+
+    let message_instance_id: MessageInstanceId = deser_message_buffer!(message.message);
+
+    let mut curseur = {
+        let filtre = match message_instance_id.instance_id.as_ref() {
+            Some(inner) => doc!{"instance_id": inner},
+            None => doc!{}
+        };
+        let collection = middleware.get_collection_typed::<ServerInstanceStatus>(NOM_COLLECTION_INSTANCE_STATUS)?;
+        match collection.find(filtre, None).await {
+            Ok(c) => c,
+            Err(e) => Err(format!("request_server_instances Error reading database : {:?}", e))?
+        }
+    };
+
+    let mut server_instances = Vec::new();
+    while curseur.advance().await? {
+        let row = curseur.deserialize_current()?;
+        server_instances.push(row);
+    }
+
+    let response = RequestServerInstancesResponse {ok: true, server_instances};
+    Ok(Some(middleware.build_reponse(response)?.0))
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
