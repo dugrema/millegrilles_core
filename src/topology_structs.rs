@@ -93,7 +93,6 @@ pub struct InformationInstance {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct FichePublique {
-    pub applications: Option<HashMap<String, Vec<ApplicationPublique>>>,
     #[serde(rename = "applicationsV2")]
     pub applications_v2: HashMap<String, ApplicationsV2>,
     pub chiffrage: Option<Vec<Vec<String>>>,

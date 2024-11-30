@@ -623,15 +623,15 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 }
 
 #[derive(Serialize, Deserialize)]
-struct InstanceWebappsRow {
-    instance_id: String,
-    app_name: String,
-    securite: String,
-    url: Option<String>,
-    onion: Option<String>,
-    name_property: Option<String>,
-    supporte_usagers: Option<bool>,
-    labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
+pub struct InstanceWebappsRow {
+    pub instance_id: String,
+    pub app_name: String,
+    pub securite: String,
+    pub url: Option<String>,
+    pub onion: Option<String>,
+    pub name_property: Option<String>,
+    pub supporte_usagers: Option<bool>,
+    pub labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
 }
 
 async fn liste_userapps_deployees<M>(middleware: &M, message: MessageValide)
