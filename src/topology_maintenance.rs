@@ -36,7 +36,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler + 
     let minutes = date_epoch.minute();
     // let hours = date_epoch.hour();
 
-    // if minutes % 5 == 1
+    if minutes % 5 == 1
     {
         debug!("Produire fiche publique");
         if let Err(e) = produire_fiche_publique(middleware).await {
