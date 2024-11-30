@@ -8,7 +8,7 @@ use webauthn_rs::prelude::Url;
 use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, ReponseUrlEtag, RowFilehostFuuid, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, PresenceMonitor, ReponseUrlEtag, RowFilehostFuuid, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
 
 use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction, TransactionFilehostSetDefault};
 
@@ -54,7 +54,7 @@ where M: Middleware
 
     match action.as_str() {
         // Commandes standard
-        TRANSACTION_MONITOR => traiter_commande_monitor(middleware, m, gestionnaire).await,
+        // TRANSACTION_MONITOR => traiter_commande_monitor(middleware, m, gestionnaire).await,
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire).await,
@@ -77,23 +77,26 @@ where M: Middleware
     }
 }
 
-async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
-                                     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    debug!("Consommer traiter_commande_monitor : {:?}", &message.type_message);
+// async fn traiter_commande_monitor<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
+//                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+// where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     debug!("Consommer traiter_commande_monitor : {:?}", &message.type_message);
+//
+//     // Verifier autorisation
+//     if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+//         // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
+//         debug!("ajouter_cle autorisation acces refuse");
+//         // match middleware.formatter_reponse(&err,None) {
+//         return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
+//     }
+//
+//     // Sauvegarder la transaction, marquer complete et repondre
+//     sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await
+// }
 
-    // Verifier autorisation
-    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-        // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
-        debug!("ajouter_cle autorisation acces refuse");
-        // match middleware.formatter_reponse(&err,None) {
-        return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
-    }
-
-    // Sauvegarder la transaction, marquer complete et repondre
-    sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await
-}
+#[derive(Deserialize)]
+struct CommandeSupprimerInstance {instance_id: String}
 
 async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
                                                 -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -103,17 +106,26 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
     // Verifier autorisation
     if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-        // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("ajouter_cle autorisation acces refuse");
-        // match middleware.formatter_reponse(&err,None) {
-        //     Ok(m) => return Ok(Some(m)),
-        //     Err(e) => Err(format!("Erreur preparation reponse sauvegarder_inscrire_usager : {:?}", e))?
-        // }
         return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
     }
 
-    // Sauvegarder la transaction, marquer complete et repondre
-    sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await
+    let commande: CommandeSupprimerInstance = deser_message_buffer!(message.message);
+
+    let filtre = doc! {"instance_id": &commande.instance_id};
+    middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS)?.delete_one(filtre.clone(), None).await?;
+    middleware.get_collection(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS)?.delete_many(filtre.clone(), None).await?;
+    middleware.get_collection(NOM_COLLECTION_INSTANCE_CONTAINERS)?.delete_many(filtre.clone(), None).await?;
+    middleware.get_collection(NOM_COLLECTION_INSTANCE_SERVICES)?.delete_many(filtre.clone(), None).await?;
+    middleware.get_collection(NOM_COLLECTION_INSTANCE_WEBAPPS)?.delete_many(filtre.clone(), None).await?;
+
+    // Emettre evenement d'instance supprimee
+    let evenement_supprimee = json!({"instance_id": &commande.instance_id});
+    let routage = RoutageMessageAction::builder(DOMAIN_NAME, EVENEMENT_INSTANCE_SUPPRIMEE, vec![Securite::L3Protege])
+        .build();
+    middleware.emettre_evenement(routage, &evenement_supprimee).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
 async fn transmettre_cle_attachee<M>(middleware: &M, cle: Value) -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -251,12 +263,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
     // Verifier autorisation
     if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-        // let err = json!({"ok": false, "code": 1, "err": "Permission refusee, certificat non autorise"});
         debug!("traiter_commande_set_filehost_for_instance autorisation acces refuse");
-        // match middleware.formatter_reponse(&err,None) {
-        //     Ok(m) => return Ok(Some(m)),
-        //     Err(e) => Err(format!("core_topologie.traiter_commande_set_fichiers_primaire Erreur preparation reponse  : {:?}", e))?
-        // }
         return Ok(Some(middleware.reponse_err(1, None, Some("Permission refusee, certificat non autorise"))?))
     }
 

@@ -337,3 +337,10 @@ pub struct RowFilehostFuuid {
 
 #[derive(Deserialize)]
 pub struct RowFilehostId { pub filehost_id: String }
+
+#[derive(Serialize, Deserialize)]
+pub struct ServerInstanceConfigurationRow {
+    pub instance_id: String,
+    pub name: String,
+    pub value: String,
+}

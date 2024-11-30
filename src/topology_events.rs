@@ -50,13 +50,13 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 
     match action.as_str() {
         EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m, gestionnaire).await,
-        EVENEMENT_PRESENCE_MONITOR | EVENEMENT_PRESENCE_FICHIERS => {
-            match domaine.as_str() {
-                // DOMAINE_FICHIERS => traiter_presence_fichiers(middleware, m, gestionnaire).await,
-                DOMAINE_APPLICATION_INSTANCE => traiter_presence_monitor(middleware, m, gestionnaire).await,
-                _ => Err(format!("Mauvais domaine ({}) pour un evenement de presence", domaine))?,
-            }
-        },
+        // EVENEMENT_PRESENCE_MONITOR | EVENEMENT_PRESENCE_FICHIERS => {
+        //     match domaine.as_str() {
+        //         // DOMAINE_FICHIERS => traiter_presence_fichiers(middleware, m, gestionnaire).await,
+        //         DOMAINE_APPLICATION_INSTANCE => traiter_presence_monitor(middleware, m, gestionnaire).await,
+        //         _ => Err(format!("Mauvais domaine ({}) pour un evenement de presence", domaine))?,
+        //     }
+        // },
         EVENEMENT_PRESENCE_INSTANCE => process_presence_instance(middleware, m).await,
         EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS => process_presence_instance_applications(middleware, m).await,
         EVENEMENT_APPLICATION_DEMARREE | EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
@@ -203,103 +203,103 @@ struct PresenceFichiers {
 //     Ok(None)
 // }
 
-async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
-                                     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    let message_ref = m.message.parse()?;
-    let estampille = message_ref.estampille;
-    let message_contenu = message_ref.contenu()?;
-    let event: PresenceMonitor = message_contenu.deserialize()?;
-    debug!("Presence monitor : {:?}", event);
-
-    // Preparer valeurs applications
-    let mut applications = Array::new();
-    if let Some(map) = &event.services {
-        for (nom_service, info_service) in map.iter() {
-            if let Some(labels) = &info_service.labels {
-                let nom_application = match labels.get("application") {
-                    Some(a) => a.as_str(),
-                    None => nom_service.as_str()
-                };
-
-                if let Some(url) = labels.get("url") {
-                    if let Some(securite) = labels.get("securite") {
-                        let mut info_app = doc! {
-                            "application": nom_application,
-                            "securite": securite,
-                            "url": url,
-                        };
-
-                        if let Some(millegrille) = labels.get("millegrille") {
-                            info_app.insert("millegrille", millegrille);
-                        }
-
-                        if let Some(a) = labels.get("nom_application") {
-                            info_app.insert("name_property", a.as_str());
-                        };
-
-                        if let Some(s) = labels.get("supporte_usagers") {
-                            info_app.insert("supporte_usagers", s.as_str() != "false");
-                        };
-
-                        applications.push(Bson::Document(info_app));
-                    }
-                }
-            }
-        }
-    }
-
-    // debug!("Applications noeud : {:?}", &applications);
-
-    // let mut set_ops = m.message.get_msg().map_to_bson()?;
-    // filtrer_doc_id(&mut set_ops);
-
-    let mut set_ops = convertir_to_bson(event.clone())?;
-
-    // Retirer champ cle
-    set_ops.remove("instance_id");
-    set_ops.remove("filehost_id");  // Ce setting est manuel
-    set_ops.insert("applications", applications);
-    set_ops.insert("date_presence", estampille);
-
-    let filtre = doc! {"instance_id": &event.instance_id};
-    let ops = doc! {
-        "$set": set_ops,
-        "$setOnInsert": {"instance_id": &event.instance_id, CHAMP_CREATION: Utc::now(), "dirty": true},
-        "$currentDate": {CHAMP_MODIFICATION: true}
-    };
-
-    debug!("Document monitor a sauvegarder : {:?}", ops);
-    let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
-    let options = FindOneAndUpdateOptions::builder().upsert(true).build();
-    let result = collection.find_one_and_update(filtre, ops, Some(options)).await?;
-    debug!("Result update monitor : {:?}", result);
-
-    // Verifier si on doit creer une nouvelle transaction
-    let creer_transaction = match result {
-        Some(d) => d.get_bool("dirty")?,
-        None => true,
-    };
-
-    if creer_transaction {
-        debug!("Creer transaction topologie pour monitor/noeud {:?}", &event.domaine);
-
-        let tval = json!({
-            "domaine": event.domaine,
-            "instance_id": event.instance_id,
-        });
-
-        sauvegarder_traiter_transaction_serializable_v2(middleware, &tval, gestionnaire, DOMAIN_NAME, TRANSACTION_INSTANCE).await?;
-
-        // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
-        let filtre = doc! {"instance_id": &event.instance_id};
-        let ops = doc! {"$set": {"dirty": false}};
-        let _ = collection.update_one(filtre, ops, None).await?;
-    }
-
-    Ok(None)
-}
+// async fn traiter_presence_monitor<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+//                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+// where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     let message_ref = m.message.parse()?;
+//     let estampille = message_ref.estampille;
+//     let message_contenu = message_ref.contenu()?;
+//     let event: PresenceMonitor = message_contenu.deserialize()?;
+//     debug!("Presence monitor : {:?}", event);
+//
+//     // Preparer valeurs applications
+//     let mut applications = Array::new();
+//     if let Some(map) = &event.services {
+//         for (nom_service, info_service) in map.iter() {
+//             if let Some(labels) = &info_service.labels {
+//                 let nom_application = match labels.get("application") {
+//                     Some(a) => a.as_str(),
+//                     None => nom_service.as_str()
+//                 };
+//
+//                 if let Some(url) = labels.get("url") {
+//                     if let Some(securite) = labels.get("securite") {
+//                         let mut info_app = doc! {
+//                             "application": nom_application,
+//                             "securite": securite,
+//                             "url": url,
+//                         };
+//
+//                         if let Some(millegrille) = labels.get("millegrille") {
+//                             info_app.insert("millegrille", millegrille);
+//                         }
+//
+//                         if let Some(a) = labels.get("nom_application") {
+//                             info_app.insert("name_property", a.as_str());
+//                         };
+//
+//                         if let Some(s) = labels.get("supporte_usagers") {
+//                             info_app.insert("supporte_usagers", s.as_str() != "false");
+//                         };
+//
+//                         applications.push(Bson::Document(info_app));
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//
+//     // debug!("Applications noeud : {:?}", &applications);
+//
+//     // let mut set_ops = m.message.get_msg().map_to_bson()?;
+//     // filtrer_doc_id(&mut set_ops);
+//
+//     let mut set_ops = convertir_to_bson(event.clone())?;
+//
+//     // Retirer champ cle
+//     set_ops.remove("instance_id");
+//     set_ops.remove("filehost_id");  // Ce setting est manuel
+//     set_ops.insert("applications", applications);
+//     set_ops.insert("date_presence", estampille);
+//
+//     let filtre = doc! {"instance_id": &event.instance_id};
+//     let ops = doc! {
+//         "$set": set_ops,
+//         "$setOnInsert": {"instance_id": &event.instance_id, CHAMP_CREATION: Utc::now(), "dirty": true},
+//         "$currentDate": {CHAMP_MODIFICATION: true}
+//     };
+//
+//     debug!("Document monitor a sauvegarder : {:?}", ops);
+//     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+//     let options = FindOneAndUpdateOptions::builder().upsert(true).build();
+//     let result = collection.find_one_and_update(filtre, ops, Some(options)).await?;
+//     debug!("Result update monitor : {:?}", result);
+//
+//     // Verifier si on doit creer une nouvelle transaction
+//     let creer_transaction = match result {
+//         Some(d) => d.get_bool("dirty")?,
+//         None => true,
+//     };
+//
+//     if creer_transaction {
+//         debug!("Creer transaction topologie pour monitor/noeud {:?}", &event.domaine);
+//
+//         let tval = json!({
+//             "domaine": event.domaine,
+//             "instance_id": event.instance_id,
+//         });
+//
+//         sauvegarder_traiter_transaction_serializable_v2(middleware, &tval, gestionnaire, DOMAIN_NAME, TRANSACTION_INSTANCE).await?;
+//
+//         // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
+//         let filtre = doc! {"instance_id": &event.instance_id};
+//         let ops = doc! {"$set": {"dirty": false}};
+//         let _ = collection.update_one(filtre, ops, None).await?;
+//     }
+//
+//     Ok(None)
+// }
 
 pub async fn produire_fiche_publique<M>(middleware: &M)
                                     -> Result<(), millegrilles_common_rust::error::Error>

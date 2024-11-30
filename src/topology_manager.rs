@@ -30,8 +30,7 @@ impl GestionnaireDomaineV2 for TopologyManager {
 
     fn get_collections_volatiles(&self) -> Result<Vec<String>, CommonError> {
         Ok(vec![
-            // String::from(NOM_COLLECTION_DOMAINES),  // table volatile
-            String::from(NOM_COLLECTION_NOEUDS),
+            String::from(NOM_COLLECTION_INSTANCE_CONFIGURATION),
         ])
     }
 }
@@ -107,6 +106,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
         REQUETE_LISTE_DOMAINES,
         REQUEST_SERVER_INSTANCES,
         REQUEST_SERVER_INSTANCE_APPLICATIONS,
+        REQUEST_SERVER_INSTANCE_CONFIGURATION,
         REQUETE_CONFIGURATION_FICHIERS,
         REQUETE_GET_CLEID_BACKUP_DOMAINE,
         REQUETE_CONFIGURATION_FILEHOSTS,
@@ -228,19 +228,108 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
 pub async fn preparer_index_mongodb_topologie<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
 where M: MongoDao + ConfigMessages
 {
-    // Index noeuds
-    let options_unique_noeuds = IndexOptions {
-        nom_index: Some(String::from(INDEX_NOEUDS)),
+    // // Index noeuds
+    // let options_unique_noeuds = IndexOptions {
+    //     nom_index: Some(String::from(INDEX_NOEUDS)),
+    //     unique: true,
+    // };
+    // let champs_index_noeuds = vec!(
+    //     ChampIndex { nom_champ: String::from(CHAMP_NOEUD_ID), direction: 1 },
+    // );
+    // middleware.create_index(
+    //     middleware,
+    //     NOM_COLLECTION_NOEUDS,
+    //     champs_index_noeuds,
+    //     Some(options_unique_noeuds),
+    // ).await?;
+
+    let options_unique_server_instances = IndexOptions {
+        nom_index: Some(String::from("server_instance_id")),
         unique: true,
     };
-    let champs_index_noeuds = vec!(
-        ChampIndex { nom_champ: String::from(CHAMP_NOEUD_ID), direction: 1 },
+    let champs_index_server_instances = vec!(
+        ChampIndex { nom_champ: String::from("instance_id"), direction: 1 },
     );
     middleware.create_index(
         middleware,
-        NOM_COLLECTION_NOEUDS,
-        champs_index_noeuds,
-        Some(options_unique_noeuds),
+        NOM_COLLECTION_INSTANCE_STATUS,
+        champs_index_server_instances,
+        Some(options_unique_server_instances),
+    ).await?;
+
+    let options_unique_server_configured_applications = IndexOptions {
+        nom_index: Some(String::from("unique_id")),
+        unique: true,
+    };
+    let champs_index_server_configured_applications = vec!(
+        ChampIndex { nom_champ: String::from("instance_id"), direction: 1 },
+        ChampIndex { nom_champ: String::from("app_name"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS,
+        champs_index_server_configured_applications ,
+        Some(options_unique_server_configured_applications),
+    ).await?;
+
+    let options_unique_server_containers = IndexOptions {
+        nom_index: Some(String::from("unique_id")),
+        unique: true,
+    };
+    let champs_index_server_containers = vec!(
+        ChampIndex { nom_champ: String::from("instance_id"), direction: 1 },
+        ChampIndex { nom_champ: String::from("service_name"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_INSTANCE_CONTAINERS,
+        champs_index_server_containers ,
+        Some(options_unique_server_containers),
+    ).await?;
+
+    let options_unique_server_services = IndexOptions {
+        nom_index: Some(String::from("unique_id")),
+        unique: true,
+    };
+    let champs_index_server_services = vec!(
+        ChampIndex { nom_champ: String::from("instance_id"), direction: 1 },
+        ChampIndex { nom_champ: String::from("service_name"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_INSTANCE_SERVICES,
+        champs_index_server_services,
+        Some(options_unique_server_services),
+    ).await?;
+
+    let options_unique_server_webapps = IndexOptions {
+        nom_index: Some(String::from("unique_id")),
+        unique: true,
+    };
+    let champs_index_server_webapps = vec!(
+        ChampIndex { nom_champ: String::from("instance_id"), direction: 1 },
+        ChampIndex { nom_champ: String::from("app_name"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_INSTANCE_WEBAPPS,
+        champs_index_server_webapps,
+        Some(options_unique_server_webapps),
+    ).await?;
+
+    let options_unique_server_configuration = IndexOptions {
+        nom_index: Some(String::from("unique_id")),
+        unique: true,
+    };
+    let champs_index_server_configuration = vec!(
+        ChampIndex { nom_champ: String::from("instance_id"), direction: 1 },
+        ChampIndex { nom_champ: String::from("name"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_INSTANCE_CONFIGURATION,
+        champs_index_server_configuration,
+        Some(options_unique_server_configuration),
     ).await?;
 
     // Index domaines

@@ -31,7 +31,7 @@ use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_pub
 use crate::topology_constants::*;
 use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceContainer, PresenceInstanceWebApplication};
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, ServerInstanceStatus, TransactionConfigurerConsignation, WebAppLink};
+use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, ServerInstanceConfigurationRow, ServerInstanceStatus, TransactionConfigurerConsignation, WebAppLink};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -85,7 +85,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                 DOMAIN_NAME => {
                     match action.as_str() {
                         REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
-                        REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, m).await,
+                        // REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, m).await,
                         REQUETE_USERAPPS_DEPLOYEES => liste_userapps_deployees(middleware, m).await,
                         REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, m).await,
                         REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
@@ -109,9 +109,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                 DOMAINE_NOM => {
                     match action.as_str() {
                         REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
-                        REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, m).await,
+                        // REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, m).await,
                         REQUEST_SERVER_INSTANCES => request_server_instances(middleware, m).await,
                         REQUEST_SERVER_INSTANCE_APPLICATIONS => request_server_instance_applications(middleware, m).await,
+                        REQUEST_SERVER_INSTANCE_CONFIGURATION => request_server_instance_configuration(middleware, m).await,
                         // REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, m).await,
                         // REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
                         REQUETE_GET_CLEID_BACKUP_DOMAINE => requete_get_cleid_backup_domaine(middleware, m).await,
@@ -514,115 +515,115 @@ struct ReponseListeApplicationsDeployees {
     resultats: Vec<ReponseApplicationDeployee>,
 }
 
-async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
-                                         -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    todo!();
-    // Recuperer instance_id
-    let certificat = message.certificat.as_ref();
-    let instance_id = certificat.get_common_name()?;
-    let extensions = certificat.extensions()?;
-    let exchanges = extensions.exchanges.as_ref();
-    debug!("liste_applications_deployees Instance_id {}, exchanges : {:?}", instance_id, exchanges);
-
-    let niveau_securite = if certificat.verifier_exchanges(vec![Securite::L3Protege])? {
-        Securite::L3Protege
-    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-        Securite::L3Protege
-    } else if certificat.verifier_exchanges(vec![Securite::L2Prive])? {
-        Securite::L2Prive
-    } else if certificat.verifier_roles(vec![RolesCertificats::ComptePrive])? {
-        Securite::L2Prive
-    } else {
-        warn!("liste_applications_deployees Acces refuse, aucunes conditions d'acces du certificat pour liste apps");
-        // let reponse = json!({"ok": false, "err": "Acces refuse"});
-        // return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
-        return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
-    };
-    debug!("liste_applications_deployees Niveau de securite : {:?}", niveau_securite);
-
-    // Retour de toutes les applications (maitrecomptes est toujours sur exchange 2.prive)
-    let sec_cascade = securite_cascade_public(niveau_securite);
-
-    let mut curseur = {
-        let filtre = doc! {};
-        let projection = doc! {"instance_id": true, "domaine": true, "securite": true, "applications": true, "onion": true};
-        let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
-        let ops = FindOptions::builder().projection(Some(projection)).build();
-        match collection.find(filtre, Some(ops)).await {
-            Ok(c) => c,
-            Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur chargement applications : {:?}", e))?
-        }
-    };
-
-    // Extraire liste d'applications
-    let mut resultats = Vec::new();
-    while let Some(row) = curseur.next().await {
-        let info_monitor = row?;
-        let instance_id = info_monitor.instance_id.as_str();
-
-        if let Some(applications) = info_monitor.applications {
-            for app in applications {
-                let securite = match app.securite {
-                    Some(s) => match securite_enum(s.as_str()) {
-                        Ok(s) => s,
-                        Err(e) => continue   // Skip
-                    },
-                    None => continue  // Skip
-                };
-
-                // Verifier si le demandeur a le niveau de securite approprie
-                if sec_cascade.contains(&securite) {
-
-                    if let Some(url) = app.url.as_ref() {
-                        // Preparer la valeur a exporter pour les applications
-                        let onion = match info_monitor.onion.as_ref() {
-                            Some(onion) => {
-                                let mut url_onion = Url::parse(url.as_str())?;
-                                url_onion.set_host(Some(onion.as_str()));
-                                Some(url_onion.as_str().to_owned())
-                            },
-                            None => None
-                        };
-
-                        let mut info_app = ReponseApplicationDeployee {
-                            instance_id: instance_id.to_owned(),
-                            application: app.application.clone(),
-                            securite: securite.get_str().to_owned(),
-                            url: Some(url.to_owned()),
-                            onion: onion.to_owned(),
-                            name_property: None,
-                            supporte_usagers: None,
-                            labels: None,
-                        };
-
-                        if let Some(p) = app.name_property.as_ref() {
-                            info_app.name_property = Some(p.to_string());
-                        }
-
-                        if let Some(p) = app.supporte_usagers.as_ref() {
-                            info_app.supporte_usagers = Some(p.to_owned());
-                        }
-
-                        resultats.push(info_app);
-                    }
-                }
-            }
-        }
-    }
-
-    let liste = ReponseListeApplicationsDeployees {
-        ok: true,
-        resultats,
-    };
-
-    let reponse = match middleware.build_reponse(liste) {
-        Ok(m) => m.0,
-        Err(e) => Err(format!("core_topologie.liste_applications_deployees  Erreur preparation reponse applications : {:?}", e))?
-    };
-    Ok(Some(reponse))
-}
+// async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
+//                                          -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+// where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     todo!();
+//     // Recuperer instance_id
+//     let certificat = message.certificat.as_ref();
+//     let instance_id = certificat.get_common_name()?;
+//     let extensions = certificat.extensions()?;
+//     let exchanges = extensions.exchanges.as_ref();
+//     debug!("liste_applications_deployees Instance_id {}, exchanges : {:?}", instance_id, exchanges);
+//
+//     let niveau_securite = if certificat.verifier_exchanges(vec![Securite::L3Protege])? {
+//         Securite::L3Protege
+//     } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+//         Securite::L3Protege
+//     } else if certificat.verifier_exchanges(vec![Securite::L2Prive])? {
+//         Securite::L2Prive
+//     } else if certificat.verifier_roles(vec![RolesCertificats::ComptePrive])? {
+//         Securite::L2Prive
+//     } else {
+//         warn!("liste_applications_deployees Acces refuse, aucunes conditions d'acces du certificat pour liste apps");
+//         // let reponse = json!({"ok": false, "err": "Acces refuse"});
+//         // return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+//         return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
+//     };
+//     debug!("liste_applications_deployees Niveau de securite : {:?}", niveau_securite);
+//
+//     // Retour de toutes les applications (maitrecomptes est toujours sur exchange 2.prive)
+//     let sec_cascade = securite_cascade_public(niveau_securite);
+//
+//     let mut curseur = {
+//         let filtre = doc! {};
+//         let projection = doc! {"instance_id": true, "domaine": true, "securite": true, "applications": true, "onion": true};
+//         let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
+//         let ops = FindOptions::builder().projection(Some(projection)).build();
+//         match collection.find(filtre, Some(ops)).await {
+//             Ok(c) => c,
+//             Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur chargement applications : {:?}", e))?
+//         }
+//     };
+//
+//     // Extraire liste d'applications
+//     let mut resultats = Vec::new();
+//     while let Some(row) = curseur.next().await {
+//         let info_monitor = row?;
+//         let instance_id = info_monitor.instance_id.as_str();
+//
+//         if let Some(applications) = info_monitor.applications {
+//             for app in applications {
+//                 let securite = match app.securite {
+//                     Some(s) => match securite_enum(s.as_str()) {
+//                         Ok(s) => s,
+//                         Err(e) => continue   // Skip
+//                     },
+//                     None => continue  // Skip
+//                 };
+//
+//                 // Verifier si le demandeur a le niveau de securite approprie
+//                 if sec_cascade.contains(&securite) {
+//
+//                     if let Some(url) = app.url.as_ref() {
+//                         // Preparer la valeur a exporter pour les applications
+//                         let onion = match info_monitor.onion.as_ref() {
+//                             Some(onion) => {
+//                                 let mut url_onion = Url::parse(url.as_str())?;
+//                                 url_onion.set_host(Some(onion.as_str()));
+//                                 Some(url_onion.as_str().to_owned())
+//                             },
+//                             None => None
+//                         };
+//
+//                         let mut info_app = ReponseApplicationDeployee {
+//                             instance_id: instance_id.to_owned(),
+//                             application: app.application.clone(),
+//                             securite: securite.get_str().to_owned(),
+//                             url: Some(url.to_owned()),
+//                             onion: onion.to_owned(),
+//                             name_property: None,
+//                             supporte_usagers: None,
+//                             labels: None,
+//                         };
+//
+//                         if let Some(p) = app.name_property.as_ref() {
+//                             info_app.name_property = Some(p.to_string());
+//                         }
+//
+//                         if let Some(p) = app.supporte_usagers.as_ref() {
+//                             info_app.supporte_usagers = Some(p.to_owned());
+//                         }
+//
+//                         resultats.push(info_app);
+//                     }
+//                 }
+//             }
+//         }
+//     }
+//
+//     let liste = ReponseListeApplicationsDeployees {
+//         ok: true,
+//         resultats,
+//     };
+//
+//     let reponse = match middleware.build_reponse(liste) {
+//         Ok(m) => m.0,
+//         Err(e) => Err(format!("core_topologie.liste_applications_deployees  Erreur preparation reponse applications : {:?}", e))?
+//     };
+//     Ok(Some(reponse))
+// }
 
 #[derive(Serialize, Deserialize)]
 pub struct InstanceWebappsRow {
@@ -1229,48 +1230,48 @@ struct MessageInstanceId {
     instance_id: Option<String>
 }
 
-async fn liste_noeuds<M>(middleware: &M, message: MessageValide)
-                         -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    debug!("liste_noeuds");
-    if !message.certificat.verifier_exchanges(vec!(Securite::L3Protege, Securite::L4Secure))? {
-        if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-            return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
-        }
-    }
-
-    let mut curseur = {
-        let mut filtre = doc! {};
-        let message_ref = message.message.parse()?;
-        let message_contenu = message_ref.contenu()?;
-        let message_instance_id: MessageInstanceId = message_contenu.deserialize()?;
-        if let Some(inner) = message_instance_id.instance_id.as_ref() {
-            filtre.insert("instance_id", inner.to_owned());
-        }
-        let collection = middleware.get_collection_typed::<PresenceMonitor>(NOM_COLLECTION_NOEUDS)?;
-        match collection.find(filtre, None).await {
-            Ok(c) => c,
-            Err(e) => Err(format!("core_topologie.liste_noeuds Erreur chargement applications : {:?}", e))?
-        }
-    };
-
-    let mut noeuds = Vec::new();
-    while let Some(r) = curseur.next().await {
-        match r {
-            Ok(d) => noeuds.push(d),
-            Err(e) => warn!("core_topologie.liste_noeuds Erreur lecture document sous liste_noeuds() : {:?}", e)
-        }
-    }
-
-    debug!("Noeuds : {:?}", noeuds);
-    let liste = json!({"resultats": noeuds});
-    let reponse = match middleware.build_reponse(liste) {
-        Ok(m) => m.0,
-        Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse noeuds : {:?}", e))?
-    };
-    Ok(Some(reponse))
-}
+// async fn liste_noeuds<M>(middleware: &M, message: MessageValide)
+//                          -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+// where M: ValidateurX509 + GenerateurMessages + MongoDao
+// {
+//     debug!("liste_noeuds");
+//     if !message.certificat.verifier_exchanges(vec!(Securite::L3Protege, Securite::L4Secure))? {
+//         if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+//             return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
+//         }
+//     }
+//
+//     let mut curseur = {
+//         let mut filtre = doc! {};
+//         let message_ref = message.message.parse()?;
+//         let message_contenu = message_ref.contenu()?;
+//         let message_instance_id: MessageInstanceId = message_contenu.deserialize()?;
+//         if let Some(inner) = message_instance_id.instance_id.as_ref() {
+//             filtre.insert("instance_id", inner.to_owned());
+//         }
+//         let collection = middleware.get_collection_typed::<PresenceMonitor>(NOM_COLLECTION_NOEUDS)?;
+//         match collection.find(filtre, None).await {
+//             Ok(c) => c,
+//             Err(e) => Err(format!("core_topologie.liste_noeuds Erreur chargement applications : {:?}", e))?
+//         }
+//     };
+//
+//     let mut noeuds = Vec::new();
+//     while let Some(r) = curseur.next().await {
+//         match r {
+//             Ok(d) => noeuds.push(d),
+//             Err(e) => warn!("core_topologie.liste_noeuds Erreur lecture document sous liste_noeuds() : {:?}", e)
+//         }
+//     }
+//
+//     debug!("Noeuds : {:?}", noeuds);
+//     let liste = json!({"resultats": noeuds});
+//     let reponse = match middleware.build_reponse(liste) {
+//         Ok(m) => m.0,
+//         Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse noeuds : {:?}", e))?
+//     };
+//     Ok(Some(reponse))
+// }
 
 #[derive(Serialize)]
 struct RequestServerInstancesResponse {
@@ -1523,21 +1524,19 @@ async fn request_filehost_for_instance<M>(middleware: &M, message: MessageValide
         Some(inner) => Some(inner),  // Filehost provided
         None => {
             // Check if instance configuration overrides with filehost_id
-            let collection_instances = middleware.get_collection_typed::<PresenceMonitor>(NOM_COLLECTION_INSTANCES)?;
-            let filtre = doc! {"instance_id": &instance_id};
+            let collection_instances =
+                middleware.get_collection_typed::<ServerInstanceConfigurationRow>(NOM_COLLECTION_INSTANCE_CONFIGURATION)?;
+            let filtre = doc! {"instance_id": &instance_id, "name": "filehost_id"};
             match collection_instances.find_one(filtre, None).await? {
-                Some(inner) => match inner.filehost_id {
-                    Some(inner) => Some(inner),
-                    None => {
-                        // Check if there is a filehost directly on this instance
-                        let filtre_filehosts = doc! {"instance_id": &instance_id, "deleted": false};
-                        match collection_filehosts.find_one(filtre_filehosts, None).await? {
-                            Some(inner) => Some(inner.filehost_id),
-                            None => None
-                        }
+                Some(inner) => Some(inner.value),
+                None => {
+                    // Check if there is a filehost directly on this instance
+                    let filtre_filehosts = doc! {"instance_id": &instance_id, "deleted": false};
+                    match collection_filehosts.find_one(filtre_filehosts, None).await? {
+                        Some(inner) => Some(inner.filehost_id),
+                        None => None
                     }
-                },
-                None => None
+                }
             }
         }
     };
@@ -1603,21 +1602,19 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         None => match instance_id {
             Some(instance_id) => {
                 // Check if instance configuration overrides with filehost_id
-                let collection_instances = middleware.get_collection_typed::<PresenceMonitor>(NOM_COLLECTION_INSTANCES)?;
-                let filtre = doc! {"instance_id": &instance_id};
+                let collection_instances =
+                    middleware.get_collection_typed::<ServerInstanceConfigurationRow>(NOM_COLLECTION_INSTANCE_CONFIGURATION)?;
+                let filtre = doc! {"instance_id": &instance_id, "name": "filehost_id"};
                 match collection_instances.find_one(filtre, None).await? {
-                    Some(inner) => match inner.filehost_id {
-                        Some(inner) => Some(inner),
-                        None => {
-                            // Check if there is a filehost directly on this instance
-                            let filtre_filehosts = doc! {"instance_id": &instance_id, "deleted": false};
-                            match collection_filehosts.find_one(filtre_filehosts, None).await? {
-                                Some(inner) => Some(inner.filehost_id),
-                                None => None
-                            }
+                    Some(inner) => Some(inner.value),
+                    None => {
+                        // Check if there is a filehost directly on this instance
+                        let filtre_filehosts = doc! {"instance_id": &instance_id, "deleted": false};
+                        match collection_filehosts.find_one(filtre_filehosts, None).await? {
+                            Some(inner) => Some(inner.filehost_id),
+                            None => None
                         }
-                    },
-                    None => None
+                    }
                 }
             },
             None => None
@@ -1842,5 +1839,49 @@ async fn request_server_instance_applications<M>(middleware: &M, message: Messag
         webapps,
         configured_applications,
     };
+    Ok(Some(middleware.build_reponse(response)?.0))
+}
+
+#[derive(Deserialize)]
+struct RequestServerInstanceConfiguration {instance_id: String}
+
+#[derive(Serialize)]
+struct RequestServerInstanceConfigurationResponse {
+    ok: bool,
+    instance_id: String,
+    configuration: HashMap<String, String>,
+}
+
+async fn request_server_instance_configuration<M>(middleware: &M, message: MessageValide)
+                                                  -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    if message.certificat.verifier_exchanges(vec!(Securite::L3Protege))? {
+        // Ok
+    } else if message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        // Ok
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access refused"))?))
+    }
+
+    let request: RequestServerInstanceConfiguration = deser_message_buffer!(message.message);
+
+    let collection =
+        middleware.get_collection_typed::<ServerInstanceConfigurationRow>(NOM_COLLECTION_INSTANCE_CONFIGURATION)?;
+
+    let filtre = doc!{"instance_id": &request.instance_id};
+    let mut cursor = collection.find(filtre, None).await?;
+    let mut configuration_items = HashMap::new();
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        configuration_items.insert(row.name, row.value);
+    }
+
+    let response = RequestServerInstanceConfigurationResponse {
+        ok: true,
+        instance_id: request.instance_id,
+        configuration: configuration_items
+    };
+
     Ok(Some(middleware.build_reponse(response)?.0))
 }

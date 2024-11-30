@@ -36,8 +36,8 @@ where
 
     match action.as_str() {
         TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
-        TRANSACTION_MONITOR => traiter_transaction_monitor(middleware, transaction).await,
-        TRANSACTION_SUPPRIMER_INSTANCE => traiter_transaction_supprimer_instance(middleware, transaction).await,
+        TRANSACTION_MONITOR => Ok(None),  // Obsolete traiter_transaction_monitor(middleware, transaction).await,
+        TRANSACTION_SUPPRIMER_INSTANCE => Ok(None),  // Obsolete traiter_transaction_supprimer_instance(middleware, transaction).await,
         // TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
         // TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
         TRANSACTION_SET_FILEHOST_FOR_INSTANCE => transaction_set_filehost_instance(middleware, transaction).await,
@@ -89,68 +89,68 @@ where M: GenerateurMessages + MongoDao
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
-async fn traiter_transaction_monitor<M>(middleware: &M, transaction: TransactionValide)
-                                        -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-where M: GenerateurMessages + MongoDao
-{
-    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
-        Ok(d) => d,
-        Err(e) => Err(format!("core_topologie.traiter_transaction_monitor Erreur conversion transaction monitor : {:?}", e))?
-    };
-    debug!("traiter_transaction_monitor {:?}", doc_transaction);
+// async fn traiter_transaction_monitor<M>(middleware: &M, transaction: TransactionValide)
+//                                         -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+// where M: GenerateurMessages + MongoDao
+// {
+//     // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+//     let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+//         Ok(d) => d,
+//         Err(e) => Err(format!("core_topologie.traiter_transaction_monitor Erreur conversion transaction monitor : {:?}", e))?
+//     };
+//     debug!("traiter_transaction_monitor {:?}", doc_transaction);
+//
+//     let instance_id = doc_transaction.instance_id;
+//
+//     let ops = doc! {
+//         "$set": {"dirty": false, CHAMP_DOMAINE: doc_transaction.domaine},
+//         "$setOnInsert": {CHAMP_INSTANCE_ID: &instance_id, CHAMP_CREATION: Utc::now()},
+//         "$currentDate": {CHAMP_MODIFICATION: true},
+//     };
+//     let filtre = doc! {CHAMP_INSTANCE_ID: &instance_id};
+//     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+//     let options = UpdateOptions::builder().upsert(true).build();
+//     match collection.update_one(filtre, ops, options).await {
+//         Ok(_) => (),
+//         Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
+//     }
+//
+//     let reponse = middleware.reponse_ok(None, None)?;
+//     // let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
+//     //     Ok(r) => r,
+//     //     Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
+//     // };
+//     Ok(Some(reponse))
+// }
 
-    let instance_id = doc_transaction.instance_id;
-
-    let ops = doc! {
-        "$set": {"dirty": false, CHAMP_DOMAINE: doc_transaction.domaine},
-        "$setOnInsert": {CHAMP_INSTANCE_ID: &instance_id, CHAMP_CREATION: Utc::now()},
-        "$currentDate": {CHAMP_MODIFICATION: true},
-    };
-    let filtre = doc! {CHAMP_INSTANCE_ID: &instance_id};
-    let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
-    let options = UpdateOptions::builder().upsert(true).build();
-    match collection.update_one(filtre, ops, options).await {
-        Ok(_) => (),
-        Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
-    }
-
-    let reponse = middleware.reponse_ok(None, None)?;
-    // let reponse = match middleware.formatter_reponse(json!({"ok": true}), None) {
-    //     Ok(r) => r,
-    //     Err(e) => Err(format!("Erreur reponse transaction : {:?}", e))?
-    // };
-    Ok(Some(reponse))
-}
-
-async fn traiter_transaction_supprimer_instance<M>(middleware: &M, transaction: TransactionValide)
-                                                   -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-where M: GenerateurMessages + MongoDao
-{
-    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
-    let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
-        Ok(d) => d,
-        Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_instance Erreur conversion transaction monitor : {:?}", e))?
-    };
-
-    let instance_id = doc_transaction.instance_id;
-
-    let filtre = doc! {CHAMP_NOEUD_ID: &instance_id};
-    let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
-    match collection.delete_one(filtre, None).await {
-        Ok(_) => (),
-        Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
-    }
-
-    // Emettre evenement d'instance supprimee
-    let evenement_supprimee = json!({"instance_id": &instance_id});
-    let routage = RoutageMessageAction::builder(DOMAIN_NAME, EVENEMENT_INSTANCE_SUPPRIMEE, vec![Securite::L3Protege])
-        .build();
-    middleware.emettre_evenement(routage, &evenement_supprimee).await?;
-
-    let reponse = middleware.reponse_ok(None, None)?;
-    Ok(Some(reponse))
-}
+// async fn traiter_transaction_supprimer_instance<M>(middleware: &M, transaction: TransactionValide)
+//                                                    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+// where M: GenerateurMessages + MongoDao
+// {
+//     // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
+//     let mut doc_transaction: PresenceMonitor = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+//         Ok(d) => d,
+//         Err(e) => Err(format!("core_topologie.traiter_transaction_supprimer_instance Erreur conversion transaction monitor : {:?}", e))?
+//     };
+//
+//     let instance_id = doc_transaction.instance_id;
+//
+//     let filtre = doc! {CHAMP_NOEUD_ID: &instance_id};
+//     let collection = middleware.get_collection(NOM_COLLECTION_NOEUDS)?;
+//     match collection.delete_one(filtre, None).await {
+//         Ok(_) => (),
+//         Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
+//     }
+//
+//     // Emettre evenement d'instance supprimee
+//     let evenement_supprimee = json!({"instance_id": &instance_id});
+//     let routage = RoutageMessageAction::builder(DOMAIN_NAME, EVENEMENT_INSTANCE_SUPPRIMEE, vec![Securite::L3Protege])
+//         .build();
+//     middleware.emettre_evenement(routage, &evenement_supprimee).await?;
+//
+//     let reponse = middleware.reponse_ok(None, None)?;
+//     Ok(Some(reponse))
+// }
 
 // async fn transaction_set_fichiers_primaire<M>(middleware: &M, transaction: TransactionValide)
 //     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -320,34 +320,23 @@ async fn transaction_set_filehost_instance<M>(middleware: &M, transaction: Trans
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    // let escaped_contenu: String = serde_json::from_str(format!("\"{}\"", transaction.transaction.contenu).as_str())?;
     let transaction = match serde_json::from_str::<TransactionSetFilehostInstance>(transaction.transaction.contenu.as_str()) {
         Ok(t) => t,
-        Err(e) => Err(format!("transaction_set_consignation_instance Erreur convertir {:?}", e))?
+        Err(e) => Err(format!("transaction_set_filehost_instance Erreur convertir {:?}", e))?
     };
     debug!("transaction_set_consignation_instance Params : {:?}", transaction);
 
-    let filtre = doc! { CHAMP_INSTANCE_ID: &transaction.instance_id };
-    let set_ops = doc! {
-        "filehost_id": transaction.filehost_id.as_ref(),
-        "supprime": false,
-    };
+    let filtre = doc! { CHAMP_INSTANCE_ID: &transaction.instance_id, "name": "filehost_id" };
+    let set_ops = doc! {"value": transaction.filehost_id.as_ref()};
     let ops = doc! {
         "$set": set_ops,
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
-    let collection = middleware.get_collection(NOM_COLLECTION_INSTANCES)?;
-    if let Err(e) = collection.update_one(filtre, ops, None).await {
-        Err(format!("core_topologie.transaction_set_consignation_instance Erreur sauvegarde consignation_id : {:?}", e))?
+    let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_CONFIGURATION)?;
+    let options = UpdateOptions::builder().upsert(true).build();
+    if let Err(e) = collection.update_one(filtre, ops, options).await {
+        Err(format!("core_topologie.transaction_set_filehost_instance Erreur sauvegarde filehost_id : {:?}", e))?
     }
-
-    // Emettre evenement changement de consignation
-    let routage = RoutageMessageAction::builder(DOMAIN_NAME, EVENEMENT_MODIFICATION_CONSIGNATION, vec![Securite::L1Public])
-        .build();
-    let evenement = json!({
-        CHAMP_INSTANCE_ID: transaction.instance_id
-    });
-    middleware.emettre_evenement(routage, &evenement).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }

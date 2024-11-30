@@ -1,7 +1,7 @@
 pub const DOMAIN_NAME: &str = "CoreTopologie";
 pub const NOM_COLLECTION_DOMAINES: &str = "CoreTopologie/domaines";
-pub const NOM_COLLECTION_INSTANCES: &str = "CoreTopologie/instances";
-pub const NOM_COLLECTION_NOEUDS: &str = NOM_COLLECTION_INSTANCES;
+// pub const NOM_COLLECTION_INSTANCES: &str = "CoreTopologie/instances";
+// pub const NOM_COLLECTION_NOEUDS: &str = NOM_COLLECTION_INSTANCES;
 pub const NOM_COLLECTION_MILLEGRILLES: &str = "CoreTopologie/millegrilles";
 pub const NOM_COLLECTION_MILLEGRILLES_ADRESSES: &str = "CoreTopologie/millegrillesAdresses";
 // pub const NOM_COLLECTION_FICHIERS: &str = "CoreTopologie/fichiers";
@@ -16,6 +16,7 @@ pub const NOM_COLLECTION_FILEHOSTING_FUUIDS: &str = "CoreTopologie/filehostingFu
 pub const NOM_COLLECTION_FILEHOSTING_TRANSFERS: &str = "CoreTopologie/filehostingTransfers";
 
 pub const NOM_COLLECTION_INSTANCE_STATUS: &str = "CoreTopologie/instances/status";
+pub const NOM_COLLECTION_INSTANCE_CONFIGURATION: &str = "CoreTopologie/instances/configuration";
 pub const NOM_COLLECTION_INSTANCE_CONTAINERS: &str = "CoreTopologie/instances/containers";
 pub const NOM_COLLECTION_INSTANCE_SERVICES: &str = "CoreTopologie/instances/services";
 pub const NOM_COLLECTION_INSTANCE_WEBAPPS: &str = "CoreTopologie/instances/webapps";
@@ -49,6 +50,7 @@ pub const REQUETE_GET_FILEHOST_FOR_EXTERNAL: &str = "getFilehostForExternal";
 pub const REQUETE_GET_DOMAINS_BACKUP_VERSIONS: &str = "getDomainBackupVersions";
 pub const REQUEST_SERVER_INSTANCES: &str = "requestServerInstances";
 pub const REQUEST_SERVER_INSTANCE_APPLICATIONS: &str = "requestServerInstanceApplications";
+pub const REQUEST_SERVER_INSTANCE_CONFIGURATION: &str = "requestServerInstanceConfiguration";
 
 pub const TRANSACTION_DOMAINE: &str = "domaine";
 pub const TRANSACTION_INSTANCE: &str = "instance";

@@ -17,7 +17,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChi
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::reqwest::Url;
-use crate::topology_constants::{ADRESSE_NATURE_ONION, ADRESSE_PREFERENCE_SECONDAIRE, NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS, NOM_COLLECTION_INSTANCE_STATUS, NOM_COLLECTION_INSTANCE_WEBAPPS, NOM_COLLECTION_MILLEGRILLES, NOM_COLLECTION_MILLEGRILLES_ADRESSES, NOM_COLLECTION_NOEUDS, NOM_COLLECTION_TOKENS};
+use crate::topology_constants::*;
 use crate::topology_requests::InstanceWebappsRow;
 use crate::topology_structs::{ApplicationPublique, ApplicationsV2, FichePublique, InformationApplicationInstance, InformationInstance, InformationMonitor, JwtHebergement, ReponseRelaiWeb, ReponseUrlEtag, RequeteRelaiWeb, ServerInstanceStatus};
 
