@@ -48,6 +48,7 @@ pub const REQUETE_GET_FILECONTROLERS: &str = "getFilecontrolers";
 pub const REQUETE_GET_FILEHOST_FOR_EXTERNAL: &str = "getFilehostForExternal";
 pub const REQUETE_GET_DOMAINS_BACKUP_VERSIONS: &str = "getDomainBackupVersions";
 pub const REQUEST_SERVER_INSTANCES: &str = "requestServerInstances";
+pub const REQUEST_SERVER_INSTANCE_APPLICATIONS: &str = "requestServerInstanceApplications";
 
 pub const TRANSACTION_DOMAINE: &str = "domaine";
 pub const TRANSACTION_INSTANCE: &str = "instance";

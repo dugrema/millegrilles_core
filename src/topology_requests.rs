@@ -29,6 +29,7 @@ use millegrilles_common_rust::common_messages::FilehostForInstanceRequest;
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
+use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceContainer, PresenceInstanceWebApplication};
 use crate::topology_manager::TopologyManager;
 use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, ServerInstanceStatus, TransactionConfigurerConsignation, WebAppLink};
 
@@ -110,6 +111,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
                         REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, m).await,
                         REQUEST_SERVER_INSTANCES => request_server_instances(middleware, m).await,
+                        REQUEST_SERVER_INSTANCE_APPLICATIONS => request_server_instance_applications(middleware, m).await,
                         // REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, m).await,
                         // REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
                         REQUETE_GET_CLEID_BACKUP_DOMAINE => requete_get_cleid_backup_domaine(middleware, m).await,
@@ -1724,5 +1726,121 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     let response = RequeteConfigurationFilehostsResponse { ok: true, configuration };
+    Ok(Some(middleware.build_reponse(response)?.0))
+}
+
+#[derive(Deserialize)]
+struct RequestServerInstanceApplications {instance_id: String}
+
+#[derive(Serialize)]
+struct RequestServiceInstanceApplicationsResponse {
+    ok: bool,
+    instance_id: String,
+    containers: HashMap<String, PresenceInstanceContainerRow>,
+    services: HashMap<String, PresenceInstanceServiceRow>,
+    webapps: Vec<PresenceInstanceWebApplication>,
+    configured_applications: Vec<PresenceInstanceConfiguredApplications>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PresenceInstanceContainerRow {
+    instance_id: String,
+    service_name: String,
+    creation: String,
+    dead: Option<bool>,
+    etat: Option<String>,
+    finished_at: Option<String>,
+    labels: HashMap<String, String>,
+    restart_count: u32,
+    running: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+struct PresenceInstanceServiceRow {
+    instance_id: String,
+    service_name: String,
+    creation_service: String,
+    etat: Option<String>,
+    image: String,
+    labels: HashMap<String, String>,
+    maj_service: Option<String>,
+    message_tache: Option<String>,
+    replicas: Option<u32>,
+    version: Option<String>
+}
+
+async fn request_server_instance_applications<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    if message.certificat.verifier_exchanges(vec!(Securite::L3Protege))? {
+        // Ok
+    } else if message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        // Ok
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access refused"))?))
+    }
+
+    let request: RequestServerInstanceApplications = deser_message_buffer!(message.message);
+
+    let configured_applications = {
+        let filtre = doc!{"instance_id": &request.instance_id};
+        let collection =
+            middleware.get_collection_typed::<PresenceInstanceConfiguredApplications>(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS)?;
+        let mut configured_applications = Vec::new();
+        let mut cursor = collection.find(filtre, None).await?;
+        while cursor.advance().await? {
+            configured_applications.push(cursor.deserialize_current()?);
+        }
+        configured_applications
+    };
+
+    let services = {
+        let filtre = doc!{"instance_id": &request.instance_id};
+        let collection =
+            middleware.get_collection_typed::<PresenceInstanceServiceRow>(NOM_COLLECTION_INSTANCE_SERVICES)?;
+        let mut services = HashMap::new();
+        let mut cursor = collection.find(filtre, None).await?;
+        while cursor.advance().await? {
+            let row = cursor.deserialize_current()?;
+            services.insert(row.service_name.clone(), row);
+        }
+        services
+    };
+
+    let containers = {
+        let filtre = doc!{"instance_id": &request.instance_id};
+        let collection =
+            middleware.get_collection_typed::<PresenceInstanceContainerRow>(NOM_COLLECTION_INSTANCE_CONTAINERS)?;
+        let mut containers = HashMap::new();
+        let mut cursor = collection.find(filtre, None).await?;
+        while cursor.advance().await? {
+            let row = cursor.deserialize_current()?;
+            containers.insert(row.service_name.clone(), row);
+        }
+        containers
+    };
+
+    let webapps = {
+        let filtre = doc!{"instance_id": &request.instance_id};
+        let collection =
+            middleware.get_collection_typed::<PresenceInstanceWebApplication>(NOM_COLLECTION_INSTANCE_WEBAPPS)?;
+        let mut webapps = Vec::new();
+        let mut cursor = collection.find(filtre, None).await?;
+        while cursor.advance().await? {
+            let row = cursor.deserialize_current()?;
+            webapps.push(row);
+        }
+        webapps
+    };
+
+    let response = RequestServiceInstanceApplicationsResponse {
+        ok: true,
+        instance_id: request.instance_id,
+        containers,
+        services,
+        webapps,
+        configured_applications,
+    };
     Ok(Some(middleware.build_reponse(response)?.0))
 }

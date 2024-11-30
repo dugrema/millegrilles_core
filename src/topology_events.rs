@@ -541,14 +541,14 @@ async fn process_presence_instance<M>(middleware: &M, message: MessageValide)
 }
 
 #[derive(Serialize, Deserialize)]
-struct PresenceInstanceContainer {
-    creation: String,
-    dead: Option<bool>,
-    etat: Option<String>,
-    finished_at: Option<String>,
-    labels: HashMap<String, String>,
-    restart_count: u32,
-    running: bool,
+pub struct PresenceInstanceContainer {
+    pub creation: String,
+    pub dead: Option<bool>,
+    pub etat: Option<String>,
+    pub finished_at: Option<String>,
+    pub labels: HashMap<String, String>,
+    pub restart_count: u32,
+    pub running: bool,
 }
 
 impl PresenceInstanceContainer {
@@ -574,17 +574,17 @@ struct PresenceInstanceService {
 }
 
 #[derive(Serialize, Deserialize)]
-struct PresenceInstanceWebApplication {
-    labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
-    name: String,
-    securite: String,
-    url: Option<String>,
+pub struct PresenceInstanceWebApplication {
+    pub labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
+    pub name: String,
+    pub securite: String,
+    pub url: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct PresenceInstanceConfiguredApplications {
-    name: String,
-    version: Option<String>,
+pub struct PresenceInstanceConfiguredApplications {
+    pub name: String,
+    pub version: Option<String>,
 }
 
 #[derive(Deserialize)]

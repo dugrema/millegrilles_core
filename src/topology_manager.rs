@@ -106,6 +106,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
     let requetes_protegees = vec![
         REQUETE_LISTE_DOMAINES,
         REQUEST_SERVER_INSTANCES,
+        REQUEST_SERVER_INSTANCE_APPLICATIONS,
         REQUETE_CONFIGURATION_FICHIERS,
         REQUETE_GET_CLEID_BACKUP_DOMAINE,
         REQUETE_CONFIGURATION_FILEHOSTS,
