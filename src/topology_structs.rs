@@ -153,7 +153,7 @@ pub struct ApplicationConfiguree {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WebAppLink {
     pub name: String,
-    pub labels: HashMap<String, Value>,
+    pub labels: Option<HashMap<String, Value>>,
     pub securite: String,
     pub url: String,
 }
