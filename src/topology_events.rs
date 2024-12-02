@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use log::{debug, info, warn};
+use log::kv::Source;
 use millegrilles_common_rust::bson::{doc, Bson, Array, DateTime};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
@@ -549,19 +550,21 @@ pub struct PresenceInstanceContainer {
     pub dead: Option<bool>,
     pub etat: Option<String>,
     pub finished_at: Option<String>,
-    pub labels: HashMap<String, String>,
+    pub labels: Option<HashMap<String, String>>,
     pub restart_count: u32,
     pub running: bool,
 }
 
 impl PresenceInstanceContainer {
     fn service_name(&self) -> Option<&str> {
-        match self.labels.get("com.docker.swarm.service.name") {
-            Some(name) => Some(name.as_str()),
+        match &self.labels {
+            Some(inner) => match inner.get("com.docker.swarm.service.name") {
+                Some(name) => Some(name.as_str()),
+                None => None
+            },
             None => None
         }
     }
-
 }
 
 #[derive(Serialize, Deserialize)]
@@ -569,7 +572,7 @@ struct PresenceInstanceService {
     creation_service: String,
     etat: Option<String>,
     image: String,
-    labels: HashMap<String, String>,
+    labels: Option<HashMap<String, String>>,
     maj_service: Option<String>,
     message_tache: Option<String>,
     replicas: Option<u32>,
