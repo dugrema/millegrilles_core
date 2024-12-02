@@ -664,9 +664,11 @@ async fn process_presence_instance_applications<M>(middleware: &M, message: Mess
     {
         let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_WEBAPPS)?;
         let mut names = Vec::new();
+        let mut urls = Vec::new();
         for webapp in event.webapps {
             names.push(webapp.name.clone());
-            let filtre = doc!{"instance_id": &instance_id, "app_name": &webapp.name};
+            urls.push(webapp.url.clone());
+            let filtre = doc!{"instance_id": &instance_id, "app_name": &webapp.name, "url": &webapp.url};
             let mut set_ops = convertir_to_bson(webapp)?;
             set_ops.insert("timestamp", timestamp);
             let ops = doc! {
@@ -679,7 +681,7 @@ async fn process_presence_instance_applications<M>(middleware: &M, message: Mess
         }
 
         if event.complete {
-            let filtre = doc!{"instance_id": &instance_id, "app_name": {"$not": {"$in": names}}};
+            let filtre = doc!{"instance_id": &instance_id, "app_name": {"$not": {"$in": names}}, "url": {"$not": {"$in": urls}}};
             collection.delete_many(filtre, None).await?;
         }
     }

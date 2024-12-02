@@ -309,6 +309,7 @@ where M: MongoDao + ConfigMessages
     let champs_index_server_webapps = vec!(
         ChampIndex { nom_champ: String::from("instance_id"), direction: 1 },
         ChampIndex { nom_champ: String::from("app_name"), direction: 1 },
+        ChampIndex { nom_champ: String::from("url"), direction: 1 },
     );
     middleware.create_index(
         middleware,
