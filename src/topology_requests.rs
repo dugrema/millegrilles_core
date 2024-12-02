@@ -1747,7 +1747,7 @@ struct PresenceInstanceContainerRow {
     dead: Option<bool>,
     etat: Option<String>,
     finished_at: Option<String>,
-    labels: HashMap<String, String>,
+    labels: Option<HashMap<String, String>>,
     restart_count: u32,
     running: bool,
 }
@@ -1759,7 +1759,7 @@ struct PresenceInstanceServiceRow {
     creation_service: String,
     etat: Option<String>,
     image: String,
-    labels: HashMap<String, String>,
+    labels: Option<HashMap<String, String>>,
     maj_service: Option<String>,
     message_tache: Option<String>,
     replicas: Option<u32>,
