@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use log::{debug, info};
+use log::{debug, info, warn};
 use millegrilles_common_rust::bson::{doc, Bson, Array, DateTime};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
@@ -353,9 +353,12 @@ async fn traiter_evenement_filehost_usage<M>(middleware: &M, m: MessageValide)
         },
         "$currentDate": {"modified": true}
     };
-    let options = UpdateOptions::builder().upsert(true).build();
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
-    collection.update_one(filtre, ops, Some(options)).await?;
+    let result = collection.update_one(filtre, ops, None).await?;
+
+    if result.matched_count == 0 {
+        warn!("traiter_evenement_filehost_usage Received event for unknown filehost_id {}", commande.filehost_id);
+    }
 
     Ok(None)
 }
