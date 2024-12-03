@@ -506,6 +506,8 @@ struct ReponseApplicationDeployee {
     #[serde(skip_serializing_if = "Option::is_none")]
     supporte_usagers: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    users: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     labels: Option<HashMap<String, HashMap<String, String>>>,
 }
 
@@ -633,7 +635,7 @@ pub struct InstanceWebappsRow {
     pub url: Option<String>,
     pub onion: Option<String>,
     pub name_property: Option<String>,
-    pub supporte_usagers: Option<bool>,
+    pub users: Option<bool>,
     pub labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
 }
 
@@ -750,7 +752,8 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             url: row.url.clone(),
             onion: None,  // onion.to_owned(),
             name_property: Some(row.app_name.clone()),
-            supporte_usagers: Some(true),
+            supporte_usagers: row.users,
+            users: None,
             labels: row.labels,
         };
 

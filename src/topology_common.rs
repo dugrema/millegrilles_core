@@ -628,7 +628,7 @@ where M: MongoDao + ValidateurX509 + CleChiffrageHandler
             };
 
             // V2
-            let label = if Some(false) != row.supporte_usagers {
+            let label = if Some(false) != row.users {
                 let mut label = HashMap::new();
                 label.insert("fr".to_string(), row.app_name.clone());
                 Some(label)

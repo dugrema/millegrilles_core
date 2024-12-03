@@ -585,6 +585,7 @@ pub struct PresenceInstanceWebApplication {
     pub name: String,
     pub securite: String,
     pub url: Option<String>,
+    pub users: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
