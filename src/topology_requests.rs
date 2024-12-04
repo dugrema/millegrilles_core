@@ -27,11 +27,12 @@ use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_v2;
 use millegrilles_common_rust::common_messages::FilehostForInstanceRequest;
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
+use crate::topology_commands::FuuidVisitResponseItem;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceContainer, PresenceInstanceWebApplication};
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, ServerInstanceConfigurationRow, ServerInstanceStatus, TransactionConfigurerConsignation, WebAppLink};
+use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, TransactionConfigurerConsignation, WebAppLink};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -113,6 +114,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         REQUEST_SERVER_INSTANCES => request_server_instances(middleware, m).await,
                         REQUEST_SERVER_INSTANCE_APPLICATIONS => request_server_instance_applications(middleware, m).await,
                         REQUEST_SERVER_INSTANCE_CONFIGURATION => request_server_instance_configuration(middleware, m).await,
+                        REQUEST_FILEHOSTS_FOR_FUUIDS => request_filehosts_for_fuuids(middleware, m).await,
                         // REQUETE_CONFIGURATION_FICHIERS => requete_configuration_fichiers(middleware, m).await,
                         // REQUETE_GET_CLE_CONFIGURATION => requete_get_cle_configuration(middleware, m).await,
                         REQUETE_GET_CLEID_BACKUP_DOMAINE => requete_get_cleid_backup_domaine(middleware, m).await,
@@ -1886,5 +1888,40 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         configuration: configuration_items
     };
 
+    Ok(Some(middleware.build_reponse(response)?.0))
+}
+
+#[derive(Deserialize)]
+struct RequestFilehostsForFuuids {fuuids: Vec<String>}
+
+#[derive(Serialize)]
+struct RequestFilehostsForFuuidsResponse {fuuids: Vec<FuuidVisitResponseItem>}
+
+async fn request_filehosts_for_fuuids<M>(middleware: &M, message: MessageValide)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    if message.certificat.verifier_exchanges(vec!(Securite::L3Protege))? {
+        // Ok
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access refused"))?))
+    }
+
+    let request: RequestFilehostsForFuuids = deser_message_buffer!(message.message);
+
+    let collection =
+        middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+    let filtre = doc!{"fuuid": {"$in": &request.fuuids}};
+    let mut cursor = collection.find(filtre, None).await?;
+    let mut response_list = Vec::new();
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        if row.filehost.is_some() {
+            let result: FuuidVisitResponseItem = row.into();
+            response_list.push(result);
+        }
+    }
+
+    let response = RequestFilehostsForFuuidsResponse { fuuids: response_list };
     Ok(Some(middleware.build_reponse(response)?.0))
 }

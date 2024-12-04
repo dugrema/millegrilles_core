@@ -910,9 +910,9 @@ struct RequeteGetVisitesFuuids {
 // }
 
 #[derive(Serialize)]
-struct FuuidVisitResponseItem {
-    fuuid: String,
-    visits: HashMap<String, i64>
+pub struct FuuidVisitResponseItem {
+    pub fuuid: String,
+    pub visits: HashMap<String, i64>
 }
 
 impl From<RowFilehostFuuid> for FuuidVisitResponseItem {

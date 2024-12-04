@@ -110,6 +110,7 @@ pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
         REQUETE_CONFIGURATION_FICHIERS,
         REQUETE_GET_CLEID_BACKUP_DOMAINE,
         REQUETE_CONFIGURATION_FILEHOSTS,
+        REQUEST_FILEHOSTS_FOR_FUUIDS,
     ];
     for req in requetes_protegees {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, req), exchange: Securite::L3Protege });
