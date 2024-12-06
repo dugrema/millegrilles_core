@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::error::Error;
 use std::sync::Arc;
 
-use log::{debug, warn, error};
+use log::{debug, warn, error, info};
 use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::{BackupStarter, CommandeBackup};
 use millegrilles_common_rust::bson::{doc, Document};
@@ -25,7 +25,7 @@ use millegrilles_common_rust::notifications::NotificationMessageInterne;
 use millegrilles_common_rust::openssl::x509::store::X509Store;
 use millegrilles_common_rust::openssl::x509::X509;
 use millegrilles_common_rust::rabbitmq_dao::{NamedQueue, TypeMessageOut};
-use millegrilles_common_rust::recepteur_messages::TypeMessage;
+use millegrilles_common_rust::recepteur_messages::{ErreurVerification, TypeMessage};
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio::sync::{mpsc, Notify};
@@ -430,7 +430,7 @@ impl ValidateurX509 for ValidateurX509Database {
 }
 
 async fn synchroniser_certificats<M>(validateur: &ValidateurX509Database, redis: &RedisDao, mongo_dao: &M)
-    -> Result<(), Box<dyn Error>>
+    -> Result<(), CommonError>
     where M: MongoDao
 {
     let liste = match redis.liste_certificats_fingerprints().await {
@@ -466,15 +466,33 @@ async fn synchroniser_certificats<M>(validateur: &ValidateurX509Database, redis:
             fingerprint_set.remove(row_fingerprint.fingerprint.as_str());
         }
 
-        debug!("Certificats manquants : {:?}", fingerprint_set);
+        debug!("Missing certificates : {:?}", fingerprint_set);
         for fingerprint in fingerprint_set.into_iter() {
             match validateur.get_certificat(fingerprint).await {
                 Some(certificat) => {
-                    debug!("Certificat charge : {:?}", certificat);
+                    debug!("synchroniser_certificats Certificate loaded from CorePki : {:?}", certificat);
                 },
-                None => panic!("Certificat manquant est present dans redis mais non charge")
+                None => {
+                    debug!("synchroniser_certificats A certificate not in CorePki found in redis - attempting to recover and save in CorePki");
+                    let (pems, ca) = if let Ok(Some(certificate)) = redis.get_certificat(fingerprint).await {
+                        (certificate.pems, certificate.ca)
+                    } else {
+                        panic!("synchroniser_certificats Unable to load a certificate from redis that is missing in the CorePki database");
+                    };
+                    let ca = match ca.as_ref() {Some(inner)=>Some(inner.as_str()), None=>None};
+                    match validateur.charger_enveloppe(&pems, None, ca).await {
+                        Ok(enveloppe) => {
+                            info!("synchroniser_certificats Certificate {} recovered from redis and saved in CorePki", enveloppe.fingerprint()?);
+                        },
+                        Err(CommonError::ErreurVerification(ErreurVerification::CertificatCaManquant(idmg))) => {
+                            debug!("Third party certificate (idmg: {}) in redis is missing its CA certificate - ignoring", idmg);
+                        },
+                        Err(e) => {
+                            panic!("synchroniser_certificats Unable to save a certificate from redis to CorePki\nCertificate: {:?}\nException: {:?}", pems, e);
+                        }
+                    }
+                }
             }
-
         }
     };
 
