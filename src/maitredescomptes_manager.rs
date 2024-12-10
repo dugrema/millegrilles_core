@@ -6,7 +6,7 @@ use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::constantes::{Securite, BACKUP_CHAMP_BACKUP_TRANSACTIONS, TRANSACTION_CHAMP_BACKUP_FLAG, TRANSACTION_CHAMP_COMPLETE, TRANSACTION_CHAMP_EVENEMENT_COMPLETE, TRANSACTION_CHAMP_ID, TRANSACTION_CHAMP_TRANSACTION_TRAITEE};
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::domaines_traits::{AiguillageTransactions, ConsommateurMessagesBus, GestionnaireBusMillegrilles, GestionnaireDomaineV2};
-use millegrilles_common_rust::domaines_v2::GestionnaireDomaineSimple;
+use millegrilles_common_rust::domaines_v2::{prepare_mongodb_domain_indexes, GestionnaireDomaineSimple};
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
@@ -91,6 +91,18 @@ impl GestionnaireDomaineSimple for MaitreDesComptesManager {
     where
         M: MiddlewareMessages + BackupStarter + MongoDao
     {
+        Ok(())
+    }
+
+    async fn preparer_database_mongodb<M>(&self, middleware: &M) -> Result<(), CommonError>
+    where
+        M: MongoDao + ConfigMessages
+    {
+        // Handle transaction collection init being overridden
+        if let Some(collection_name) = self.get_collection_transactions() {
+            prepare_mongodb_domain_indexes(middleware, collection_name).await?;
+        }
+        preparer_index_mongodb(middleware).await?;  // Specialised indexes for domain collections
         Ok(())
     }
 }

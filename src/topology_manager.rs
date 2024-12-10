@@ -11,7 +11,7 @@ use millegrilles_common_rust::configuration::ConfigMessages;
 use millegrilles_common_rust::constantes::{Securite, BACKUP_EVENEMENT_MAJ, EVENEMENT_PRESENCE_DOMAINE, REQUETE_GET_FILEHOST_FOR_INSTANCE, TRANSACTION_CHAMP_IDMG};
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::domaines_traits::{AiguillageTransactions, ConsommateurMessagesBus, GestionnaireBusMillegrilles, GestionnaireDomaineV2};
-use millegrilles_common_rust::domaines_v2::GestionnaireDomaineSimple;
+use millegrilles_common_rust::domaines_v2::{prepare_mongodb_domain_indexes, GestionnaireDomaineSimple};
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
@@ -20,6 +20,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::Mess
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
 use millegrilles_common_rust::recepteur_messages::MessageValide;
+use crate::maitredescomptes_manager::preparer_index_mongodb;
 
 pub struct TopologyManager {}
 
@@ -96,6 +97,17 @@ impl GestionnaireDomaineSimple for TopologyManager {
         traiter_cedule(middleware, trigger).await
     }
 
+    async fn preparer_database_mongodb<M>(&self, middleware: &M) -> Result<(), CommonError>
+    where
+        M: MongoDao + ConfigMessages
+    {
+        // Handle transaction collection init being overridden
+        if let Some(collection_name) = self.get_collection_transactions() {
+            prepare_mongodb_domain_indexes(middleware, collection_name).await?;
+        }
+        preparer_index_mongodb(middleware).await?;  // Specialised indexes for domain collections
+        Ok(())
+    }
 }
 
 pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
