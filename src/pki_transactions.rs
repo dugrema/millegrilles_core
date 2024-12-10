@@ -35,7 +35,7 @@ where
     };
 
     match action.as_str() {
-        PKI_COMMANDE_SAUVEGARDER_CERTIFICAT => sauvegarder_certificat(middleware, transaction).await,
+        PKI_COMMANDE_NOUVEAU_CERTIFICAT | PKI_COMMANDE_SAUVEGARDER_CERTIFICAT => sauvegarder_certificat(middleware, transaction).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
