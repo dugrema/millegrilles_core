@@ -7,8 +7,8 @@ use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, EmetteurNotificationsTrait};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
-use millegrilles_common_rust::mongo_dao::MongoDao;
-
+use millegrilles_common_rust::mongo_dao::{start_transaction_regular, MongoDao};
+use millegrilles_common_rust::mongodb::ClientSession;
 use crate::pki_constants::*;
 use crate::pki_manager::PkiManager;
 use crate::pki_structs::CorePkiCollectionRow;
@@ -16,7 +16,7 @@ use crate::pki_transactions::TransactionCertificat;
 use crate::topology_events::produire_fiche_publique;
 
 pub async fn traiter_cedule_pki<M>(middleware: &M, gestionnaire: &PkiManager, trigger: &MessageCedule) -> Result<(), millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler + EmetteurNotificationsTrait
+where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
     let date_epoch = trigger.get_date();
     debug!("Traiter cedule {}\n{:?}", DOMAIN_NAME, date_epoch);
@@ -40,6 +40,28 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler + 
 }
 
 async fn sauvegarder_certificats_dirty<M>(middleware: &M, gestionnaire: &PkiManager) -> Result<(), millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let mut session = middleware.get_session().await?;
+    start_transaction_regular(&mut session).await?;
+
+    let result = sauvegarder_certificats_dirty_session(middleware, gestionnaire, &mut session).await;
+
+    match result {
+        Ok(result) => {
+            session.commit_transaction().await?;
+            Ok(result)
+        }
+        Err(e) => {
+            session.abort_transaction().await?;
+            Err(e)
+        }
+    }
+
+}
+
+async fn sauvegarder_certificats_dirty_session<M>(middleware: &M, gestionnaire: &PkiManager, session: &mut ClientSession)
+    -> Result<(), millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     debug!("sauvegarder_certificats_dirty");
@@ -50,7 +72,7 @@ async fn sauvegarder_certificats_dirty<M>(middleware: &M, gestionnaire: &PkiMana
         let row = cursor.deserialize_current()?;
         let transaction: TransactionCertificat = row.into();
         sauvegarder_traiter_transaction_serializable_v2(
-            middleware, &transaction, gestionnaire, DOMAINE_PKI, PKI_COMMANDE_SAUVEGARDER_CERTIFICAT).await?;
+            middleware, &transaction, gestionnaire, session, DOMAINE_PKI, PKI_COMMANDE_SAUVEGARDER_CERTIFICAT).await?;
     }
     Ok(())
 }

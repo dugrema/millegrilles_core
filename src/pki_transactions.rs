@@ -6,13 +6,14 @@ use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::upsert_certificat;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::MongoDao;
+use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::serde_json;
 use serde::{Deserialize, Serialize};
 
 use crate::pki_constants::*;
 use crate::pki_structs::CorePkiCollectionRow;
 
-pub async fn aiguillage_transaction_pki<M, T>(middleware: &M, transaction: T)
+pub async fn aiguillage_transaction_pki<M, T>(middleware: &M, transaction: T, session: &mut ClientSession)
                                               -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -35,7 +36,7 @@ where
     };
 
     match action.as_str() {
-        PKI_COMMANDE_NOUVEAU_CERTIFICAT | PKI_COMMANDE_SAUVEGARDER_CERTIFICAT => sauvegarder_certificat(middleware, transaction).await,
+        PKI_COMMANDE_NOUVEAU_CERTIFICAT | PKI_COMMANDE_SAUVEGARDER_CERTIFICAT => sauvegarder_certificat(middleware, transaction, session).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
@@ -55,7 +56,7 @@ impl From<CorePkiCollectionRow> for TransactionCertificat {
     }
 }
 
-async fn sauvegarder_certificat<M>(middleware: &M, transaction: TransactionValide)
+async fn sauvegarder_certificat<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                                    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {

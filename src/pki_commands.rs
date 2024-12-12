@@ -7,7 +7,8 @@ use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATIO
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::Middleware;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
-use millegrilles_common_rust::mongo_dao::MongoDao;
+use millegrilles_common_rust::mongo_dao::{start_transaction_regular, MongoDao};
+use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::reqwest;
@@ -43,18 +44,32 @@ where M: Middleware
         },
     }?;
 
-    match action.as_str() {
+    let mut session = middleware.get_session().await?;
+    start_transaction_regular(&mut session).await?;
+
+    let result = match action.as_str() {
         // Commandes standard
         // COMMANDE_BACKUP_HORAIRE => backup(middleware.as_ref(), DOMAINE_NOM, NOM_COLLECTION_TRANSACTIONS, true).await,
         // COMMANDE_RESTAURER_TRANSACTIONS => restaurer_transactions(middleware.clone()).await,
         // COMMANDE_RESET_BACKUP => reset_backup_flag(middleware.as_ref(), NOM_COLLECTION_TRANSACTIONS).await,
 
         // Commandes specifiques au domaine
-        PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware, m).await,
+        PKI_COMMANDE_SAUVEGARDER_CERTIFICAT | PKI_COMMANDE_NOUVEAU_CERTIFICAT => traiter_commande_sauvegarder_certificat(middleware, m, &mut session).await,
         PKI_COMMANDE_SIGNER_CSR => commande_signer_csr(middleware, m).await,
 
         // Commandes inconnues
         _ => Err(format!("Commande Pki inconnue : {}, message dropped", action))?,
+    };
+
+    match result {
+        Ok(result) => {
+            session.commit_transaction().await?;
+            Ok(result)
+        }
+        Err(e) => {
+            session.abort_transaction().await?;
+            Err(e)
+        }
     }
 }
 
@@ -64,9 +79,9 @@ struct CommandeSauvegarderCertificat {
     ca: Option<String>
 }
 
-pub async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValide)
-                                                    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
+pub async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
     let domaine = match &m.type_message {
         TypeMessageOut::Evenement(r) |

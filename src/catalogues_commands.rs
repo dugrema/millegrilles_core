@@ -5,7 +5,8 @@ use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIET
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_v2, Middleware};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
-use millegrilles_common_rust::mongo_dao::MongoDao;
+use millegrilles_common_rust::mongo_dao::{start_transaction_regular, MongoDao};
+use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use serde::Deserialize;
@@ -18,6 +19,9 @@ pub async fn consommer_commande_catalogues<M>(middleware: &M, m: MessageValide, 
 where M: Middleware
 {
     debug!("Consommer commande : {:?}", &m.type_message);
+
+    let mut session = middleware.get_session().await?;
+    start_transaction_regular(&mut session).await?;
 
     // Autorisation : doit etre de niveau 3.protege ou 4.secure
     match m.certificat.verifier_exchanges(vec!(Securite::L3Protege, Securite::L4Secure))? {
@@ -37,10 +41,21 @@ where M: Middleware
         _ => Err(format!("consommer_commande Mauvais type de de message"))?
     };
 
-    match action.as_str() {
+    let result = match action.as_str() {
         // Commandes standard
-        TRANSACTION_APPLICATION => traiter_commande_application(middleware, m, gestionnaire).await,
+        TRANSACTION_APPLICATION => traiter_commande_application(middleware, m, gestionnaire, &mut session).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
+    };
+
+    match result {
+        Ok(result) => {
+            session.commit_transaction().await?;
+            Ok(result)
+        }
+        Err(e) => {
+            session.abort_transaction().await?;
+            Err(e)
+        }
     }
 }
 
@@ -51,7 +66,7 @@ struct CatalogueApplication {
     version: String,
 }
 
-pub async fn traiter_commande_application<M>(middleware: &M, commande: MessageValide, gestionnaire: &CataloguesManager)
+pub async fn traiter_commande_application<M>(middleware: &M, commande: MessageValide, gestionnaire: &CataloguesManager, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + MongoDao + GenerateurMessages
 {
@@ -78,7 +93,7 @@ pub async fn traiter_commande_application<M>(middleware: &M, commande: MessageVa
         CHAMP_VERSION: version,
     };
 
-    let doc_catalogue = collection_catalogues.find_one(filtre, None).await?;
+    let doc_catalogue = collection_catalogues.find_one_with_session(filtre, None, session).await?;
     if doc_catalogue.is_some() {
         debug!("traiter_commande_application Catalogue {} version {} deja dans DB, skip.", info_catalogue.nom, info_catalogue.version);
         return Ok(None)
@@ -105,7 +120,7 @@ pub async fn traiter_commande_application<M>(middleware: &M, commande: MessageVa
             debug!("traiter_commande_application Catalogue accepte - certificat valide : {}/{}",
                 &info_catalogue.nom, &info_catalogue.version);
             // Conserver la transaction et la traiter immediatement
-            sauvegarder_traiter_transaction_v2(middleware, commande, gestionnaire).await?;
+            sauvegarder_traiter_transaction_v2(middleware, commande, gestionnaire, session).await?;
         },
         Err(e) => {
             error!("traiter_commande_application Catalogue rejete - certificat invalide : {}/{} : {:?}", &info_catalogue.nom, &info_catalogue.version, e);

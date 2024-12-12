@@ -12,7 +12,7 @@ use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_serial
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
-use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, MongoDao};
+use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, start_transaction_regular, MongoDao};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOptions, UpdateOptions};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
@@ -24,6 +24,7 @@ use crate::topology_manager::TopologyManager;
 use crate::topology_constants::*;
 use crate::topology_structs::{EventFilehostUsage, EventNewFuuid, PresenceDomaine, PresenceMonitor, RowFilehostFuuid, RowFilehostId, RowFuuid, TransactionSetFichiersPrimaire};
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
+use millegrilles_common_rust::mongodb::ClientSession;
 use crate::topology_maintenance::emit_filehost_transfersupdated_event;
 
 pub async fn consommer_evenement_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
@@ -49,7 +50,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
         false => Err(format!("Evenement autorisation invalide (pas exchange autorise)")),
     }?;
 
-    match action.as_str() {
+    let mut session = middleware.get_session().await?;
+    start_transaction_regular(&mut session).await?;
+
+    let result = match action.as_str() {
         EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m, gestionnaire).await,
         // EVENEMENT_PRESENCE_MONITOR | EVENEMENT_PRESENCE_FICHIERS => {
         //     match domaine.as_str() {
@@ -58,13 +62,24 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
         //         _ => Err(format!("Mauvais domaine ({}) pour un evenement de presence", domaine))?,
         //     }
         // },
-        EVENEMENT_PRESENCE_INSTANCE => process_presence_instance(middleware, m).await,
-        EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS => process_presence_instance_applications(middleware, m).await,
+        EVENEMENT_PRESENCE_INSTANCE => process_presence_instance(middleware, m, &mut session).await,
+        EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS => process_presence_instance_applications(middleware, m, &mut session).await,
         EVENEMENT_APPLICATION_DEMARREE | EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
-        EVENEMENT_FILEHOST_USAGE => traiter_evenement_filehost_usage(middleware, m).await,
-        EVENEMENT_FILEHOST_NEWFUUID => traiter_evenement_filehost_newfuuid(middleware, m).await,
-        BACKUP_EVENEMENT_MAJ => traiter_evenement_backup_maj(middleware, m).await,
+        EVENEMENT_FILEHOST_USAGE => traiter_evenement_filehost_usage(middleware, m, &mut session).await,
+        EVENEMENT_FILEHOST_NEWFUUID => traiter_evenement_filehost_newfuuid(middleware, m, &mut session).await,
+        BACKUP_EVENEMENT_MAJ => traiter_evenement_backup_maj(middleware, m, &mut session).await,
         _ => Err(format!("Mauvais type d'action pour un evenement : {}", action))?,
+    };
+
+    match result {
+        Ok(result) => {
+            session.commit_transaction().await?;
+            Ok(result)
+        }
+        Err(e) => {
+            session.abort_transaction().await?;
+            Err(e)
+        }
     }
 }
 
@@ -186,7 +201,7 @@ struct PresenceFichiers {
 //     let options = UpdateOptions::builder()
 //         .upsert(true)
 //         .build();
-//     let resultat = collection.update_one(filtre, ops, options).await?;
+//     let resultat = collection.update_one_with_session(filtre, ops, options).await?;
 //     debug!("traiter_presence_fichiers Resultat update : {:?}", resultat);
 //
 //     // Verifier si on a un primaire - sinon generer transaction pour set primaire par defaut
@@ -296,7 +311,7 @@ struct PresenceFichiers {
 //         // Reset le flag dirty pour eviter multiple transactions sur le meme domaine
 //         let filtre = doc! {"instance_id": &event.instance_id};
 //         let ops = doc! {"$set": {"dirty": false}};
-//         let _ = collection.update_one(filtre, ops, None).await?;
+//         let _ = collection.update_one_with_session(filtre, ops, None).await?;
 //     }
 //
 //     Ok(None)
@@ -332,7 +347,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
     Ok(None)
 }
 
-async fn traiter_evenement_filehost_usage<M>(middleware: &M, m: MessageValide)
+async fn traiter_evenement_filehost_usage<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
@@ -355,7 +370,7 @@ async fn traiter_evenement_filehost_usage<M>(middleware: &M, m: MessageValide)
         "$currentDate": {"modified": true}
     };
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
-    let result = collection.update_one(filtre, ops, None).await?;
+    let result = collection.update_one_with_session(filtre, ops, None, session).await?;
 
     if result.matched_count == 0 {
         warn!("traiter_evenement_filehost_usage Received event for unknown filehost_id {}", commande.filehost_id);
@@ -364,7 +379,7 @@ async fn traiter_evenement_filehost_usage<M>(middleware: &M, m: MessageValide)
     Ok(None)
 }
 
-async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide)
+async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: GenerateurMessages + MongoDao
 {
@@ -388,20 +403,20 @@ async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide
         }
     };
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
-    collection.update_one(filtre, ops, Some(options)).await?;
+    collection.update_one_with_session(filtre, ops, Some(options), session).await?;
 
-    process_transfers(middleware, commande.filehost_id.as_str(), commande.fuuid.as_str()).await?;
+    process_transfers(middleware, commande.filehost_id.as_str(), commande.fuuid.as_str(), session).await?;
 
     Ok(None)
 }
 
-async fn process_transfers<M>(middleware: &M, filehost_id: &str, fuuid: &str) -> Result<(), millegrilles_common_rust::error::Error>
+async fn process_transfers<M>(middleware: &M, filehost_id: &str, fuuid: &str, session: &mut ClientSession) -> Result<(), millegrilles_common_rust::error::Error>
     where M: GenerateurMessages + MongoDao
 {
     // Supprimer le transfert vers ce filehost (si applicable)
     let filtre_transfer = doc!{"fuuid": fuuid, "destination_filehost_id": filehost_id};
     let collection_transfers = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_TRANSFERS)?;
-    collection_transfers.delete_one(filtre_transfer, None).await?;
+    collection_transfers.delete_one_with_session(filtre_transfer, None, session).await?;
 
     // Creer les transferts vers filehosts sans ce fuuid
 
@@ -436,7 +451,7 @@ async fn process_transfers<M>(middleware: &M, filehost_id: &str, fuuid: &str) ->
                     "destination_filehost_id": &missing_from_filehost_id,
                     "fuuid": &row.fuuid,
                 };
-                collection_transfers.update_one(filtre, ops.clone(), options.clone()).await?;
+                collection_transfers.update_one_with_session(filtre, ops.clone(), options.clone(), session).await?;
             }
         }
     }
@@ -446,7 +461,7 @@ async fn process_transfers<M>(middleware: &M, filehost_id: &str, fuuid: &str) ->
     Ok(())
 }
 
-async fn traiter_evenement_backup_maj<M>(middleware: &M, m: MessageValide)
+async fn traiter_evenement_backup_maj<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: MongoDao
 {
@@ -475,7 +490,7 @@ async fn traiter_evenement_backup_maj<M>(middleware: &M, m: MessageValide)
                 "$currentDate": {CHAMP_MODIFICATION: true},
             };
             let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
-            collection.update_one(filtre, ops, None).await?;
+            collection.update_one_with_session(filtre, ops, None, session).await?;
         }
     }
 
@@ -508,7 +523,7 @@ struct PresenceInstanceEvent {
     status: PresenceInstanceStatus,
 }
 
-async fn process_presence_instance<M>(middleware: &M, message: MessageValide)
+async fn process_presence_instance<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: MongoDao
 {
@@ -539,7 +554,7 @@ async fn process_presence_instance<M>(middleware: &M, message: MessageValide)
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
     let options = UpdateOptions::builder().upsert(true).build();
-    collection.update_one(filtre, ops, options).await?;
+    collection.update_one_with_session(filtre, ops, options, session).await?;
 
     Ok(None)
 }
@@ -603,7 +618,7 @@ struct PresenceInstanceApplicationsEvent {
     configured_applications: Vec<PresenceInstanceConfiguredApplications>,
 }
 
-async fn process_presence_instance_applications<M>(middleware: &M, message: MessageValide)
+async fn process_presence_instance_applications<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: MongoDao
 {
@@ -636,12 +651,12 @@ async fn process_presence_instance_applications<M>(middleware: &M, message: Mess
                 "$currentDate": {CHAMP_MODIFICATION: true},
             };
             let options = UpdateOptions::builder().upsert(true).build();
-            collection.update_one(filtre, ops, options).await?;
+            collection.update_one_with_session(filtre, ops, options, session).await?;
         }
 
         if event.complete {
             let filtre = doc!{"instance_id": &instance_id, "service_name": {"$not": {"$in": names}}};
-            collection.delete_many(filtre, None).await?;
+            collection.delete_many_with_session(filtre, None, session).await?;
         }
     }
 
@@ -659,12 +674,12 @@ async fn process_presence_instance_applications<M>(middleware: &M, message: Mess
                 "$currentDate": {CHAMP_MODIFICATION: true},
             };
             let options = UpdateOptions::builder().upsert(true).build();
-            collection.update_one(filtre, ops, options).await?;
+            collection.update_one_with_session(filtre, ops, options, session).await?;
         }
 
         if event.complete {
             let filtre = doc!{"instance_id": &instance_id, "service_name": {"$not": {"$in": names}}};
-            collection.delete_many(filtre, None).await?;
+            collection.delete_many_with_session(filtre, None, session).await?;
         }
     }
 
@@ -684,12 +699,12 @@ async fn process_presence_instance_applications<M>(middleware: &M, message: Mess
                 "$currentDate": {CHAMP_MODIFICATION: true},
             };
             let options = UpdateOptions::builder().upsert(true).build();
-            collection.update_one(filtre, ops, options).await?;
+            collection.update_one_with_session(filtre, ops, options, session).await?;
         }
 
         if event.complete {
             let filtre = doc!{"instance_id": &instance_id, "app_name": {"$not": {"$in": names}}, "url": {"$not": {"$in": urls}}};
-            collection.delete_many(filtre, None).await?;
+            collection.delete_many_with_session(filtre, None, session).await?;
         }
     }
 
@@ -707,12 +722,12 @@ async fn process_presence_instance_applications<M>(middleware: &M, message: Mess
                 "$currentDate": {CHAMP_MODIFICATION: true},
             };
             let options = UpdateOptions::builder().upsert(true).build();
-            collection.update_one(filtre, ops, options).await?;
+            collection.update_one_with_session(filtre, ops, options, session).await?;
         }
 
         if event.complete {
             let filtre = doc!{"instance_id": &instance_id, "app_name": {"$not": {"$in": names}}};
-            collection.delete_many(filtre, None).await?;
+            collection.delete_many_with_session(filtre, None, session).await?;
         }
     }
 

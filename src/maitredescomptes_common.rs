@@ -6,6 +6,7 @@ use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageM
 use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_v2;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, MongoDao};
+use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::serde_json;
 use millegrilles_common_rust::serde_json::json;
@@ -15,7 +16,7 @@ use crate::maitredescomptes_manager::MaitreDesComptesManager;
 use crate::maitredescomptes_structs::{CompteUsager, EvenementMajCompteUsager, TransactionMajUsagerDelegations};
 use crate::webauthn::CredentialWebauthn;
 
-pub async fn emettre_maj_compte_usager<M,S>(middleware: &M, user_id: S, action: Option<&str>)
+pub async fn emettre_maj_compte_usager<M,S>(middleware: &M, user_id: S, action: Option<&str>, session: &mut ClientSession)
                                             -> Result<(), millegrilles_common_rust::error::Error>
 where
     M: GenerateurMessages + MongoDao,
@@ -29,7 +30,7 @@ where
 
     let filtre = doc! {CHAMP_USER_ID: user_id};
     let collection = middleware.get_collection_typed::<EvenementMajCompteUsager>(NOM_COLLECTION_USAGERS)?;
-    if let Some(compte) = collection.find_one(filtre, None).await? {
+    if let Some(compte) = collection.find_one_with_session(filtre, None, session).await? {
         debug!("emettre_maj_compte_usager compte : {:?}", compte);
         let routage = RoutageMessageAction::builder(DOMAIN_NAME, action, vec![Securite::L3Protege])
             .build();
@@ -44,7 +45,7 @@ where
     Ok(())
 }
 
-pub async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, passkey_credential: Passkey, supprimer_registration: bool)
+pub async fn sauvegarder_credential<M,S,T>(middleware: &M, user_id: S, hostname: T, passkey_credential: Passkey, supprimer_registration: bool, session: &mut ClientSession)
                                        -> Result<CredentialWebauthn, millegrilles_common_rust::error::Error>
 where M: MongoDao, S: Into<String>, T: Into<String>
 {
@@ -66,7 +67,7 @@ where M: MongoDao, S: Into<String>, T: Into<String>
         };
         let collection_credentials = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
         let cred_doc = convertir_to_bson(&cred)?;
-        collection_credentials.insert_one(cred_doc, None).await?;
+        collection_credentials.insert_one_with_session(cred_doc, None, session).await?;
 
         // Retirer champs qui ne sont pas utiles pour une transaction
         cred.date_creation = None;
@@ -77,13 +78,13 @@ where M: MongoDao, S: Into<String>, T: Into<String>
     if supprimer_registration {
         // Supprimer registration challenge
         let collection_challenges = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
-        collection_challenges.delete_one(filtre_delete, None).await?;
+        collection_challenges.delete_one_with_session(filtre_delete, None, session).await?;
     }
 
     Ok(cred)
 }
 
-pub async fn charger_compte_user_id<M, S>(middleware: &M, user_id: S)
+pub async fn charger_compte_user_id<M, S>(middleware: &M, user_id: S, session: &mut ClientSession)
                                       -> Result<Option<CompteUsager>, millegrilles_common_rust::error::Error>
 where
     M: MongoDao,
@@ -91,7 +92,7 @@ where
 {
     let filtre = doc! {CHAMP_USER_ID: user_id.as_ref()};
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    match collection.find_one(filtre, None).await? {
+    match collection.find_one_with_session(filtre, None, session).await? {
         Some(c) => {
             let compte: CompteUsager = convertir_bson_deserializable(c)?;
             Ok(Some(compte))
@@ -100,7 +101,7 @@ where
     }
 }
 
-pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: MessageValide, gestionnaire: &MaitreDesComptesManager)
+pub async fn commande_maj_usager_delegations<M>(middleware: &M, message: MessageValide, gestionnaire: &MaitreDesComptesManager, session: &mut ClientSession)
                                                 -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -118,18 +119,18 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
 
     // Commande valide, on sauvegarde et traite la transaction
     // let uuid_transaction = message_ref.id;
-    sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await?;
+    sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire, session).await?;
     // let transaction: TransactionImpl = message.try_into()?;
     // let _ = transaction_maj_usager_delegations(middleware, message.try_into()?).await?;
     // marquer_transaction(middleware, NOM_COLLECTION_TRANSACTIONS, &message_id, EtatTransaction::Complete).await?;
 
     // Charger le document de compte et retourner comme reponse
-    let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str()).await? {
+    let reponse = match charger_compte_user_id(middleware, commande.user_id.as_str(), session).await? {
         Some(compte) => serde_json::to_value(&compte)?,
         None => json!({"ok": false, "err": "Compte usager introuvable apres maj"})  // Compte
     };
 
-    if let Err(e) = emettre_maj_compte_usager(middleware, &commande.user_id, None).await {
+    if let Err(e) = emettre_maj_compte_usager(middleware, &commande.user_id, None, session).await {
         warn!("commande_maj_usager_delegations Erreur emission evenement maj : {:?}", e);
     }
 

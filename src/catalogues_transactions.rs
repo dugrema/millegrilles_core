@@ -10,10 +10,11 @@ use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::mongo_dao::{convertir_to_bson, MongoDao};
+use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::serde_json;
 
-pub async fn aiguillage_transaction_catalogues<M, T>(middleware: &M, transaction: T)
+pub async fn aiguillage_transaction_catalogues<M, T>(middleware: &M, transaction: T, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -35,12 +36,12 @@ where
     };
 
     match action.as_str() {
-        TRANSACTION_APPLICATION => maj_catalogue(middleware, transaction).await,
+        TRANSACTION_APPLICATION => maj_catalogue(middleware, transaction, session).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", message_id, action))?,
     }
 }
 
-async fn maj_catalogue<M>(middleware: &M, transaction: TransactionValide)
+async fn maj_catalogue<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                           -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -78,7 +79,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
         let collection_catalogues_versions = middleware.get_collection(NOM_COLLECTION_CATALOGUES_VERSIONS)?;
         let filtre = doc! { CHAMP_NOM_CATALOGUE: &nom, CHAMP_VERSION: &version };
         let opts = UpdateOptions::builder().upsert(true).build();
-        let resultat = match collection_catalogues_versions.update_one(filtre, ops.clone(), Some(opts)).await {
+        let resultat = match collection_catalogues_versions.update_one_with_session(filtre, ops.clone(), Some(opts), session).await {
             Ok(r) => r,
             Err(e) => Err(format!("core_catalogues.maj_catalogue Erreur maj document catalogue avec mongo : {:?}", e))?
         };
@@ -89,7 +90,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
         let filtre = doc! { "nom": &nom };
         let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
         let opts = UpdateOptions::builder().upsert(true).build();
-        let resultat = match collection_catalogues.update_one(filtre, ops, Some(opts)).await {
+        let resultat = match collection_catalogues.update_one_with_session(filtre, ops, Some(opts), session).await {
             Ok(r) => r,
             Err(e) => Err(format!("Erreur maj document catalogue avec mongo : {:?}", e))?
         };

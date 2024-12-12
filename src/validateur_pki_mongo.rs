@@ -19,7 +19,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChi
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
 use millegrilles_common_rust::millegrilles_cryptographie::x509::{EnveloppeCertificat, EnveloppePrivee};
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao, MongoDaoImpl, initialiser as initialiser_mongodb};
-use millegrilles_common_rust::mongodb::Database;
+use millegrilles_common_rust::mongodb::{ClientSession, Database};
 use millegrilles_common_rust::mongodb::options::FindOptions;
 use millegrilles_common_rust::notifications::NotificationMessageInterne;
 use millegrilles_common_rust::openssl::x509::store::X509Store;
@@ -773,8 +773,12 @@ impl FormatteurMessage for MiddlewareDbPki {
 
 #[async_trait]
 impl MongoDao for MiddlewareDbPki {
-    fn get_database(&self) -> Result<Database, String> {
+    fn get_database(&self) -> Result<Database, CommonError> {
         self.mongo.get_database()
+    }
+
+    async fn get_session(&self) -> Result<ClientSession, CommonError> {
+        self.mongo.get_session().await
     }
 }
 

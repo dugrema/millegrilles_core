@@ -13,10 +13,11 @@ use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseInformationConsignationFichiers;
 use millegrilles_common_rust::constantes::{CHAMP_MODIFICATION, CHAMP_CREATION, Securite};
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
+use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, ReturnDocument, UpdateOptions};
 use millegrilles_common_rust::serde_json::json;
 
-pub async fn aiguillage_transaction_topology<M, T>(middleware: &M, transaction: T) -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+pub async fn aiguillage_transaction_topology<M, T>(middleware: &M, transaction: T, session: &mut ClientSession) -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
     T: TryInto<TransactionValide>
@@ -35,23 +36,23 @@ where
     };
 
     match action.as_str() {
-        TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction).await,
+        TRANSACTION_DOMAINE => traiter_transaction_domaine(middleware, transaction, session).await,
         TRANSACTION_MONITOR => Ok(None),  // Obsolete traiter_transaction_monitor(middleware, transaction).await,
         TRANSACTION_SUPPRIMER_INSTANCE => Ok(None),  // Obsolete traiter_transaction_supprimer_instance(middleware, transaction).await,
         // TRANSACTION_SET_FICHIERS_PRIMAIRE => transaction_set_fichiers_primaire(middleware, transaction).await,
         // TRANSACTION_CONFIGURER_CONSIGNATION => transaction_configurer_consignation(middleware, transaction).await,
-        TRANSACTION_SET_FILEHOST_FOR_INSTANCE => transaction_set_filehost_instance(middleware, transaction).await,
+        TRANSACTION_SET_FILEHOST_FOR_INSTANCE => transaction_set_filehost_instance(middleware, transaction, session).await,
         // TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_transaction_supprimer_consignation(middleware, transaction).await,
-        TRANSACTION_FILEHOST_ADD => filehost_add(middleware, transaction).await,
-        TRANSACTION_FILEHOST_UPDATE => filehost_update(middleware, transaction).await,
-        TRANSACTION_FILEHOST_DELETE => filehost_delete(middleware, transaction).await,
-        TRANSACTION_FILEHOST_RESTORE => filehost_restore(middleware, transaction).await,
-        TRANSACTION_FILEHOST_DEFAULT => transaction_set_filehost_default(middleware, transaction).await,
+        TRANSACTION_FILEHOST_ADD => filehost_add(middleware, transaction, session).await,
+        TRANSACTION_FILEHOST_UPDATE => filehost_update(middleware, transaction, session).await,
+        TRANSACTION_FILEHOST_DELETE => filehost_delete(middleware, transaction, session).await,
+        TRANSACTION_FILEHOST_RESTORE => filehost_restore(middleware, transaction, session).await,
+        TRANSACTION_FILEHOST_DEFAULT => transaction_set_filehost_default(middleware, transaction, session).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
 
-async fn traiter_transaction_domaine<M>(middleware: &M, transaction: TransactionValide)
+async fn traiter_transaction_domaine<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                                         -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
@@ -81,7 +82,7 @@ where M: GenerateurMessages + MongoDao
     let filtre = doc! {CHAMP_DOMAINE: domaine};
     let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
     let options = UpdateOptions::builder().upsert(true).build();
-    match collection.update_one(filtre, ops, options).await {
+    match collection.update_one_with_session(filtre, ops, options, session).await {
         Ok(_) => (),
         Err(e) => Err(format!("Erreur maj transaction topologie domaine : {:?}", e))?
     }
@@ -316,7 +317,7 @@ where M: GenerateurMessages + MongoDao
 //     Ok(Some(middleware.reponse_ok(None, None)?))
 // }
 
-async fn transaction_set_filehost_instance<M>(middleware: &M, transaction: TransactionValide)
+async fn transaction_set_filehost_instance<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -334,7 +335,7 @@ async fn transaction_set_filehost_instance<M>(middleware: &M, transaction: Trans
     };
     let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_CONFIGURATION)?;
     let options = UpdateOptions::builder().upsert(true).build();
-    if let Err(e) = collection.update_one(filtre, ops, options).await {
+    if let Err(e) = collection.update_one_with_session(filtre, ops, options, session).await {
         Err(format!("core_topologie.transaction_set_filehost_instance Erreur sauvegarde filehost_id : {:?}", e))?
     }
 
@@ -396,7 +397,7 @@ struct HostfileAddTransactionResponse {
     filehost_id: String
 }
 
-async fn filehost_add<M>(middleware: &M, transaction: TransactionValide)
+async fn filehost_add<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                          -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
@@ -423,14 +424,14 @@ where M: GenerateurMessages + MongoDao
         fuuid: None,
     };
     let filehost_bson = convertir_to_bson(filehost)?;
-    collection.insert_one(filehost_bson, None).await?;
+    collection.insert_one_with_session(filehost_bson, None, session).await?;
 
     let response = HostfileAddTransactionResponse {ok: true, filehost_id: transaction_id.clone()};
     let response = middleware.build_reponse(response)?.0;
     Ok(Some(response))
 }
 
-async fn filehost_update<M>(middleware: &M, transaction: TransactionValide)
+async fn filehost_update<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                          -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
@@ -463,7 +464,7 @@ where M: GenerateurMessages + MongoDao
         "$set": set_ops,
         "$currentDate": {"modified": true}
     };
-    let result = collection.update_one(filtre, ops, None).await?;
+    let result = collection.update_one_with_session(filtre, ops, None, session).await?;
 
     if result.matched_count == 1 {
         Ok(Some(middleware.reponse_ok(None, None)?))
@@ -477,7 +478,7 @@ pub struct FilehostDeleteTransaction {
     pub filehost_id: String,
 }
 
-async fn filehost_delete<M>(middleware: &M, transaction: TransactionValide)
+async fn filehost_delete<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                          -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
@@ -489,12 +490,12 @@ where M: GenerateurMessages + MongoDao
         "$set": {"deleted": true},
         "$currentDate": {"modified": true},
     };
-    let result = collection.update_one(filter, ops, None).await?;
+    let result = collection.update_one_with_session(filter, ops, None, session).await?;
 
     // Delete default filhost configuration item if matches filehost_id
     let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
     let filtre_configuration = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT, "value": doc_transaction.filehost_id};
-    collection_configuration.delete_one(filtre_configuration, None).await?;
+    collection_configuration.delete_one_with_session(filtre_configuration, None, session).await?;
 
     let ok = result.matched_count == 1;
     if ok {
@@ -504,7 +505,7 @@ where M: GenerateurMessages + MongoDao
     }
 }
 
-async fn filehost_restore<M>(middleware: &M, transaction: TransactionValide)
+async fn filehost_restore<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
@@ -516,7 +517,7 @@ where M: GenerateurMessages + MongoDao
         "$set": {"deleted": false},
         "$currentDate": {"modified": true},
     };
-    let result = collection.update_one(filter, ops, None).await?;
+    let result = collection.update_one_with_session(filter, ops, None, session).await?;
 
     let ok = result.matched_count == 1;
     if ok {
@@ -533,7 +534,7 @@ pub struct TransactionFilehostSetDefault {
     pub filehost_id: String,
 }
 
-async fn transaction_set_filehost_default<M>(middleware: &M, transaction: TransactionValide)
+async fn transaction_set_filehost_default<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                                              -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -549,7 +550,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         "$set": {"value": transaction.filehost_id},
     };
     let options = UpdateOptions::builder().upsert(true).build();
-    collection_config.update_one(filtre, ops, options).await?;
+    collection_config.update_one_with_session(filtre, ops, options, session).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }

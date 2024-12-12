@@ -24,7 +24,7 @@ use millegrilles_common_rust::messages_generiques::ReponseCommande;
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, Middleware};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
-use millegrilles_common_rust::mongo_dao::{convertir_to_bson, MongoDao};
+use millegrilles_common_rust::mongo_dao::{convertir_to_bson, start_transaction_regular, MongoDao};
 use millegrilles_common_rust::mongodb::options::{FindOneOptions, FindOptions, InsertManyOptions, UpdateOptions, WriteConcern};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
@@ -33,7 +33,7 @@ use millegrilles_common_rust::{get_domaine_action, serde_json};
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use millegrilles_common_rust::redis::Commands;
 use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
-use millegrilles_common_rust::mongodb::Cursor;
+use millegrilles_common_rust::mongodb::{ClientSession, Cursor};
 use crate::topology_maintenance::entretien_transfert_fichiers;
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
@@ -52,28 +52,42 @@ where M: Middleware
         }
     }?;
 
-    match action.as_str() {
+    let mut session = middleware.get_session().await?;
+    start_transaction_regular(&mut session).await?;
+
+    let result = match action.as_str() {
         // Commandes standard
         // TRANSACTION_MONITOR => traiter_commande_monitor(middleware, m, gestionnaire).await,
-        TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire).await,
-        TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire).await,
-        TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire).await,
+        TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire, &mut session).await,
         // TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
-        TRANSACTION_SET_FILEHOST_FOR_INSTANCE => traiter_commande_set_filehost_for_instance(middleware, m, gestionnaire).await,
-        TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_commande_supprimer_consignation_instance(middleware, m, gestionnaire).await,
-        TRANSACTION_FILEHOST_ADD => command_filehost_add(middleware, m, gestionnaire).await,
-        TRANSACTION_FILEHOST_UPDATE => command_filehost_update(middleware, m, gestionnaire).await,
-        TRANSACTION_FILEHOST_DELETE => command_filehost_delete(middleware, m, gestionnaire).await,
-        TRANSACTION_FILEHOST_DEFAULT => command_filehost_set_default(middleware, m, gestionnaire).await,
+        TRANSACTION_SET_FILEHOST_FOR_INSTANCE => traiter_commande_set_filehost_for_instance(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_commande_supprimer_consignation_instance(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_FILEHOST_ADD => command_filehost_add(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_FILEHOST_UPDATE => command_filehost_update(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_FILEHOST_DELETE => command_filehost_delete(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_FILEHOST_DEFAULT => command_filehost_set_default(middleware, m, gestionnaire, &mut session).await,
         // COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
-        COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire).await,
-        COMMANDE_FILE_VISIT => command_file_visit(middleware, m, gestionnaire).await,
-        COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS => commande_claim_and_filehost_visits(middleware, m).await,
-        COMMANDE_FILEHOST_BATCH_TRANSFERS => commande_filehost_batch_transfers(middleware, m).await,
-        COMMANDE_FILEHOST_RESET_VISITS_CLAIMS => commande_filehost_reset_visits_claims(middleware, m).await,
-        COMMANDE_FILEHOST_RESET_TRANSFERS => commande_filehost_reset_transfers(middleware, m).await,
-        COMMANDE_BACKUP_SET_DOMAIN_VERSION => command_set_domain_backup_version(middleware, m).await,
+        COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire, &mut session).await,
+        COMMANDE_FILE_VISIT => command_file_visit(middleware, m, gestionnaire, &mut session).await,
+        COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS => commande_claim_and_filehost_visits(middleware, m, &mut session).await,
+        COMMANDE_FILEHOST_BATCH_TRANSFERS => commande_filehost_batch_transfers(middleware, m, &mut session).await,
+        COMMANDE_FILEHOST_RESET_VISITS_CLAIMS => commande_filehost_reset_visits_claims(middleware, m, &mut session).await,
+        COMMANDE_FILEHOST_RESET_TRANSFERS => commande_filehost_reset_transfers(middleware, m, &mut session).await,
+        COMMANDE_BACKUP_SET_DOMAIN_VERSION => command_set_domain_backup_version(middleware, m, &mut session).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
+    };
+
+    match result {
+        Ok(result) => {
+            session.commit_transaction().await?;
+            Ok(result)
+        }
+        Err(e) => {
+            session.abort_transaction().await?;
+            Err(e)
+        }
     }
 }
 
@@ -98,7 +112,7 @@ where M: Middleware
 #[derive(Deserialize)]
 struct CommandeSupprimerInstance {instance_id: String}
 
-async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
+async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
                                                 -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -182,7 +196,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 }
 
-async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message: MessageValide, gestionnaire: &TopologyManager)
+async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
                                                      -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -222,10 +236,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     // Sauvegarder la transaction, marquer complete et repondre
-    sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await
+    sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire, session).await
 }
 
-async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
+async fn traiter_commande_set_fichiers_primaire<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
                                                    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -252,10 +266,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     // Sauvegarder la transaction, marquer complete et repondre
-    sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await
+    sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire, session).await
 }
 
-async fn traiter_commande_set_filehost_for_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
+async fn traiter_commande_set_filehost_for_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
                                                        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -277,7 +291,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     // Sauvegarder la transaction, marquer complete et repondre
-    let reponse = sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await?;
+    let reponse = sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire, session).await?;
 
     // Emettre evenement de mise a jour de filehosts
     let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOSTING_UPDATE, vec![Securite::L1Public])
@@ -288,7 +302,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 }
 
 async fn traiter_commande_supprimer_consignation_instance<M>(
-    middleware: &M, message: MessageValide, gestionnaire: &TopologyManager
+    middleware: &M, message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession
 )
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -313,7 +327,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     };
 
     // Sauvegarder la transaction, marquer complete et repondre
-    let reponse = sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await?;
+    let reponse = sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire, session).await?;
 
     // Emettre evenement d'instance consignation supprimee
     let evenement_supprimee = json!({"instance_id": &instance_id});
@@ -484,7 +498,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 //
 //     let collection = middleware.get_collection(NOM_COLLECTION_FICHIERS)?;
 //     let filtre = doc!{"instance_id": idmg};
-//     if collection.find_one(filtre, None).await?.is_some() {
+//     if collection.find_one_with_session(filtre, None).await?.is_some() {
 //         error!("commande_ajouter_consignation_hebergee Erreur ajout consignation existante sur idmg : {}", idmg);
 //         return Ok(Some(middleware.reponse_err(Some(6), None, Some("Une configuration d'hebergement existe deja pour cette millegrille"))?))
 //     }
@@ -543,7 +557,7 @@ struct RowCoreTopologieDomaines {
     cle_id_backup: Option<String>,
 }
 
-async fn commande_set_cleid_backup_domaine<M>(middleware: &M, m: MessageValide, _gestionnaire: &TopologyManager)
+async fn commande_set_cleid_backup_domaine<M>(middleware: &M, m: MessageValide, _gestionnaire: &TopologyManager, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -583,7 +597,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         "$currentDate": { CHAMP_MODIFICATION: true }
     };
     let options = UpdateOptions::builder().upsert(true).build();
-    let result = collection.update_one(filtre, ops, options).await?;
+    let result = collection.update_one_with_session(filtre, ops, options, session).await?;
     if result.modified_count != 1 {
         Err(format!("Erreur mise a jour de cle_id de backup du domaine {}, aucuns changements apportes a la DB", domaine))?
     }
@@ -591,7 +605,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
-async fn command_filehost_add<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+async fn command_filehost_add<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
                                  -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -613,10 +627,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             let instance_id = certificate.get_common_name()?;
             let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
             let filtre = doc!{"instance_id": instance_id};
-            match collection.find_one(filtre, None).await? {
+            match collection.find_one_with_session(filtre, None, session).await? {
                 Some(inner) => {
                     // Exists, check if restore (when deleted) or conflict
-                    return check_restore_existing_filehost(middleware, gestionnaire, &message_id, inner).await
+                    return check_restore_existing_filehost(middleware, gestionnaire, &message_id, inner, session).await
                 },
                 None => ()  // Ok, this is a new filehost
             }
@@ -629,10 +643,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             // Ensure no file host exists for this url.
             let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
             let filtre = doc!{"url_external": url_external};
-            match collection.find_one(filtre, None).await? {
+            match collection.find_one_with_session(filtre, None, session).await? {
                 Some(inner) => {
                     // Exists, check if restore (when deleted) or conflict
-                    return check_restore_existing_filehost(middleware, gestionnaire, &message_id, inner).await
+                    return check_restore_existing_filehost(middleware, gestionnaire, &message_id, inner, session).await
                 }
                 None => ()  // Ok, this is a new filehost
             }
@@ -643,15 +657,15 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
     }
 
-    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await?;
+    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire, session).await?;
 
     // Check if we have a default filehost. If not, set this new filehost as default.
-    check_default_filehost(middleware, message_id.as_str()).await?;
+    check_default_filehost(middleware, message_id.as_str(), session).await?;
 
     // Load the new filehost, emit as event
     let filtre = doc!{"filehost_id": &message_id};
     let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
-    match collection.find_one(filtre, None).await? {
+    match collection.find_one_with_session(filtre, None, session).await? {
         Some(inner) => {
             let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostAdd", vec![Securite::L1Public])
                 .build();
@@ -667,7 +681,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(result)
 }
 
-async fn check_restore_existing_filehost<M>(middleware: &M, gestionnaire: &TopologyManager, message_id: &String, row: FilehostServerRow)
+async fn check_restore_existing_filehost<M>(middleware: &M, gestionnaire: &TopologyManager, message_id: &String, row: FilehostServerRow, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao + ValidateurX509
 {
@@ -676,14 +690,14 @@ async fn check_restore_existing_filehost<M>(middleware: &M, gestionnaire: &Topol
         info!("command_filehost_add Restoring filehost, rewriting add as update delete=false");
         let filehost_update = FilehostRestoreTransaction { filehost_id: row.filehost_id.clone() };
         let result = sauvegarder_traiter_transaction_serializable_v2(
-            middleware, &filehost_update, gestionnaire, DOMAINE_TOPOLOGIE, TRANSACTION_FILEHOST_RESTORE).await?.0;
+            middleware, &filehost_update, gestionnaire, session, DOMAINE_TOPOLOGIE, TRANSACTION_FILEHOST_RESTORE).await?.0;
 
-        check_default_filehost(middleware, row.filehost_id.as_str()).await?;
+        check_default_filehost(middleware, row.filehost_id.as_str(), session).await?;
 
         // Load the new filehost, emit as event
         let filtre = doc! {"filehost_id": &row.filehost_id};
         let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
-        match collection.find_one(filtre, None).await? {
+        match collection.find_one_with_session(filtre, None, session).await? {
             Some(inner) => {
                 let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostRestore", vec![Securite::L1Public])
                     .build();
@@ -703,18 +717,18 @@ async fn check_restore_existing_filehost<M>(middleware: &M, gestionnaire: &Topol
     }
 }
 
-async fn check_default_filehost<M>(middleware: &M, filehost_id: &str) -> Result<(), Error>
+async fn check_default_filehost<M>(middleware: &M, filehost_id: &str, session: &mut ClientSession) -> Result<(), Error>
     where M: MongoDao
 {
     let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
-    let count = collection.count_documents(filtre, None).await?;
+    let count = collection.count_documents_with_session(filtre, None, session).await?;
     if count == 0 {
         info!("Initialize default filehost to {}", filehost_id);
         // Initialize in a volatile way. User can override manually later.
         let row = FilehostingCongurationRow {name: FIELD_CONFIGURATION_FILEHOST_DEFAULT.into(), value: filehost_id.to_string()};
         let row_bson = convertir_to_bson(row)?;
-        collection.insert_one(row_bson, None).await?;
+        collection.insert_one_with_session(row_bson, None, session).await?;
     }
     Ok(())
 }
@@ -724,18 +738,18 @@ struct EvenementPrimaryFilecontroler {
     filecontroler_id: String
 }
 
-async fn check_primary_filecontroler<M>(middleware: &M, instance_id: &str) -> Result<(), Error>
+async fn check_primary_filecontroler<M>(middleware: &M, instance_id: &str, session: &mut ClientSession) -> Result<(), Error>
 where M: GenerateurMessages + MongoDao
 {
     let filtre = doc!{"name": FIELD_CONFIGURATION_FILECONTROLER_PRIMARY};
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
-    let count = collection.count_documents(filtre, None).await?;
+    let count = collection.count_documents_with_session(filtre, None, session).await?;
     if count == 0 {
         info!("Initialize primary filecontroler instance_id to {}", instance_id);
         // Initialize in a volatile way. User can override manually later.
         let row = FilehostingCongurationRow {name: FIELD_CONFIGURATION_FILECONTROLER_PRIMARY.into(), value: instance_id.to_string()};
         let row_bson = convertir_to_bson(row)?;
-        collection.insert_one(row_bson, None).await?;
+        collection.insert_one_with_session(row_bson, None, session).await?;
 
         // Emettre evenement de changement de filecontroler primary
         let routage = RoutageMessageAction::builder(TOPOLOGIE_NOM_DOMAINE, "primaryFilecontroler", vec![Securite::L1Public])
@@ -746,7 +760,7 @@ where M: GenerateurMessages + MongoDao
     Ok(())
 }
 
-async fn command_filehost_update<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+async fn command_filehost_update<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
                                     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -770,17 +784,17 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     // Check that filehost exists
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
     let filtre = doc!{"filehost_id": &filehost_id};
-    let count = collection.count_documents(filtre, None).await?;
+    let count = collection.count_documents_with_session(filtre, None, session).await?;
     if count == 0 {
         return Ok(Some(middleware.reponse_err(Some(404), None, Some("Filehost does not exist"))?))
     }
 
-    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await?;
+    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire, session).await?;
 
     // Load the new filehost, emit as event
     let filtre = doc!{"filehost_id": &filehost_id};
     let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
-    match collection.find_one(filtre, None).await? {
+    match collection.find_one_with_session(filtre, None, session).await? {
         Some(inner) => {
             let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostUpdate", vec![Securite::L1Public])
                 .build();
@@ -806,7 +820,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 #[derive(Serialize)]
 struct EventFilehostDeleted { filehost_id: String }
 
-async fn command_filehost_delete<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+async fn command_filehost_delete<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
                                     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -828,12 +842,12 @@ async fn command_filehost_delete<M>(middleware: &M, m: MessageValide, gestionnai
     // Check that filehost exists and is not deleted (flag).
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
     let filtre = doc!{"filehost_id": &filehost_id, "deleted": false};
-    let count = collection.count_documents(filtre, None).await?;
+    let count = collection.count_documents_with_session(filtre, None, session).await?;
     if count == 0 {
         return Ok(Some(middleware.reponse_err(Some(404), None, Some("Filehost does not exist or is already deleted"))?))
     }
 
-    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire).await?;
+    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire, session).await?;
 
     let event = EventFilehostDeleted { filehost_id: filehost_id.to_string() };
     let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostDelete", vec![Securite::L1Public])
@@ -853,7 +867,7 @@ struct CommandFileVisit {
     fuuids: Vec<String>,
 }
 
-async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -883,7 +897,7 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
                 },
             };
             debug!("command_file_visit Update filtre: {:?}\nOps: {:?}", filtre, ops);
-            collection.update_one(filtre, ops, options.clone()).await?;
+            collection.update_one_with_session(filtre, ops, options.clone(), session).await?;
         }
     }
 
@@ -891,7 +905,7 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
     // entretien_transfert_fichiers(middleware).await?;
 
     // S'assurer d'avoir un filecontroler primary
-    check_primary_filecontroler(middleware, instance_id.as_str()).await?;
+    check_primary_filecontroler(middleware, instance_id.as_str(), session).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
@@ -940,7 +954,7 @@ struct RequeteGetVisitesFuuidsResponse {
     unknown: Vec<String>
 }
 
-async fn commande_claim_and_filehost_visits<M>(middleware: &M, m: MessageValide)
+async fn commande_claim_and_filehost_visits<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
@@ -962,8 +976,8 @@ where M: GenerateurMessages + MongoDao
 
     let filtre = doc! {"fuuid": {"$in": &requete.fuuids}};
     let collection = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
-    let mut curseur = collection.find(filtre, None).await?;
-    while curseur.advance().await? {
+    let mut curseur = collection.find_with_session(filtre, None, session).await?;
+    while curseur.advance(session).await? {
         let row = curseur.deserialize_current()?;
         fuuids_set.remove(&row.fuuid);
         response_fuuids.push(row.into());
@@ -1045,7 +1059,7 @@ struct CommandBatchTransfersResponse {
     fuuids: Option<Vec<CommandBatchTransfersResponseFuuid>>
 }
 
-async fn commande_filehost_batch_transfers<M>(middleware: &M, m: MessageValide)
+async fn commande_filehost_batch_transfers<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {
@@ -1134,7 +1148,7 @@ async fn parse_filehost_visits<M>(middleware: &M, mut curseur: Cursor<FilehostTr
     Ok(fuuids_list)
 }
 
-async fn commande_filehost_reset_visits_claims<M>(middleware: &M, m: MessageValide)
+async fn commande_filehost_reset_visits_claims<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {
@@ -1158,7 +1172,7 @@ async fn commande_filehost_reset_visits_claims<M>(middleware: &M, m: MessageVali
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
-pub async fn command_filehost_set_default<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
+pub async fn command_filehost_set_default<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao + ValidateurX509
 {
@@ -1180,7 +1194,7 @@ pub async fn command_filehost_set_default<M>(middleware: &M, message: MessageVal
     }
 
     // Sauvegarder la transaction, marquer complete et repondre
-    let reponse = sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire).await?;
+    let reponse = sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire, session).await?;
 
     // Emettre evenement de mise a jour de filehosts
     let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOSTING_UPDATE, vec![Securite::L1Public])
@@ -1190,7 +1204,7 @@ pub async fn command_filehost_set_default<M>(middleware: &M, message: MessageVal
     Ok(reponse)
 }
 
-async fn commande_filehost_reset_transfers<M>(middleware: &M, m: MessageValide)
+async fn commande_filehost_reset_transfers<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
                                               -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
@@ -1222,7 +1236,7 @@ struct CommandSetDomainBackupVersion {
     version: String,
 }
 
-async fn command_set_domain_backup_version<M>(middleware: &M, message: MessageValide)
+async fn command_set_domain_backup_version<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
                                               -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
@@ -1237,7 +1251,7 @@ where M: GenerateurMessages + MongoDao
         "$set": {"backup_version": &command.version},
         "$currentDate": {"modified": true},
     };
-    let result = collection.update_one(filtre, ops, None).await?;
+    let result = collection.update_one_with_session(filtre, ops, None, session).await?;
 
     if result.matched_count == 1 {
 

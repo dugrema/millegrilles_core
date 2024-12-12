@@ -23,7 +23,7 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use serde::Deserialize;
 
 pub async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler + EmetteurNotificationsTrait
+where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
     let date_epoch = trigger.get_date();
     debug!("Traiter cedule {}\n{:?}", DOMAIN_NAME, date_epoch);

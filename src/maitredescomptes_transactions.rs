@@ -9,6 +9,7 @@ use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::constantes::{RolesCertificats, Securite, CHAMP_CREATION, CHAMP_MODIFICATION};
+use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::serde_json::json;
 use crate::maitredescomptes_common::{emettre_maj_compte_usager, sauvegarder_credential};
@@ -16,7 +17,7 @@ use crate::maitredescomptes_constants::*;
 use crate::maitredescomptes_structs::{CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, ConfirmationSigneeDelegationGlobale, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionSupprimerCles};
 use crate::webauthn::CredentialWebauthn;
 
-pub async fn aiguillage_transaction_maitredescomptes<M, T>(middleware: &M, transaction: T)
+pub async fn aiguillage_transaction_maitredescomptes<M, T>(middleware: &M, transaction: T, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where
     M: ValidateurX509 + GenerateurMessages + MongoDao,
@@ -36,17 +37,17 @@ where
     };
 
     match action.as_str() {
-        TRANSACTION_INSCRIRE_USAGER => sauvegarder_inscrire_usager(middleware, transaction).await,
-        TRANSACTION_AJOUTER_CLE => transaction_ajouter_cle(middleware, transaction).await,
-        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => transaction_ajouter_delegation_signee(middleware, transaction).await,
-        TRANSACTION_MAJ_USAGER_DELEGATIONS => transaction_maj_usager_delegations(middleware, transaction).await,
-        TRANSACTION_SUPPRIMER_CLES => transaction_supprimer_cles(middleware, transaction).await,
-        TRANSACTION_RESET_WEBAUTHN_USAGER => transaction_reset_webauthn_usager(middleware, transaction).await,
+        TRANSACTION_INSCRIRE_USAGER => sauvegarder_inscrire_usager(middleware, transaction, session).await,
+        TRANSACTION_AJOUTER_CLE => transaction_ajouter_cle(middleware, transaction, session).await,
+        TRANSACTION_AJOUTER_DELEGATION_SIGNEE => transaction_ajouter_delegation_signee(middleware, transaction, session).await,
+        TRANSACTION_MAJ_USAGER_DELEGATIONS => transaction_maj_usager_delegations(middleware, transaction, session).await,
+        TRANSACTION_SUPPRIMER_CLES => transaction_supprimer_cles(middleware, transaction, session).await,
+        TRANSACTION_RESET_WEBAUTHN_USAGER => transaction_reset_webauthn_usager(middleware, transaction, session).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
 
-pub async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: TransactionValide)
+pub async fn transaction_ajouter_delegation_signee<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                                                       -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -124,7 +125,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     };
 
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    let resultat = match collection.update_one(filtre, ops, None).await {
+    let resultat = match collection.update_one_with_session(filtre, ops, None, session).await {
         Ok(r) => r,
         Err(e) => Err(format!("transaction_ajouter_delegation_signee Erreur maj pour usager {:?} : {:?}", message_confirmation.routage, e))?
     };
@@ -136,7 +137,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     }
 }
 
-async fn sauvegarder_inscrire_usager<M>(middleware: &M, transaction: TransactionValide)
+async fn sauvegarder_inscrire_usager<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                                         -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -179,13 +180,13 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     let options = UpdateOptions::builder().upsert(true).build();
 
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    let resultat = match collection.update_one(filtre, ops, options).await {
+    let resultat = match collection.update_one_with_session(filtre, ops, options, session).await {
         Ok(r) => r,
         Err(e) => Err(format!("Erreur update db sauvegarder_inscrire_usager : {:?}", e))?
     };
     debug!("Resultat sauvegarder_inscrire_usager : {:?}", resultat);
 
-    if let Err(e) = emettre_maj_compte_usager(middleware, user_id, None).await {
+    if let Err(e) = emettre_maj_compte_usager(middleware, user_id, None, session).await {
         warn!("commande_maj_usager_delegations Erreur emission evenement maj : {:?}", e);
     }
 
@@ -196,7 +197,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     }
 }
 
-async fn transaction_ajouter_cle<M>(middleware: &M, transaction: TransactionValide)
+async fn transaction_ajouter_cle<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                                     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -230,7 +231,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         // Supprimer toutes les cles pour le user_id dans la collection credentials
         debug!("transaction_ajouter_cle Reset toutes les cles webautn pour user_id {}", user_id);
         let filtre = doc! { CHAMP_USER_ID: user_id };
-        if let Err(e) = collection.delete_many(filtre, None).await {
+        if let Err(e) = collection.delete_many_with_session(filtre, None, session).await {
             Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur delete cles webauthn"))?
         }
     }
@@ -239,7 +240,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     if ! inserer {
         // Verifier si la cle existe deja
         let filtre = doc! { CHAMP_USER_ID: user_id, "hostname": hostname, "passkey.cred.cred_id": cred_id};
-        let resultat = match collection.count_documents(filtre, None).await {
+        let resultat = match collection.count_documents_with_session(filtre, None, session).await {
             Ok(inner) => inner,
             Err(e) => Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur count cles existantes : {:?}", e))?
         };
@@ -247,7 +248,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
     if inserer {
         if let Err(e) = sauvegarder_credential(
-            middleware, user_id, hostname, webauthn_credential, true).await {
+            middleware, user_id, hostname, webauthn_credential, true, session).await {
             Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur sauvegarder credentials : {:?}", e))?
         }
     } else {
@@ -257,7 +258,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 
-pub async fn transaction_maj_usager_delegations<M>(middleware: &M, transaction: TransactionValide)
+pub async fn transaction_maj_usager_delegations<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                                                    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -282,7 +283,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
         "$currentDate": {CHAMP_MODIFICATION: true},
     };
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    let resultat = match collection.update_one(filtre, ops, None).await {
+    let resultat = match collection.update_one_with_session(filtre, ops, None, session).await {
         Ok(r) => r,
         Err(e) => Err(format!("Erreur transaction_maj_usager_delegations, echec sauvegarde : {:?}", e))?
     };
@@ -295,7 +296,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     Ok(None)
 }
 
-pub async fn transaction_supprimer_cles<M>(middleware: &M, transaction: TransactionValide)
+pub async fn transaction_supprimer_cles<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                                            -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -311,7 +312,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
         "$currentDate": {CHAMP_MODIFICATION: true},
     };
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    let resultat = match collection.update_one(filtre, ops, None).await {
+    let resultat = match collection.update_one_with_session(filtre, ops, None, session).await {
         Ok(r) => r,
         Err(e) => Err(format!("transaction_supprimer_cles Erreur maj collection usagers {:?}", e))?
     } ;
@@ -320,7 +321,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     Ok(None)
 }
 
-async fn transaction_reset_webauthn_usager<M>(middleware: &M, transaction: TransactionValide)
+async fn transaction_reset_webauthn_usager<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
                                               -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -337,7 +338,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
         let filtre = doc! { CHAMP_USER_ID: commande.user_id.as_str() };
         let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
-        if let Err(e) = collection.delete_many(filtre.clone(), None).await {
+        if let Err(e) = collection.delete_many_with_session(filtre.clone(), None, session).await {
             Err(format!("transaction_reset_webauthn_usager Erreur delete_many webauthn {:?} : {:?}", commande, e))?
         }
     }
