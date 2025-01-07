@@ -2,7 +2,7 @@ millegrille_core
 run --package millegrilles_core --bin millegrilles_core
 CAFILE=/var/opt/millegrilles/configuration/pki.millegrille.cert
 CERTFILE=/var/opt/millegrilles/secrets/pki.core.cert
-KEYFILE=/var/opt/millegrilles/secrets/pki.core.cle
+KEYFILE=/var/opt/millegrilles/secrets/pki.core.key
 MG_CERTISSUER_URL=http://thinkcentre1.maple.maceroc.com:2080
 MG_MONGO_HOST=localhost
 MG_MQ_HOST=localhost
