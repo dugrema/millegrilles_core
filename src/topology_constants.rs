@@ -15,6 +15,7 @@ pub const NOM_COLLECTION_FILEHOSTING_TRANSFERS: &str = "CoreTopologie/filehostin
 pub const NOM_COLLECTION_FILEHOSTING_CLAIMS: &str = "CoreTopologie/filehostingClaims";
 pub const NOM_COLLECTION_FILEHOSTING_VISITS: &str = "CoreTopologie/filehostingVisits";
 pub const NOM_COLLECTION_FILEHOSTING_SYNC_STATUS: &str = "CoreTopologie/filehostingSyncStatus";
+pub const NOM_COLLECTION_FILEHOSTING_FUUIDS_WORK: &str = "CoreTopologie/filehostingFuuidsWork";
 
 pub const NOM_COLLECTION_INSTANCE_STATUS: &str = "CoreTopologie/instances/status";
 pub const NOM_COLLECTION_INSTANCE_CONFIGURATION: &str = "CoreTopologie/instances/configuration";

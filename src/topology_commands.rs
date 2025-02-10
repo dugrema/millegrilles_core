@@ -1315,7 +1315,11 @@ async fn commande_domain_visits_claims<M>(middleware: &M, m: MessageValide, sess
     if request.done == Some(true) {
         // Put flag to indicate this domain has sent all its claims successfully
         let collection_files_status = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_SYNC_STATUS)?;
-        for domain in &domains {
+        let domains = match domains {
+            Some(inner) => inner,
+            None => Err("No domain in the certificate used for claiming files")?
+        };
+        for domain in domains {
             let filtre = doc!{"claimer": domain, "claimer_type": "domain"};
             let ops = doc! {
                 "$currentDate": {"date_ready": true},
