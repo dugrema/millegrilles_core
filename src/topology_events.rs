@@ -395,6 +395,13 @@ async fn traiter_evenement_filehost_newfuuid<M>(middleware: &M, m: MessageValide
         (message_contenu.deserialize()?, estampille)
     };
 
+    {
+        // Add filehost_id/fuuid to the visit aggregation table
+        let collection_visits = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
+        let row = doc!{"fuuid": &commande.fuuid, "filehost_id": &commande.filehost_id, "visit_time": &estampille};
+        collection_visits.insert_one(row, None).await?;
+    }
+
     let filtre = doc! {"fuuid": &commande.fuuid};
     let options = UpdateOptions::builder().upsert(true).build();
     let ops = doc! {

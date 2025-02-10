@@ -906,22 +906,6 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
         collection_files_status.update_one(filtre, ops, options).await?;
     }
 
-    // let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
-    // let options = UpdateOptions::builder().upsert(true).build();
-    // {
-    //     let filehost_id = commande.filehost_id.as_str();
-    //     for fuuid in &commande.fuuids {
-    //         let filtre = doc! {"fuuid": fuuid};
-    //         let ops = doc! {
-    //             "$set": {
-    //                 format!("filehost.{}", filehost_id): &commande.visit_time,
-    //             },
-    //         };
-    //         debug!("command_file_visit Update filtre: {:?}\nOps: {:?}", filtre, ops);
-    //         collection.update_one_with_session(filtre, ops, options.clone(), session).await?;
-    //     }
-    // }
-
     // S'assurer d'avoir un filecontroler primary
     check_primary_filecontroler(middleware, instance_id.as_str(), session).await?;
 
