@@ -10,10 +10,10 @@ pub const NOM_COLLECTION_TOKENS: &str = "CoreTopologie/tokens";
 pub const NOM_COLLECTION_FILEHOSTS: &str = "CoreTopologie/filehosts";
 pub const NOM_COLLECTION_FILECONTROLERS: &str = "CoreTopologie/filecontrolers";
 pub const NOM_COLLECTION_FILEHOSTINGCONFIGURATION: &str = "CoreTopologie/filehostingConfiguration";
-// pub const NOM_COLLECTION_FILEHOSTING_VISITS: &str = "CoreTopologie/filehostingVisits";
-// pub const NOM_COLLECTION_FILEHOSTING_CLAIMS: &str = "CoreTopologie/filehostingClaims";
 pub const NOM_COLLECTION_FILEHOSTING_FUUIDS: &str = "CoreTopologie/filehostingFuuids";
 pub const NOM_COLLECTION_FILEHOSTING_TRANSFERS: &str = "CoreTopologie/filehostingTransfers";
+pub const NOM_COLLECTION_FILEHOSTING_CLAIMS: &str = "CoreTopologie/filehostingClaims";
+pub const NOM_COLLECTION_FILEHOSTING_VISITS: &str = "CoreTopologie/filehostingVisits";
 
 pub const NOM_COLLECTION_INSTANCE_STATUS: &str = "CoreTopologie/instances/status";
 pub const NOM_COLLECTION_INSTANCE_CONFIGURATION: &str = "CoreTopologie/instances/configuration";
@@ -74,6 +74,7 @@ pub const COMMANDE_FILE_VISIT: &str = "fileVisit";
 pub const COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS: &str = "claimAndFilehostVisits";
 pub const COMMANDE_FILEHOST_BATCH_TRANSFERS: &str = "batchTransfers";
 pub const COMMANDE_FILEHOST_RESET_VISITS_CLAIMS: &str = "resetVisitsClaims";
+pub const COMMAND_DOMAIN_CLAIM_FILES: &str = "claimFiles";
 pub const COMMANDE_FILEHOST_RESET_TRANSFERS: &str = "resetTransfers";
 pub const COMMANDE_BACKUP_SET_DOMAIN_VERSION: &str = "setBackupDomainVersion";
 

@@ -75,6 +75,7 @@ where M: Middleware
         COMMANDE_FILEHOST_BATCH_TRANSFERS => commande_filehost_batch_transfers(middleware, m, &mut session).await,
         COMMANDE_FILEHOST_RESET_VISITS_CLAIMS => commande_filehost_reset_visits_claims(middleware, m, &mut session).await,
         COMMANDE_FILEHOST_RESET_TRANSFERS => commande_filehost_reset_transfers(middleware, m, &mut session).await,
+        COMMAND_DOMAIN_CLAIM_FILES => commande_domain_visits_claims(middleware, m, &mut session).await,
         COMMANDE_BACKUP_SET_DOMAIN_VERSION => command_set_domain_backup_version(middleware, m, &mut session).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
     };
@@ -989,6 +990,21 @@ where M: GenerateurMessages + MongoDao
         fuuids_requis.insert(f);
     }
 
+    // Save in the claims aggregation table
+    {
+        let now = Utc::now();
+        let mut batch = Vec::new();
+        let mut domains: Option<Vec<String>> = None;
+        if let extensions = m.certificat.extensions()? {
+            domains = extensions.domaines;
+        }
+        for fuuid in &fuuids_requis {
+            batch.push(doc!{"fuuid": *fuuid, "claim_date": &now, "domains": &domains})
+        }
+        let collection_agg_claim = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
+        collection_agg_claim.insert_many(batch, None).await?;
+    }
+
     // Conserver les reclamations.
     let collection_claims = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
     let filtre_reclamations = doc!{ "fuuid": {"$in": &requete.fuuids} };
@@ -1265,4 +1281,34 @@ where M: GenerateurMessages + MongoDao
     } else {
         Ok(Some(middleware.reponse_err(Some(404), None, Some("Domain not found"))?))
     }
+}
+
+#[derive(Deserialize)]
+struct RequestFuuidsVisits {
+    fuuids: Vec<String>,
+    batch_no: Option<usize>,
+    done: Option<bool>,
+}
+
+async fn commande_domain_visits_claims<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
+                                          -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao
+{
+    let certificate = m.certificat;
+    let mut domains: Option<Vec<String>> = None;
+    if let Some(extensions) = certificate.get_extensions()? {
+        domains = extensions.domaines;
+    }
+
+    let request: RequestFuuidsVisits = deser_message_buffer!(m.message);
+    let now = Utc::now();
+
+    let mut batch = Vec::with_capacity(request.fuuids.len());
+    for fuuid in request.fuuids {
+        batch.push(doc!{"fuuid": fuuid, "claim_date": &now, "domains": &domains});
+    }
+    let collection_claims = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
+    collection_claims.insert_many(batch, None).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }

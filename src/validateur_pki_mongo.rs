@@ -776,9 +776,18 @@ impl MongoDao for MiddlewareDbPki {
     fn get_database(&self) -> Result<Database, CommonError> {
         self.mongo.get_database()
     }
+    fn get_admin_database(&self) -> Result<Database, CommonError> { self.mongo.get_admin_database() }
+
+    fn get_db_name(&self) -> &str {
+        self.mongo.get_db_name()
+    }
 
     async fn get_session(&self) -> Result<ClientSession, CommonError> {
         self.mongo.get_session().await
+    }
+
+    async fn get_session_rebuild(&self) -> Result<ClientSession, CommonError> {
+        self.mongo.get_session_rebuild().await
     }
 }
 
