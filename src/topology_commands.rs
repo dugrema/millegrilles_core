@@ -866,6 +866,7 @@ struct CommandFileVisit {
     #[serde(with="epochseconds")]
     visit_time: DateTime<Utc>,
     fuuids: Vec<String>,
+    done: Option<bool>,
 }
 
 async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
@@ -886,24 +887,40 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
         message_contenu.deserialize()?
     };
 
-    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
-    let options = UpdateOptions::builder().upsert(true).build();
-    {
-        let filehost_id = commande.filehost_id.as_str();
-        for fuuid in &commande.fuuids {
-            let filtre = doc! {"fuuid": fuuid};
-            let ops = doc! {
-                "$set": {
-                    format!("filehost.{}", filehost_id): &commande.visit_time,
-                },
-            };
-            debug!("command_file_visit Update filtre: {:?}\nOps: {:?}", filtre, ops);
-            collection.update_one_with_session(filtre, ops, options.clone(), session).await?;
-        }
+    let mut batch = Vec::new();
+    let filehost_id = commande.filehost_id.as_str();
+    for fuuid in commande.fuuids {
+        batch.push(doc!{"fuuid": fuuid, "filehost_id": filehost_id, "visit_time": &commande.visit_time});
+    }
+    let collection_visits = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
+    collection_visits.insert_many(batch, None).await?;
+
+    if commande.done == Some(true) {
+        // Put flag to indicate this filehost_id has sent all its visits successfully
+        let collection_files_status = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_SYNC_STATUS)?;
+        let filtre = doc!{"claimer": filehost_id, "claimer_type": "filehost"};
+        let ops = doc! {
+            "$currentDate": {"date_ready": true},
+        };
+        let options = UpdateOptions::builder().upsert(true).build();
+        collection_files_status.update_one(filtre, ops, options).await?;
     }
 
-    // Mettre a jour tous les transferts de fichier
-    // entretien_transfert_fichiers(middleware).await?;
+    // let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+    // let options = UpdateOptions::builder().upsert(true).build();
+    // {
+    //     let filehost_id = commande.filehost_id.as_str();
+    //     for fuuid in &commande.fuuids {
+    //         let filtre = doc! {"fuuid": fuuid};
+    //         let ops = doc! {
+    //             "$set": {
+    //                 format!("filehost.{}", filehost_id): &commande.visit_time,
+    //             },
+    //         };
+    //         debug!("command_file_visit Update filtre: {:?}\nOps: {:?}", filtre, ops);
+    //         collection.update_one_with_session(filtre, ops, options.clone(), session).await?;
+    //     }
+    // }
 
     // S'assurer d'avoir un filecontroler primary
     check_primary_filecontroler(middleware, instance_id.as_str(), session).await?;
