@@ -1290,9 +1290,10 @@ struct RequestFuuidsVisits {
     done: Option<bool>,
 }
 
+/// Receives a batch of file claims from a domain
 async fn commande_domain_visits_claims<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
-                                          -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
-where M: GenerateurMessages + MongoDao
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: GenerateurMessages + MongoDao
 {
     let certificate = m.certificat;
     let mut domains: Option<Vec<String>> = None;
@@ -1309,6 +1310,19 @@ where M: GenerateurMessages + MongoDao
     }
     let collection_claims = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
     collection_claims.insert_many(batch, None).await?;
+
+    if request.done == Some(true) {
+        // Put flag to indicate this domain has sent all its claims successfully
+        let collection_files_status = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_SYNC_STATUS)?;
+        for domain in &domains {
+            let filtre = doc!{"claimer": domain, "claimer_type": "domain"};
+            let ops = doc! {
+                "$currentDate": {"date_ready": true},
+            };
+            let options = UpdateOptions::builder().upsert(true).build();
+            collection_files_status.update_one(filtre, ops, options).await?;
+        }
+    }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
