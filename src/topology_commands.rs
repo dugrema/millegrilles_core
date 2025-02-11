@@ -950,10 +950,11 @@ impl From<RowFilehostFuuid> for FuuidVisitResponseItem {
 }
 
 #[derive(Serialize)]
-struct RequeteGetVisitesFuuidsResponse {
-    ok: bool,
-    visits: Vec<FuuidVisitResponseItem>,
-    unknown: Vec<String>
+pub struct RequeteGetVisitesFuuidsResponse {
+    pub ok: bool,
+    pub visits: Vec<FuuidVisitResponseItem>,
+    pub unknown: Vec<String>,
+    pub done: Option<bool>
 }
 
 async fn commande_claim_and_filehost_visits<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
@@ -1038,7 +1039,8 @@ where M: GenerateurMessages + MongoDao
     let reponse = RequeteGetVisitesFuuidsResponse {
         ok: true,
         visits: response_fuuids,
-        unknown: Vec::from_iter(fuuids_set.into_iter().map(|f|f.to_string()))
+        unknown: Vec::from_iter(fuuids_set.into_iter().map(|f|f.to_string())),
+        done: None,  // Not batching
     };
 
     // Mettre a jour tous les transferts de fichier

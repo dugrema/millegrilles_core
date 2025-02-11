@@ -22,7 +22,9 @@ use millegrilles_common_rust::notifications::NotificationMessageInterne;
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
+use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use serde::Deserialize;
+use crate::topology_commands::{FuuidVisitResponseItem, RequeteGetVisitesFuuidsResponse};
 
 pub async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), millegrilles_common_rust::error::Error>
 where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
@@ -46,30 +48,15 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
         }
     }
 
-    //if minutes % 5 == 2
+    // Check every 10 minutes if claims/visits can be processed (low impact if no work).
+    //if minutes % 10 == 2
     {
         if let Err(e) = regenerate_filehosting_fuuids(middleware).await {
             error!("core_topoologie.entretien Error in maintenance of files claims and visits : {:?}", e);
         }
     }
 
-    // Mettre a jour information locale a toutes les 5 minutes
-    // if minutes % 5 == 2 {
-    //     if let Err(e) = produire_information_locale(middleware).await {
-    //         error!("core_topoologie.entretien Erreur production information locale : {:?}", e);
-    //     }
-    // }
-
-    // if minutes == 4 {
-    //     if let Err(e) = rafraichir_fiches_millegrilles(middleware).await {
-    //         error!("core_topoologie.entretien Erreur rafraichir fiches millegrilles : {:?}", e);
-    //     }
-    // }
-
-    // if let Err(e) = verifier_instances_horsligne(middleware).await {
-    //     warn!("Erreur verification etat instances hors ligne {:?}", e);
-    // }
-
+    // TODO - Heavy process, reduce impact
     if minutes % 15 == 6
     {
         if let Err(e) = entretien_transfert_fichiers(middleware).await {
@@ -208,101 +195,60 @@ struct SyncStatusRow {
     date_ready: Option<DateTime<Utc>>,
 }
 
-/// Regenerates the filehosting_fuuids table from claims and visits
+/// Regenerates the filehosting_fuuids table from claims and visits when ready.
+/// Data is regularly provided by claimants at their discretion. Claims and visits are
+/// processed independently.
 async fn regenerate_filehosting_fuuids<M>(middleware: &M)
     -> Result<(), Error>
-    where M: ConfigMessages + MongoDao
+    where M: ConfigMessages + GenerateurMessages + MongoDao
 {
     merge_filehosting_fuuids_claims(middleware).await?;
     merge_filehosting_fuuids_visits(middleware).await?;
-
-    // let mut statuses = Vec::new();
-    // let collection_status = middleware.get_collection_typed::<SyncStatusRow>(NOM_COLLECTION_FILEHOSTING_SYNC_STATUS)?;
-    // let mut cursor = collection_status.find(doc!{}, None).await?;
-    // while cursor.advance().await? {
-    //     let row = cursor.deserialize_current()?;
-    //     if row.date_ready.is_none() {
-    //         info!("regenerate_filehosting_fuuids At least one previous claimer is not ready, cancel regeneration of claims/visits");
-    //         return Ok(())
-    //     }
-    //     statuses.push(row);
-    // }
-    //
-    // // Reset the sync status
-    // let ops = doc!{"$set": {"date_ready": None::<&str>}};
-    // collection_status.update_many(doc!{}, ops, None).await?;
-    //
-    // let claims_work_name = format!("{}_WORK", NOM_COLLECTION_FILEHOSTING_CLAIMS);
-    // let visits_work_name = format!("{}_WORK", NOM_COLLECTION_FILEHOSTING_VISITS);
-    // // Rename the collections
-    // // If any WORK tables exist, drop them
-    // middleware.rename_collection(NOM_COLLECTION_FILEHOSTING_CLAIMS, &claims_work_name, true).await?;
-    // middleware.rename_collection(NOM_COLLECTION_FILEHOSTING_VISITS, &visits_work_name, true).await?;
-    //
-    // // Prepare the collection indexes by fuuid
-    // let options_index = IndexOptions { nom_index: Some(String::from("fuuids")), unique: false};
-    // let champs_index_claims = vec!(ChampIndex { nom_champ: String::from("fuuid"), direction: 1 });
-    // middleware.create_index(middleware, claims_work_name.as_str(), champs_index_claims, Some(options_index)).await?;
-    //
-    // let options_index = IndexOptions { nom_index: Some(String::from("fuuids")), unique: false};
-    // let champs_index_claims = vec!(ChampIndex { nom_champ: String::from("fuuid"), direction: 1 });
-    // middleware.create_index(middleware, visits_work_name.as_str(), champs_index_claims, Some(options_index)).await?;
-    //
-    // // Merge claims into the filehosting fuuids table
-    // let claim_pipeline = vec![
-    //     doc!{"$sort": {"fuuid": 1}},
-    //     doc!{"$group": {"_id": "$fuuid", "last_claim_date": {"$max": "$claim_date"}}},
-    //     doc!{"$set": {"fuuid": "$_id"}},  // Copy field claim_date to last_claim_date (merge value)
-    //     doc!{"$unset": ["_id"]},          // Remove _id field for merge
-    //     doc!{"$merge": {
-    //         "into": NOM_COLLECTION_FILEHOSTING_FUUIDS,
-    //         "on": "fuuid",
-    //         "whenNotMatched": "insert",
-    //     }}
-    // ];
-    // info!("regenerate_filehosting_fuuids Merging claims START");
-    // let claims_work_collection = middleware.get_collection(claims_work_name)?;
-    // let options_claims = AggregateOptions::builder().hint(Hint::Name("fuuids".to_string())).build();
-    // claims_work_collection.aggregate(claim_pipeline.clone(), options_claims).await?;
-    // info!("regenerate_filehosting_fuuids Merging claims DONE");
-    //
-    // // All values processed
-    // claims_work_collection.drop(None).await?;
-    //
-    // // Merge visits
-    // // let visits_work_collection = middleware.get_collection(visits_work_name)?;
-    // // visits_work_collection.aggregate(fuuid_pipeline, None).await?;
-
     Ok(())
+}
+
+#[derive(Deserialize)]
+struct ClaimVisitsRow {
+    #[serde(rename="_id")]
+    id: String,
+    visits: Option<Vec<RowFilehostFuuid>>
 }
 
 /// Regenerates the filehosting_fuuids table from claims and visits
 async fn merge_filehosting_fuuids_claims<M>(middleware: &M)
     -> Result<(), Error>
-    where M: ConfigMessages + MongoDao
+    where M: ConfigMessages + GenerateurMessages + MongoDao
 {
     // Ensure that all claimer components have sent their data
-    let collection_status = middleware.get_collection_typed::<SyncStatusRow>(NOM_COLLECTION_FILEHOSTING_SYNC_STATUS)?;
-    let claimers_filtre = doc!{"claimer_type": "domain"};
-    let mut cursor = collection_status.find(claimers_filtre.clone(), None).await?;
-    let mut count = 0;
-    while cursor.advance().await? {
-        let row = cursor.deserialize_current()?;
-        if row.date_ready.is_none() {
-            info!("merge_filehosting_fuuids_claims At least one previous claimer is not ready, cancel regeneration of claims");
+    let claimer_domains = {
+        let mut count = 0;
+        let mut claimer_domains = Vec::new();
+
+        let collection_status = middleware.get_collection_typed::<SyncStatusRow>(NOM_COLLECTION_FILEHOSTING_SYNC_STATUS)?;
+        let claimers_filtre = doc!{"claimer_type": "domain"};
+        let mut cursor = collection_status.find(claimers_filtre.clone(), None).await?;
+
+        while cursor.advance().await? {
+            let row = cursor.deserialize_current()?;
+            if row.date_ready.is_none() {
+                info!("merge_filehosting_fuuids_claims At least one previous claimer is not ready, cancel regeneration of claims");
+                return Ok(())
+            }
+            claimer_domains.push(row.claimer);
+            count += 1;
+        }
+
+        if count == 0 {
+            info!("merge_filehosting_fuuids_claims No claimer in status list, cancel regeneration of claims");
             return Ok(())
         }
-        count += 1;
-    }
 
-    if count == 0 {
-        info!("merge_filehosting_fuuids_claims No claimer in status list, cancel regeneration of claims");
-        return Ok(())
-    }
+        // Reset the sync status
+        let ops = doc!{"$set": {"date_ready": None::<&str>}};
+        collection_status.update_many(claimers_filtre, ops, None).await?;
 
-    // Reset the sync status
-    let ops = doc!{"$set": {"date_ready": None::<&str>}};
-    collection_status.update_many(claimers_filtre, ops, None).await?;
+        claimer_domains
+    };
 
     // Rename the collections
     // If any WORK tables exist, drop them
@@ -327,13 +273,109 @@ async fn merge_filehosting_fuuids_claims<M>(middleware: &M)
         }}
     ];
     info!("regenerate_filehosting_fuuids Merging claims START");
-    let claims_work_collection = middleware.get_collection(claims_work_name)?;
+    let claims_work_collection = middleware.get_collection(&claims_work_name)?;
     let options_claims = AggregateOptions::builder().hint(Hint::Name("fuuids".to_string())).build();
-    claims_work_collection.aggregate(claim_pipeline.clone(), options_claims).await?;
+    claims_work_collection.aggregate(claim_pipeline.clone(), options_claims.clone()).await?;
     info!("regenerate_filehosting_fuuids Merging claims DONE");
 
-    // All values processed
+    // Respond to claims by domain.
+    respond_to_file_claims(middleware, claims_work_name.as_str(), &claimer_domains).await?;
+
+    // All values processed. Cleanup.
     claims_work_collection.drop(None).await?;
+
+    Ok(())
+}
+
+async fn respond_to_file_claims<M>(middleware: &M, work_collection_name: &str, claimer_domains: &Vec<String>)
+    -> Result<(), Error>
+    where M: GenerateurMessages + MongoDao
+{
+    const BATCH_SIZE: usize = 200;
+    let claims_work_collection = middleware.get_collection(work_collection_name)?;
+    let options_claims = AggregateOptions::builder().hint(Hint::Name("fuuids".to_string())).build();
+
+    for domain in claimer_domains {
+        debug!("response_to_file_claims Sending response to claims from {}", domain);
+        let claim_pipeline = vec![
+            doc!{"$sort": {"fuuid": 1}},
+            doc!{"$match": {"domains": domain}},
+            doc!{"$group": {"_id": "$fuuid"}},
+            doc!{"$lookup": {
+                // Lookup the rep table to get the user ids.
+                "from": NOM_COLLECTION_FILEHOSTING_FUUIDS,
+                "localField": "_id",
+                "foreignField": "fuuid",
+                "as": "visits",
+            }},
+        ];
+
+        // Prepare a response to receive the content
+        let mut reponse = RequeteGetVisitesFuuidsResponse {
+            ok: true,
+            visits: Vec::with_capacity(BATCH_SIZE),
+            unknown: Vec::new(),
+            done: Some(false),
+        };
+        // Response routing for this domain
+        let routage = RoutageMessageAction::builder(domain, "visits", vec![Securite::L3Protege])
+            .build();
+
+        let mut cursor = claims_work_collection.aggregate(claim_pipeline, options_claims.clone()).await?;
+        while cursor.advance().await? {
+            let row = cursor.deserialize_current()?;
+            let row: ClaimVisitsRow = convertir_bson_deserializable(row)?;
+            if let Some(visits) = row.visits {
+                if let Some(visit) = visits.get(0) {
+                    // debug!("Fuuid {} filehost visits: {:?}", row.id, visit.filehost);
+                    let mut visit_map = HashMap::new();
+                    if let Some(inner) = visit.filehost.as_ref() {
+                        for (k,v) in inner {
+                            if let Some(visit_date) = v {
+                                visit_map.insert(k.to_owned(), visit_date.timestamp());
+                            }
+                        }
+                    };
+
+                    let visit_entry = FuuidVisitResponseItem {fuuid: row.id, visits: visit_map};
+                    reponse.visits.push(visit_entry);
+                } else {
+                    reponse.unknown.push(row.id);
+                }
+            } else {
+                reponse.unknown.push(row.id);
+            }
+
+            if reponse.visits.len() >= BATCH_SIZE || reponse.unknown.len() >= BATCH_SIZE {
+                // Emit batch to domain
+                match middleware.transmettre_commande(routage.clone(), &reponse).await {
+                    Ok(Some(TypeMessage::Valide(_))) => {}  // Ok
+                    Err(e) => {
+                        warn!("response_to_file_claims Error sending file visits to claimant domain {}: {:?}", domain, e);
+                        break;  // Abort for this domain
+                    },
+                    _ =>  {
+                        warn!("response_to_file_claims Error sending file visits to claimant domain {}, wrong response type", domain);
+                        break;  // Abort for this domain
+                    }
+                }
+
+                // Reset response for next batch
+                reponse = RequeteGetVisitesFuuidsResponse {
+                    ok: true,
+                    visits: Vec::with_capacity(BATCH_SIZE),
+                    unknown: Vec::new(),
+                    done: Some(false),
+                }
+            }
+        }
+
+        reponse.done = Some(true);
+        if let Err(e) = middleware.transmettre_commande(routage.clone(), &reponse).await {
+            warn!("response_to_file_claims Error sending last batch of file visits to claimant domain {}: {:?}", domain, e);
+        }
+    }
+    debug!("response_to_file_claims Sending response to claims - DONE");
 
     Ok(())
 }
