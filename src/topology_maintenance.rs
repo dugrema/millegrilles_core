@@ -49,7 +49,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     }
 
     // Check every 10 minutes if claims/visits can be processed (low impact if no work).
-    //if minutes % 10 == 2
+    if minutes % 10 == 2
     {
         if let Err(e) = regenerate_filehosting_fuuids(middleware).await {
             error!("core_topoologie.entretien Error in maintenance of files claims and visits : {:?}", e);
@@ -291,7 +291,7 @@ async fn respond_to_file_claims<M>(middleware: &M, work_collection_name: &str, c
     -> Result<(), Error>
     where M: GenerateurMessages + MongoDao
 {
-    const BATCH_SIZE: usize = 200;
+    const BATCH_SIZE: usize = 500;
     let claims_work_collection = middleware.get_collection(work_collection_name)?;
     let options_claims = AggregateOptions::builder().hint(Hint::Name("fuuids".to_string())).build();
 
