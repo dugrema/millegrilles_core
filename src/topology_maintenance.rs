@@ -6,6 +6,7 @@ use crate::topology_constants::*;
 use crate::topology_events::produire_fiche_publique;
 use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, InformationMonitor, RowFilehostFuuid};
 use millegrilles_common_rust::bson::doc;
+use millegrilles_common_rust::bson::oid::ObjectId;
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::chrono::{DateTime, Datelike, Timelike, Utc};
 use millegrilles_common_rust::common_messages::EventFilehost;
@@ -56,7 +57,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
         }
     }
 
-    // TODO - Heavy process, reduce impact
+    // Maintain file transfers between filehosts
     if minutes % 15 == 6
     {
         if let Err(e) = entretien_transfert_fichiers(middleware).await {
@@ -73,6 +74,14 @@ struct RowInstanceActivite {
     hostname: Option<String>,
     date_presence: Option<i64>,
     date_hors_ligne: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct FuuidFilehostRow {
+    #[serde(rename="_id")]
+    id: ObjectId,
+    fuuid: String,
+    destination_filehost_id: String,
 }
 
 /// Genere les transferts de fichiers manquants et supprime ceux qui ne s'appliquent plus.
@@ -100,7 +109,7 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
         (filehosts_active, filehosts_inactive)
     };
 
-    // Supprimer transferts de filehosts inactifs
+    // Remove all transfers going to currently inactive filehosts
     let collection_transfers =
         middleware.get_collection_typed::<FilehostTransfer>(NOM_COLLECTION_FILEHOSTING_TRANSFERS)?;
     if filehosts_inactive.len() > 0 {
@@ -110,66 +119,91 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
         collection_transfers.delete_many(filtre, None).await?;
     }
 
-    let collection_fuuids = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+    // Check each transfer to ensure it is still required
+    let active_transfer_pipeline = vec![
+        doc!{"$lookup": {
+            "from": NOM_COLLECTION_FILEHOSTING_FUUIDS,
+            "localField": "fuuid",
+            "foreignField": "fuuid",
+            "as": "visits",
+        }},
 
-    // Verifier que chaque transfert restant est toujours applicable
-    let mut curseur_transfers = collection_transfers.find(doc!{}, None).await?;
-    while curseur_transfers.advance().await? {
-        let row = curseur_transfers.deserialize_current()?;
-        let filtre_visite = doc!{
-            "fuuid": &row.fuuid,
-            "$or": [
-                {"filehost": {}},
-                {format!("filehost.{}", row.destination_filehost_id): {"$exists": true}}
-            ]
-        };
-        let count_visite = collection_fuuids.count_documents(filtre_visite, None).await?;
-        if count_visite > 0 {
-            debug!("entretien_transfert_fichiers Le transfert {} vers {} ne s'applique plus", row.fuuid, row.destination_filehost_id);
-            let filtre_delete = doc!{"fuuid": row.fuuid, "destination_filehost_id": row.destination_filehost_id};
-            collection_transfers.delete_one(filtre_delete, None).await?;
+        // Turn the filehost document into an array
+        doc!{"$addFields": {"visit_entry": {"$arrayElemAt": ["$visits", 0]}}},
+        doc!{"$addFields": {"visit_list": {"$objectToArray": "$visit_entry.filehost"}}},
+
+        // Extract entry with visit_list[].k == destination_filehost_id
+        doc!{"$addFields": {"last_visit": {"$filter": {
+            "input": "$visit_list",
+            "as": "visit",
+            "cond": {"$eq": ["$$visit.k", "$destination_filehost_id"]}
+        }}}},
+
+        // Keep entry (for removal) if file is already present on destination
+        // If file is missing on destination => exists false, we want the transfer to happen.
+        doc!{"$match": {"last_visit.0": {"$exists": true}}},
+
+        doc!{"$project": {"_id": "$_id", "fuuid": 1, "destination_filehost_id": 1}},
+        // doc!{"$out":{"db": middleware.get_database()?.name(), "coll": "CoreTopologie/test",}},
+    ];
+    debug!("Cleanup expired active transfers START");
+    // collection_transfers.aggregate(active_transfer_pipeline, None).await?;
+    let mut transfers_expired = 0;
+    let mut cursor = collection_transfers.aggregate(active_transfer_pipeline, None).await?;
+    const BATCH_SIZE: usize = 100;
+    let mut batch_to_delete = Vec::new();
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        let row: FuuidFilehostRow = convertir_bson_deserializable(row)?;
+        batch_to_delete.push(row.id);
+        transfers_expired += 1;
+
+        if batch_to_delete.len() >= BATCH_SIZE {
+            let filtre_delete = doc!{"_id": {"$in": &batch_to_delete}};
+            collection_transfers.delete_many(filtre_delete, None).await?;
+            batch_to_delete.clear();
         }
     }
+    if batch_to_delete.len() > 0 {
+        let filtre_delete = doc!{"_id": {"$in": batch_to_delete}};
+        collection_transfers.delete_many(filtre_delete, None).await?;
+    }
+    debug!("Cleanup {} expired active transfers DONE", transfers_expired);
 
     if filehosts_active.len() > 0 {
-        debug!("entretien_transfert_fichiers {} filehosts actifs", filehosts_active.len());
-        let reclamation_expiration = Utc::now() - Duration::new(7*86_400, 0);
-        let mut filehost_doc = Vec::new();
+        let mut filehost_doc = doc!{};
         for (filehost_id, _) in &filehosts_active {
-            filehost_doc.push(doc!{format!("filehost.{}", filehost_id): {"$exists": false}});
+            filehost_doc.insert(filehost_id.to_string(), false);
         }
-        let filtre = doc!{
-            "$or": filehost_doc,
-            FIELD_LAST_CLAIM_DATE: {"$gte": reclamation_expiration}
-        };
-        debug!("entretien_transfert_fichiers Filtre: {:?}", filtre);
-        let mut cursor = collection_fuuids.find(filtre, None).await?;
-        let filehosts_active_list: HashSet<&String> = filehosts_active.keys().collect();
-        while cursor.advance().await? {
-            let row = cursor.deserialize_current()?;
-            if let Some(filehost) = row.filehost.as_ref() {
-                if filehost.len() == 0 {
-                    // File not present on any filehost, skip
-                    continue
-                }
-                let fuuid_filehost: HashSet<&String> = filehost.keys().collect();
-                let missing_from = filehosts_active_list.difference(&fuuid_filehost);
-                debug!("entretien_transfert_fichiers File {} missing from {:?}", row.fuuid, missing_from);
+        let claim_expiration = Utc::now() - Duration::new(7*86_400, 0);
+        let fuuids_pipeline = vec![
+            // Filter out entries without a recent claim
+            doc!{"$match": {"last_claim_date": {"$gte": claim_expiration}}},
+            // Pad all filehost entries with active filehosts. Will result in false if no visit date exists.
+            doc!{"$addFields": {"filehost_padded": {"$mergeObjects": [filehost_doc, "$filehost"]}}},
+            doc!{"$addFields": {"filehost_elem": {"$objectToArray": "$filehost_padded"}}},
+            doc!{"$unwind": {"path": "$filehost_elem"}},
 
-                let options = UpdateOptions::builder().upsert(true).build();
-                let ops = doc! {
-                    "$setOnInsert": {"created": Utc::now()},
-                    "$currentDate": {"modified": true},
-                };
-                for missing_from_filehost_id in missing_from {
-                    let filtre = doc! {
-                        "destination_filehost_id": &missing_from_filehost_id,
-                        "fuuid": &row.fuuid,
-                    };
-                    collection_transfers.update_one(filtre, ops.clone(), options.clone()).await?;
-                }
-            }
-        }
+            // Retain entries with filehost value of false, means there is no entry (no date).
+            doc!{"$match": {"filehost_elem.v": false}},
+            doc!{"$addFields": {"destination_filehost_id": "$filehost_elem.k", "created": "$$NOW", "modified": "$$NOW"}},
+            doc!{"$project": {"fuuid": 1, "destination_filehost_id": 1, "created": 1, "modified": 1}},
+
+            doc!{"$unset": "_id"},
+            // doc!{"$out": {"db": middleware.get_database()?.name(), "coll": "CoreTopologie/transfer_test"}},
+            doc!{"$merge": {
+                "into": NOM_COLLECTION_FILEHOSTING_TRANSFERS,
+                "on": ["destination_filehost_id", "fuuid"],
+                "whenMatched": "keepExisting",
+                "whenNotMatched": "insert",
+            }}
+
+        ];
+        let collection_transfers =
+            middleware.get_collection_typed::<FilehostTransfer>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+        debug!("Creating missing transfer items START");
+        collection_transfers.aggregate(fuuids_pipeline, None).await?;
+        debug!("Creating missing transfer items DONE");
     }
 
     emit_filehost_transfersupdated_event(middleware).await?;
