@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use log::kv::Source;
 use millegrilles_common_rust::bson::{doc, Bson, Array, DateTime};
 use millegrilles_common_rust::chrono::Utc;
@@ -359,7 +359,13 @@ async fn traiter_evenement_filehost_usage<M>(middleware: &M, m: MessageValide, s
     let commande: EventFilehostUsage = {
         let message_ref = m.message.parse()?;
         let message_contenu = message_ref.contenu()?;
-        message_contenu.deserialize()?
+        match message_contenu.deserialize() {
+            Ok(inner) => inner,
+            Err(e) => {
+                error!("traiter_evenement_filehost_usage Error parsing EventFilehostUsage: {:?}", e);
+                return Ok(None)
+            }
+        }
     };
     let filtre = doc! {"filehost_id": &commande.filehost_id};
     let ops = doc!{

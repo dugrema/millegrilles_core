@@ -23,6 +23,7 @@ use millegrilles_common_rust::notifications::NotificationMessageInterne;
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
+use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use serde::Deserialize;
 use crate::topology_commands::{FuuidVisitResponseItem, RequeteGetVisitesFuuidsResponse};
@@ -211,6 +212,69 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
     debug!("entretien_transfert_fichiers Fin");
     Ok(())
 }
+
+pub async fn add_missing_file_transfers<M>(middleware: &M, session: &mut ClientSession, new_claims: Vec<RowFilehostFuuid>)
+    -> Result<(), Error>
+    where M: GenerateurMessages + MongoDao
+{
+    // Get active filehosts
+    let filehosts_active = {
+        let collection_filehosts =
+            middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+        let filtre = doc!{"sync_active": true, "deleted": false};
+        let mut cursor = collection_filehosts.find(filtre, None).await?;
+
+        let mut filehosts_active = HashSet::new();
+        while cursor.advance().await? {
+            let row = cursor.deserialize_current()?;
+            filehosts_active.insert(row.filehost_id.clone());
+        }
+        filehosts_active
+    };
+
+    for claim in new_claims {
+        let mut missing_from = Vec::new();
+        // Find all filehost_ids this file is missing from
+        match claim.filehost {
+            Some(visits) => {
+                for filehost in &filehosts_active {
+                    if visits.get(filehost).is_none() {
+                        missing_from.push(filehost.clone());
+                    }
+                }
+            }
+            None => {
+                for filehost in &filehosts_active {
+                    missing_from.push(filehost.clone());
+                }
+            }
+        };
+
+        let mut transfers_to_add = Vec::new();
+        for filehost_id in missing_from {
+            debug!("Create missing file transfer for fuuid:{} on filehost_id:{}", claim.fuuid, filehost_id);
+            let transfer = FilehostTransfer {
+                destination_filehost_id: filehost_id,
+                fuuid: claim.fuuid.clone(),
+                created: Utc::now(),
+                modified: Utc::now(),
+                job_picked_up: None,
+            };
+            transfers_to_add.push(transfer);
+        }
+        if ! transfers_to_add.is_empty() {
+            let collection_transfers =
+                middleware.get_collection_typed::<FilehostTransfer>(NOM_COLLECTION_FILEHOSTING_TRANSFERS)?;
+            collection_transfers.insert_many_with_session(transfers_to_add, None, session).await?;
+        }
+    }
+
+    // Tell filecontroler that new transfers are available
+    emit_filehost_transfersupdated_event(middleware).await?;
+
+    Ok(())
+}
+
 
 pub async fn emit_filehost_transfersupdated_event<M>(middleware: &M) -> Result<(), Error> where M: GenerateurMessages {
     let event = json!({});

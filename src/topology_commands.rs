@@ -34,7 +34,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use millegrilles_common_rust::redis::Commands;
 use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
 use millegrilles_common_rust::mongodb::{ClientSession, Cursor};
-use crate::topology_maintenance::entretien_transfert_fichiers;
+use crate::topology_maintenance::{add_missing_file_transfers, entretien_transfert_fichiers};
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -892,8 +892,10 @@ async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &
     for fuuid in commande.fuuids {
         batch.push(doc!{"fuuid": fuuid, "filehost_id": filehost_id, "visit_time": &commande.visit_time});
     }
-    let collection_visits = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
-    collection_visits.insert_many(batch, None).await?;
+    if ! batch.is_empty() {
+        let collection_visits = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_VISITS)?;
+        collection_visits.insert_many(batch, None).await?;
+    }
 
     if commande.done == Some(true) {
         // Put flag to indicate this filehost_id has sent all its visits successfully
@@ -976,12 +978,19 @@ where M: GenerateurMessages + MongoDao
     fuuids_set.extend(requete.fuuids.iter());
     // let mut response_fuuids: HashMap<String, RowFuuidVisitResponse> = HashMap::new();
     let mut response_fuuids: Vec<FuuidVisitResponseItem> = Vec::new();
+    let mut new_claims_fuuids: Vec<RowFilehostFuuid> = Vec::new();
 
     let filtre = doc! {"fuuid": {"$in": &requete.fuuids}};
     let collection = middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
     let mut curseur = collection.find_with_session(filtre, None, session).await?;
     while curseur.advance(session).await? {
         let row = curseur.deserialize_current()?;
+
+        // Keep as new claim if claim date is null. Triggers the transfer when appropriate
+        if row.last_claim_date.is_none() {
+            new_claims_fuuids.push(row.clone());
+        }
+
         fuuids_set.remove(&row.fuuid);
         response_fuuids.push(row.into());
     }
@@ -1000,11 +1009,13 @@ where M: GenerateurMessages + MongoDao
         if let extensions = m.certificat.extensions()? {
             domains = extensions.domaines;
         }
-        for fuuid in &fuuids_requis {
-            batch.push(doc!{"fuuid": *fuuid, "claim_date": &now, "domains": &domains})
+        if ! fuuids_requis.is_empty() {
+            for fuuid in &fuuids_requis {
+                batch.push(doc! {"fuuid": *fuuid, "claim_date": &now, "domains": &domains})
+            }
+            let collection_agg_claim = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
+            collection_agg_claim.insert_many(batch, None).await?;
         }
-        let collection_agg_claim = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
-        collection_agg_claim.insert_many(batch, None).await?;
     }
 
     // Conserver les reclamations.
@@ -1044,7 +1055,9 @@ where M: GenerateurMessages + MongoDao
     };
 
     // Mettre a jour tous les transferts de fichier
-    // entretien_transfert_fichiers(middleware).await?;
+    session.commit_transaction().await?;
+    start_transaction_regular(session).await?;
+    add_missing_file_transfers(middleware, session, new_claims_fuuids).await?;
 
     Ok(Some(middleware.build_reponse(reponse)?.0))
 }
@@ -1102,7 +1115,10 @@ async fn commande_filehost_batch_transfers<M>(middleware: &M, m: MessageValide, 
     // Recuperer les nouveaux transferts en premier (job_picked_up = null)
     let filtre = doc!{
         "destination_filehost_id": &commande.destination_filehost_id,
-        FIELD_JOB_PICKED_UP: {"$exists": false}
+        "$or": [
+            { FIELD_JOB_PICKED_UP: {"$exists": false} },
+            { FIELD_JOB_PICKED_UP: None::<bool> },
+        ]
     };
     let options = FindOptions::builder().limit(batch_limit as i64).build();
     let curseur = collection_transfers.find(filtre, options).await?;
@@ -1311,8 +1327,10 @@ async fn commande_domain_visits_claims<M>(middleware: &M, m: MessageValide, sess
     for fuuid in request.fuuids {
         batch.push(doc!{"fuuid": fuuid, "claim_date": &now, "domains": &domains});
     }
-    let collection_claims = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
-    collection_claims.insert_many(batch, None).await?;
+    if ! batch.is_empty() {
+        let collection_claims = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_CLAIMS)?;
+        collection_claims.insert_many(batch, None).await?;
+    }
 
     if request.done == Some(true) {
         // Put flag to indicate this domain has sent all its claims successfully

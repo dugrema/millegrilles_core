@@ -326,7 +326,7 @@ pub struct FilehostTransfer {
     pub job_picked_up: Option<DateTime<Utc>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct RowFilehostFuuid {
     pub fuuid: String,
     #[serde(default, with="opt_chrono_datetime_as_bson_datetime")]
