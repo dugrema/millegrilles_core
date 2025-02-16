@@ -1,11 +1,11 @@
 [package]
 name = "millegrilles_core"
-version = "2025.1.94"
+version = "2025.1.98"
 edition = "2021"
 
 [dependencies]
-# millegrilles_common_rust = { git = "https://github.com/dugrema/millegrilles_common_rust.git", tag = "2024.9-release" }
-millegrilles_common_rust = { git = "https://github.com/dugrema/millegrilles_common_rust.git", branch = "master" }
+millegrilles_common_rust = { git = "https://github.com/dugrema/millegrilles_common_rust.git", tag = "2025.1-release" }
+# millegrilles_common_rust = { git = "https://github.com/dugrema/millegrilles_common_rust.git", branch = "master" }
 # millegrilles_common_rust = { path = "/home/mathieu/RustroverProjects/millegrilles_common_rust" }
 
 log = { version = "0.4.14", features = ["max_level_debug", "release_max_level_info"] }
