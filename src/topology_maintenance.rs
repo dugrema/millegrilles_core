@@ -59,7 +59,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     }
 
     // Maintain file transfers between filehosts
-    // if minutes % 15 == 6
+    if minutes % 15 == 6
     {
         if let Err(e) = entretien_transfert_fichiers(middleware).await {
             error!("core_topologie.entretien Erreur entretien transferts fichiers : {:?}", e);
