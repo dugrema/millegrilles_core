@@ -191,7 +191,7 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
             // Filter out entries without a recent claim or that don't exist anywhere
             doc!{"$match": {
                 "last_claim_date": {"$gte": claim_expiration},
-                // Ignore files not present anywhere
+                // Ignore files not present anywhere (null or empty dict)
                 "filehost": {"$exists": true},
                 "filehost": {"$ne": {}},  // not empty
             }},
