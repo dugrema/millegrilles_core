@@ -183,18 +183,26 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
 
     // Create missing file transfers
     if filehosts_active.len() > 0 {
+        // Make a list of active filehosts. Require that the visit be recent.
+        let mut filehost_list = Vec::new();
+        for (filehost_id, _) in &filehosts_active {
+            filehost_list.push(doc!{format!("filehost.{}", filehost_id): {"$gte": claim_expiration}});
+        }
+
+        // Filter out entries without a recent claim or that don't exist anywhere
+        // Only rely on filehosts with recent visits on the file.
+        let match_filehosts = doc!{
+            "last_claim_date": {"$gte": claim_expiration},
+            "$or": filehost_list,
+        };
+
         let mut filehost_doc = doc!{};
         for (filehost_id, _) in &filehosts_active {
             filehost_doc.insert(filehost_id.to_string(), false);
         }
         let fuuids_pipeline = vec![
             // Filter out entries without a recent claim or that don't exist anywhere
-            doc!{"$match": {
-                "last_claim_date": {"$gte": claim_expiration},
-                // Ignore files not present anywhere (null or empty dict)
-                "filehost": {"$exists": true},
-                "filehost": {"$ne": {}},  // not empty
-            }},
+            doc!{"$match": match_filehosts},
             // Pad all filehost entries with active filehosts. Will result in false if no visit date exists.
             doc!{"$addFields": {"filehost_padded": {"$mergeObjects": [filehost_doc, "$filehost"]}}},
             doc!{"$addFields": {"filehost_elem": {"$objectToArray": "$filehost_padded"}}},
@@ -215,7 +223,7 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
             }}
         ];
         let collection_transfers =
-            middleware.get_collection_typed::<FilehostTransfer>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+            middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
         debug!("Creating missing transfer items START");
         collection_transfers.aggregate(fuuids_pipeline, None).await?;
         debug!("Creating missing transfer items DONE");
