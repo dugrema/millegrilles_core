@@ -59,7 +59,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     }
 
     // Maintain file transfers between filehosts
-    if minutes % 15 == 6
+    // if minutes % 15 == 6
     {
         if let Err(e) = entretien_transfert_fichiers(middleware).await {
             error!("core_topologie.entretien Erreur entretien transferts fichiers : {:?}", e);
@@ -120,6 +120,9 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
         collection_transfers.delete_many(filtre, None).await?;
     }
 
+    // Consider claims of more than 3 days ago as expired
+    let claim_expiration = Utc::now() - Duration::new(3*86_400, 0);
+
     // Check each transfer to ensure it is still required
     let active_transfer_pipeline = vec![
         doc!{"$lookup": {
@@ -140,9 +143,16 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
             "cond": {"$eq": ["$$visit.k", "$destination_filehost_id"]}
         }}}},
 
-        // Keep entry (for removal) if file is already present on destination
-        // If file is missing on destination => exists false, we want the transfer to happen.
-        doc!{"$match": {"last_visit.0": {"$exists": true}}},
+        // Keep entry (for removal) if file is already present on destination or not claimed/expired
+        // If a valid file is missing on destination => exists false, we want the transfer to happen.
+        doc!{"$match":
+            {"$or": [
+                {"last_visit.0": {"$exists": true}},
+                // Keep files with expired or missing claim field - the transfer must not happen
+                {"last_claim_date": null},
+                {"last_claim_date": {"$lte": claim_expiration}},
+            ]}
+        },
 
         doc!{"$project": {"_id": "$_id", "fuuid": 1, "destination_filehost_id": 1}},
         // doc!{"$out":{"db": middleware.get_database()?.name(), "coll": "CoreTopologie/test",}},
@@ -171,15 +181,20 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
     }
     debug!("Cleanup {} expired active transfers DONE", transfers_expired);
 
+    // Create missing file transfers
     if filehosts_active.len() > 0 {
         let mut filehost_doc = doc!{};
         for (filehost_id, _) in &filehosts_active {
             filehost_doc.insert(filehost_id.to_string(), false);
         }
-        let claim_expiration = Utc::now() - Duration::new(7*86_400, 0);
         let fuuids_pipeline = vec![
-            // Filter out entries without a recent claim
-            doc!{"$match": {"last_claim_date": {"$gte": claim_expiration}}},
+            // Filter out entries without a recent claim or that don't exist anywhere
+            doc!{"$match": {
+                "last_claim_date": {"$gte": claim_expiration},
+                // Ignore files not present anywhere
+                "filehost": {"$exists": true},
+                "filehost": {"$ne": {}},  // not empty
+            }},
             // Pad all filehost entries with active filehosts. Will result in false if no visit date exists.
             doc!{"$addFields": {"filehost_padded": {"$mergeObjects": [filehost_doc, "$filehost"]}}},
             doc!{"$addFields": {"filehost_elem": {"$objectToArray": "$filehost_padded"}}},
@@ -198,7 +213,6 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
                 "whenMatched": "keepExisting",
                 "whenNotMatched": "insert",
             }}
-
         ];
         let collection_transfers =
             middleware.get_collection_typed::<FilehostTransfer>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
