@@ -25,7 +25,7 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use crate::topology_commands::{FuuidVisitResponseItem, RequeteGetVisitesFuuidsResponse};
 
 pub async fn traiter_cedule<M>(middleware: &M, trigger: &MessageCedule) -> Result<(), millegrilles_common_rust::error::Error>
@@ -46,7 +46,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     {
         debug!("Produire fiche publique");
         if let Err(e) = produire_fiche_publique(middleware).await {
-            error!("core_topoologie.entretien Erreur production fiche publique initiale : {:?}", e);
+            error!("core_topoologie.produire_fiche_publique Erreur production fiche publique initiale : {:?}", e);
         }
     }
 
@@ -54,7 +54,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     if minutes % 10 == 2
     {
         if let Err(e) = regenerate_filehosting_fuuids(middleware).await {
-            error!("core_topoologie.entretien Error in maintenance of files claims and visits : {:?}", e);
+            error!("core_topoologie.regenerate_filehosting_fuuids Error in maintenance of files claims and visits : {:?}", e);
         }
     }
 
@@ -62,7 +62,15 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     if minutes % 15 == 6
     {
         if let Err(e) = entretien_transfert_fichiers(middleware).await {
-            error!("core_topologie.entretien Erreur entretien transferts fichiers : {:?}", e);
+            error!("core_topologie.entretien_transfert_fichiers Erreur entretien transferts fichiers : {:?}", e);
+        }
+    }
+
+    // if hours % 12 == 0 && minutes == 29
+    if minutes == 29
+    {
+        if let Err(e) = maintain_unclaimed_fuuids(middleware).await {
+            error!("core_topologie.maintain_unclaimed_fuuids Erreur entretien transferts fichiers : {:?}", e);
         }
     }
 
@@ -559,5 +567,133 @@ async fn merge_filehosting_fuuids_visits<M>(middleware: &M)
     // All values processed
     visits_work_collection.drop(None).await?;
 
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct RequestDeleteFiles {
+    /// List of fuuids to delete with an optional list of filehost_ids from which the file must be deleted.
+    fuuids: HashMap<String, Option<Vec<String>>>,
+}
+
+#[derive(Deserialize)]
+struct ResponseDeleteFiles {
+    ok: Option<bool>,
+    err: Option<String>,
+    /// Map of deleted fuids with the list of filehost_ids from which the file was
+    /// acknownleged as being just deleted or already not present.
+    fuuids: Option<HashMap<String, Option<Vec<String>>>>,
+}
+
+async fn maintain_unclaimed_fuuids<M>(middleware: &M) -> Result<(), Error>
+    where M: GenerateurMessages + MongoDao
+{
+    info!("maintain_unclaimed_fuuids START");
+
+    let collection_fuuids =
+        middleware.get_collection_typed::<RowFilehostFuuid>(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+
+    // Set the unclaim_check timestamp to expired claims
+    let now = Utc::now();
+    let claim_expired = now - Duration::from_secs(7*86_400);
+    let filtre = doc!{
+        "$or": [
+            {"last_claim_date": null},
+            {"last_claim_date": {"$lt": &claim_expired}},
+        ],
+        "unclaim_check": null,
+    };
+    let ops = doc!{ "$currentDate": {"unclaim_check": true} };
+    collection_fuuids.update_many(filtre, ops, None).await?;
+
+    // Unset the unclaim_check for claims that are current
+    let filtre = doc!{
+        "last_claim_date": {"$gte": &claim_expired},
+        "unclaim_check": {"$exists": true},
+    };
+    let ops = doc!{ "$unset": {"unclaim_check": true} };
+    collection_fuuids.update_many(filtre, ops, None).await?;
+
+    // Identify unclaim_check that are old enough to get triggered
+    let unclaim_ready = now - Duration::from_secs(21*86_400);
+    // let unclaim_ready = now - Duration::from_secs(120);
+    let filtre = doc!{"unclaim_check": {"$lt": &unclaim_ready}};
+    let mut cursor = collection_fuuids.find(filtre.clone(), None).await?;
+    while cursor.advance().await? {
+        let row = match cursor.deserialize_current() {
+            Ok(inner) => inner,
+            Err(e) => {
+                warn!("Error deserializing collection fuuids entry: {:?}", e);
+                continue
+            }
+        };
+        info!("Ready to remove fuuid {} from all filehosts: {:?}", row.fuuid, row.filehost);
+        let mut ready_to_delete = false;
+        if let Some(visits) = row.filehost {
+            if visits.is_empty() {
+                // The file is not knwon to be on any filehost. The entry can be deleted.
+                ready_to_delete = true;
+            } else {
+                let present_on_filehosts: Vec<String> = visits.keys().into_iter().map(|s| s.to_string()).collect();
+                let mut map = HashMap::new();
+                map.insert(row.fuuid.clone(), Some(present_on_filehosts));
+                let request = RequestDeleteFiles {
+                    fuuids: map,
+                };
+                let routage = RoutageMessageAction::builder("filecontroler", "deleteFiles", vec![Securite::L1Public])
+                    .build();
+                match middleware.transmettre_commande(routage, &request).await {
+                    Ok(Some(TypeMessage::Valide(response))) => {
+                        let response = response.message.parse_to_owned()?;
+                        let files_response: ResponseDeleteFiles = response.deserialize()?;
+                        if files_response.ok == Some(true) {
+                            info!("maintain_unclaimed_fuuids File {} deleted from: {:?}", row.fuuid, files_response.fuuids);
+                            let present_on_filehosts: HashSet<&String> = HashSet::from_iter(visits.keys().into_iter());
+                            if let Some(fuuids) = files_response.fuuids {
+                                if let Some(Some(filehost_ids)) = fuuids.get(&row.fuuid) {
+                                    let confirmed_deleted: HashSet<&String> = HashSet::from_iter(filehost_ids.into_iter());
+                                    if confirmed_deleted.is_superset(&present_on_filehosts) {
+                                        info!("maintain_unclaimed_fuuids File {} deleted from all known filehosts", row.fuuid);
+                                        ready_to_delete = true;
+                                    } else {
+                                        if ! confirmed_deleted.is_empty() {
+                                            // Update the fuuids database with the partial deletion information.
+                                            let mut unsets = doc! {};
+                                            for filehost_id in confirmed_deleted {
+                                                unsets.insert(format!("filehost.{}", filehost_id), true);
+                                            }
+                                            let filtre = doc! {"fuuid": &row.fuuid};
+                                            let ops = doc! {"$unset": unsets};
+                                            debug!("maintain_unclaimed_fuuids Unset filtre: {:?}, ops: {:?}", filtre, ops);
+                                            collection_fuuids.update_one(filtre, ops, None).await?;
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            error!("maintain_unclaimed_fuuids Error deleting file {}: {:?}", row.fuuid, files_response.err);
+                        }
+                    },
+                    Err(e) => {
+                        error!("maintain_unclaimed_fuuids Error deleting file: {:?}", e);
+                    },
+                    _ => {
+                        error!("maintain_unclaimed_fuuids Error deleting file, invalid response message type");
+                    }
+                }
+            }
+        } else {
+            // The file is not known to have ever been present on any filehosts. The entry can be deleted.
+            ready_to_delete = true;
+        }
+
+        if ready_to_delete {
+            info!("Deleting of fuuid {} complete from all filehosts, deleting from collection", row.fuuid);
+            let filtre = doc!{"fuuid": &row.fuuid};
+            collection_fuuids.delete_one(filtre.clone(), None).await?;
+        }
+    }
+
+    info!("maintain_unclaimed_fuuids DONE");
     Ok(())
 }
