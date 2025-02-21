@@ -362,12 +362,13 @@ async fn merge_filehosting_fuuids_claims<M>(middleware: &M)
 
         while cursor.advance().await? {
             let row = cursor.deserialize_current()?;
-            if row.date_ready.is_none() {
-                info!("merge_filehosting_fuuids_claims At least one previous claimer is not ready, cancel regeneration of claims");
-                return Ok(())
+            if row.date_ready.is_some() {
+                claimer_domains.push(row.claimer);
+                count += 1;
+            } else {
+                // info!("merge_filehosting_fuuids_claims At least one previous claimer is not ready, cancel regeneration of claims");
+                // return Ok(())
             }
-            claimer_domains.push(row.claimer);
-            count += 1;
         }
 
         if count == 0 {
