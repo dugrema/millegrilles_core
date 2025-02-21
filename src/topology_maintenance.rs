@@ -70,7 +70,11 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     if minutes == 29
     {
         if let Err(e) = maintain_unclaimed_fuuids(middleware).await {
-            error!("core_topologie.maintain_unclaimed_fuuids Erreur entretien transferts fichiers : {:?}", e);
+            error!("core_topologie.maintain_unclaimed_fuuids Error maintaining unclaimed fuuids : {:?}", e);
+        }
+
+        if let Err(e) = maintain_expired_filehost_visits(middleware).await {
+            error!("core_topologie.maintain_unclaimed_fuuids Error maintaining expired filehost visits : {:?}", e);
         }
     }
 
@@ -512,6 +516,16 @@ async fn merge_filehosting_fuuids_visits<M>(middleware: &M)
     -> Result<(), Error>
     where M: ConfigMessages + MongoDao
 {
+    // Make a list of active fileshosts. Ignore deleted/no sync filehosts.
+    let mut active_filehost_ids = HashSet::new();
+    let collection_filehosts = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+    let filtre = doc!{"deleted": false, "sync_active": true};
+    let mut cursor = collection_filehosts.find(filtre, None).await?;
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        active_filehost_ids.insert(row.filehost_id);
+    }
+
     // Ensure that all claimer components have sent their data
     let collection_status = middleware.get_collection_typed::<SyncStatusRow>(NOM_COLLECTION_FILEHOSTING_SYNC_STATUS)?;
     let claimers_filtre = doc! {"claimer_type": "filehost"};
@@ -519,11 +533,14 @@ async fn merge_filehosting_fuuids_visits<M>(middleware: &M)
     let mut cursor = collection_status.find(claimers_filtre.clone(), None).await?;
     while cursor.advance().await? {
         let row = cursor.deserialize_current()?;
-        if row.date_ready.is_none() {
-            info!("merge_filehosting_fuuids_visits At least one previous claimer is not ready, cancel regeneration of visits");
-            return Ok(())
+        let filehost_id = row.claimer;
+        if active_filehost_ids.contains(&filehost_id) {  // Check if the filehost is active
+            if row.date_ready.is_none() {
+                info!("merge_filehosting_fuuids_visits At least one previous active claimer is not ready, cancel regeneration of visits");
+                return Ok(())
+            }
+            count += 1;
         }
-        count += 1;
     }
 
     if count == 0 {
@@ -695,5 +712,47 @@ async fn maintain_unclaimed_fuuids<M>(middleware: &M) -> Result<(), Error>
     }
 
     info!("maintain_unclaimed_fuuids DONE");
+    Ok(())
+}
+
+#[derive(Deserialize)]
+struct ObjectToArrayKeyStringValueDate {
+    k: String,
+    #[serde(default, with = "opt_chrono_datetime_as_bson_datetime")]
+    v: Option<DateTime<Utc>>
+}
+
+#[derive(Deserialize)]
+struct FilehostFuuidRow {
+    fuuid: String,
+    filehost_elem: ObjectToArrayKeyStringValueDate
+}
+
+/// Remove all filehost visit dates that are expired. Consider files on those filehosts as no
+/// longer available.
+async fn maintain_expired_filehost_visits<M>(middleware: &M) -> Result<(), Error>
+    where M: MongoDao
+{
+    let expired_visit = Utc::now() - Duration::from_secs(3 * 86_400);
+    // let expired_visit = Utc::now() - Duration::from_secs(60);
+
+    let pipeline = vec![
+        doc!{"$addFields": {"filehost_elem": {"$objectToArray": "$filehost"}}},
+        doc!{"$unwind": {"path": "$filehost_elem"}},
+        doc!{"$match": {"filehost_elem.v": {"$lt": expired_visit}}},
+    ];
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_FUUIDS)?;
+    let mut cursor = collection.aggregate(pipeline, None).await?;
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        let row: FilehostFuuidRow = convertir_bson_deserializable(row)?;
+
+        let filtre = doc!{"fuuid": row.fuuid};
+        let ops = doc!{
+            "$unset": {format!("filehost.{}", row.filehost_elem.k): true},
+        };
+        collection.update_one(filtre, ops, None).await?;
+    }
+
     Ok(())
 }
