@@ -50,8 +50,8 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
         }
     }
 
-    // Check every 10 minutes if claims/visits can be processed (low impact if no work).
-    if minutes % 10 == 2
+    // Check every 3 minutes if claims/visits can be processed (low impact if no work).
+    if minutes % 3 == 2
     {
         if let Err(e) = regenerate_filehosting_fuuids(middleware).await {
             error!("core_topoologie.regenerate_filehosting_fuuids Error in maintenance of files claims and visits : {:?}", e);
@@ -535,11 +535,13 @@ async fn merge_filehosting_fuuids_visits<M>(middleware: &M)
         let row = cursor.deserialize_current()?;
         let filehost_id = row.claimer;
         if active_filehost_ids.contains(&filehost_id) {  // Check if the filehost is active
-            if row.date_ready.is_none() {
-                info!("merge_filehosting_fuuids_visits At least one previous active claimer is not ready, cancel regeneration of visits");
-                return Ok(())
+            // if row.date_ready.is_none() {
+            //     info!("merge_filehosting_fuuids_visits At least one previous active claimer is not ready, cancel regeneration of visits");
+            //     return Ok(())
+            // }
+            if row.date_ready.is_some() {
+                count += 1;
             }
-            count += 1;
         }
     }
 
@@ -564,10 +566,24 @@ async fn merge_filehosting_fuuids_visits<M>(middleware: &M)
     // Merge claims into the filehosting fuuids table
     let visits_pipeline = vec![
         doc!{"$sort": {"fuuid": 1}},
+
+        // Group rows for the same fuuid into a single row with filehost visit times
         doc!{"$addFields": {"obj": {"k": "$filehost_id", "v": "$visit_time"}}},
         doc!{"$group": {"_id": "$fuuid", "items": {"$push": "$obj"}}},
-        doc!{"$addFields": {"fuuid": "$_id", "filehost": {"$arrayToObject": "$items"} }},
-        doc!{"$unset": ["_id", "items"]},
+        doc!{"$addFields": {"fuuid": "$_id", "filehost_updated": {"$arrayToObject": "$items"} }},
+
+        // Lookup existing visits to keep information from filehosts not being updated
+        doc!{"$lookup": {
+            "from": NOM_COLLECTION_FILEHOSTING_FUUIDS,
+            "localField": "fuuid",
+            "foreignField": "fuuid",
+            "as": "visits",
+        }},
+        doc!{"$addFields": {"visit_entry": {"$arrayElemAt": ["$visits", 0]}}},
+        doc!{"$addFields": {"filehost": {"$mergeObjects": ["$visit_entry.filehost", "$filehost_updated"]}}},
+
+        // Merge filehost element using the fuuid
+        doc!{"$unset": ["_id", "items", "visits", "visit_entry", "filehost_updated"]},
         doc!{"$merge": {
             // "into": NOM_COLLECTION_FILEHOSTING_FUUIDS_WORK,
             "into": NOM_COLLECTION_FILEHOSTING_FUUIDS,
