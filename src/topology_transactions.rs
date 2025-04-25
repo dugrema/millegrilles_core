@@ -411,20 +411,44 @@ where M: GenerateurMessages + MongoDao
 
     let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
     let now = Utc::now();
-    let filehost = FilehostServerRow {
-        filehost_id: transaction_id.clone(),  // Assign new hostfile_id from transaction id
-        instance_id,
-        url_internal: doc_transaction.url_internal,
-        url_external: doc_transaction.url_external,
-        tls_external: doc_transaction.tls_external,
-        deleted: false,
-        sync_active: true,
-        created: now.clone(),
-        modified: now,
-        fuuid: None,
+
+    // let filehost = FilehostServerRow {
+    //     filehost_id: transaction_id.clone(),  // Assign new hostfile_id from transaction id
+    //     instance_id,
+    //     url_internal: doc_transaction.url_internal,
+    //     url_external: doc_transaction.url_external,
+    //     tls_external: doc_transaction.tls_external,
+    //     deleted: false,
+    //     sync_active: true,
+    //     created: now.clone(),
+    //     modified: now,
+    //     fuuid: None,
+    // };
+    // let filehost_bson = convertir_to_bson(filehost)?;
+    // collection.insert_one_with_session(filehost_bson, None, session).await?;
+
+    let set_ops = doc! {
+        "instance_id": instance_id,
+        "url_internal": doc_transaction.url_internal, 
+        "url_external": doc_transaction.url_external,
+        "tls_external": doc_transaction.tls_external,
     };
-    let filehost_bson = convertir_to_bson(filehost)?;
-    collection.insert_one_with_session(filehost_bson, None, session).await?;
+    let set_on_insert = doc! {
+        "deleted": false,
+        "sync_active": true,
+        "created": now.clone(),
+        "fuuid": None::<&str>,
+    };
+    
+    let ops = doc! {
+        "$set": set_ops,
+        "$setOnInsert": set_on_insert,
+        "$currentDate": {"modified": true},
+    };
+    
+    let filtre = doc! {"filehost_id": &transaction_id};
+    let options = UpdateOptions::builder().upsert(true).build();
+    collection.update_one(filtre, ops, options).await?;
 
     let response = HostfileAddTransactionResponse {ok: true, filehost_id: transaction_id.clone()};
     let response = middleware.build_reponse(response)?.0;

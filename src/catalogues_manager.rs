@@ -107,7 +107,8 @@ impl GestionnaireDomaineSimple for CataloguesManager {
         if let Some(collection_name) = self.get_collection_transactions() {
             prepare_mongodb_domain_indexes(middleware, collection_name).await?;
         }
-        preparer_index_mongodb(middleware).await?;  // Specialised indexes for domain collections
+        // Specialised indexes for domain collections
+        preparer_index_mongodb_catalogues(middleware).await?;
         Ok(())
     }
 }
