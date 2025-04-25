@@ -35,6 +35,10 @@ impl GestionnaireDomaineV2 for TopologyManager {
             String::from(NOM_COLLECTION_INSTANCE_CONFIGURATION),
         ])
     }
+
+    fn get_rebuild_transaction_batch_size(&self) -> u64 {
+        1
+    }
 }
 
 impl GestionnaireBusMillegrilles for TopologyManager {
