@@ -13,9 +13,10 @@ use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use serde::{Deserialize, Serialize};
 use crate::catalogues_constants::*;
+use crate::catalogues_structs::Catalogue;
 
 pub async fn consommer_requete_catalogues<M>(middleware: &M, message: MessageValide)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
     debug!("Consommer requete : {:?}", &message.type_message);
@@ -62,7 +63,8 @@ struct CatalogueApplicationDeps {
 #[derive(Serialize)]
 struct ReponseListeApplications {
     ok: bool,
-    resultats: Option<Vec<CatalogueApplicationDeps>>
+    resultats: Option<Vec<CatalogueApplicationDeps>>,
+    current_version: Option<String>,
 }
 
 async fn liste_applications<M>(middleware: &M)
@@ -95,7 +97,7 @@ async fn liste_applications<M>(middleware: &M)
     }
 
     debug!("Apps : {:?}", apps);
-    let reponse = ReponseListeApplications { ok: true, resultats: Some(apps) };
+    let reponse = ReponseListeApplications { ok: true, resultats: Some(apps), current_version: None };
 
     Ok(Some(middleware.build_reponse(&reponse)?.0))
 }
@@ -114,6 +116,14 @@ async fn liste_versions_application<M>(middleware: &M, message: MessageValide)
     let requete: RequeteVersionsApplication = message_contenu.deserialize()?;
 
     let filtre = doc! { "nom": &requete.nom };
+
+    let collection = middleware.get_collection_typed::<Catalogue>(NOM_COLLECTION_CATALOGUES)?;
+    let current_version: Option<String> = if let Some(current) = collection.find_one(filtre.clone(), None).await? {
+        Some(current.version)
+    } else {
+        None
+    };
+
     let projection = doc!{
         "nom": true,
         "version": true,
@@ -138,7 +148,7 @@ async fn liste_versions_application<M>(middleware: &M, message: MessageValide)
     }
 
     debug!("Apps : {:?}", apps);
-    let reponse = ReponseListeApplications { ok: true, resultats: Some(apps) };
+    let reponse = ReponseListeApplications { ok: true, resultats: Some(apps), current_version };
 
     Ok(Some(middleware.build_reponse(&reponse)?.0))
 }
