@@ -34,7 +34,10 @@ impl GestionnaireDomaineV2 for CataloguesManager {
     }
 
     fn get_collections_volatiles(&self) -> Result<Vec<String>, CommonError> {
-        Ok(vec![String::from(NOM_COLLECTION_CATALOGUES)])
+        Ok(vec![
+            String::from(NOM_COLLECTION_CATALOGUES),
+            String::from(NOM_COLLECTION_CATALOGUES_VERSIONS),
+        ])
     }
 }
 

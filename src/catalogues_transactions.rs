@@ -1,5 +1,5 @@
 use crate::catalogues_constants::*;
-use crate::catalogues_structs::{Catalogue, MessageCatalogue};
+use crate::catalogues_structs::{Catalogue, MessageCatalogue, PackageVersion};
 use log::debug;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::ValidateurX509;
@@ -85,16 +85,34 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
         };
         debug!("Resultat maj catalogue_versions : {:?}", resultat);
     }
-
+    
     {
+        // Determine if the new version should be bumped up automatically
         let filtre = doc! { "nom": &nom };
-        let collection_catalogues = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
-        let opts = UpdateOptions::builder().upsert(true).build();
-        let resultat = match collection_catalogues.update_one_with_session(filtre, ops, Some(opts), session).await {
-            Ok(r) => r,
-            Err(e) => Err(format!("Erreur maj document catalogue avec mongo : {:?}", e))?
-        };
-        debug!("Resultat maj catalogues : {:?}", resultat);
+        let collection_catalogues = middleware.get_collection_typed::<Catalogue>(NOM_COLLECTION_CATALOGUES)?;
+
+        let mut update = true;  // This is used to avoid updating if the version is older/equal
+        if let Ok(new_version) = PackageVersion::try_from(version.clone()) {
+            let current_version = collection_catalogues.find_one(filtre.clone(), None).await?;
+            if let Some(current_version) = current_version {
+                if let Ok(current_version) = PackageVersion::try_from(current_version.version.clone()) {
+                    update = current_version < new_version;
+                }
+
+                debug!("Update {} to {} -> {}", current_version.version, version, update);
+            }
+        }
+
+        debug!("Update {} to {} -> {}", nom, version, update);
+        
+        if update {
+            let opts = UpdateOptions::builder().upsert(true).build();
+            let resultat = match collection_catalogues.update_one_with_session(filtre, ops, Some(opts), session).await {
+                Ok(r) => r,
+                Err(e) => Err(format!("Erreur maj document catalogue avec mongo : {:?}", e))?
+            };
+            debug!("Resultat maj catalogues : {:?}", resultat);
+        }
     }
 
     Ok(None)
