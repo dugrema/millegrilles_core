@@ -1,5 +1,5 @@
 use crate::catalogues_constants::*;
-use crate::catalogues_structs::{Catalogue, MessageCatalogue, PackageVersion};
+use crate::catalogues_structs::{Catalogue, MessageCatalogue, PackageVersion, SetPackageVersionTransaction};
 use log::debug;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::ValidateurX509;
@@ -37,6 +37,7 @@ where
 
     match action.as_str() {
         TRANSACTION_APPLICATION => maj_catalogue(middleware, transaction, session).await,
+        TRANSACTION_SET_PACKAGE_VERSION => set_package_version(middleware, transaction, session).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", message_id, action))?,
     }
 }
@@ -115,5 +116,27 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
         }
     }
 
+    Ok(None)
+}
+
+async fn set_package_version<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("set_package_version Set package version (transaction)");
+
+    let transaction_content: SetPackageVersionTransaction = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("catalogues_transaction.set_package_version Transaction format error {:?}", e))?
+    };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
+    let filtre = doc! {"nom": transaction_content.name};
+    let ops = doc! {
+        "$set": {"version": transaction_content.version},
+        "$currentDate": {CHAMP_MODIFICATION: true},
+    };
+    collection.update_one_with_session(filtre, ops, None, session).await?;
+    
     Ok(None)
 }

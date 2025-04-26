@@ -12,7 +12,7 @@ use millegrilles_common_rust::recepteur_messages::MessageValide;
 use serde::Deserialize;
 use crate::catalogues_manager::CataloguesManager;
 use crate::catalogues_constants::*;
-use crate::catalogues_structs::MessageCatalogue;
+use crate::catalogues_structs::{Catalogue, MessageCatalogue, SetPackageVersionTransaction};
 
 pub async fn consommer_commande_catalogues<M>(middleware: &M, m: MessageValide, gestionnaire: &CataloguesManager)
                                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -44,6 +44,7 @@ where M: Middleware
     let result = match action.as_str() {
         // Commandes standard
         TRANSACTION_APPLICATION => traiter_commande_application(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_SET_PACKAGE_VERSION => process_set_package_version(middleware, m, gestionnaire, &mut session).await,
         _ => Err(format!("Commande {} inconnue : {}, message dropped", DOMAIN_NAME, action))?,
     };
 
@@ -128,4 +129,27 @@ pub async fn traiter_commande_application<M>(middleware: &M, commande: MessageVa
     }
 
     Ok(None)
+}
+
+async fn process_set_package_version<M>(middleware: &M, commande: MessageValide, gestionnaire: &CataloguesManager, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + MongoDao + GenerateurMessages
+{
+    debug!("process_set_package_version Set package version {:?}", commande.type_message);
+
+    match commande.certificat.verifier_delegation_globale(String::from(DELEGATION_GLOBALE_PROPRIETAIRE))? {
+        true => (),
+        false => Err("Commande autorisation invalide (pas 3.protege ou 4.secure)")?
+    }
+
+    // Validate message structure
+    {
+        let message_ref = commande.message.parse()?;
+        let _message_catalogue: SetPackageVersionTransaction = message_ref.contenu()?.deserialize()?;
+    };
+
+    // Process transaction
+    sauvegarder_traiter_transaction_v2(middleware, commande, gestionnaire, session).await?;
+    
+    Ok(Some(middleware.reponse_ok(None, None)?))
 }

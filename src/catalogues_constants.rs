@@ -11,6 +11,7 @@ pub const REQUETE_INFO_APPLICATION: &str = "infoApplication";
 pub const REQUETE_LISTE_APPLICATIONS: &str = "listeApplications";
 pub const REQUETE_VERSIONS_APPLICATION: &str = "listeVersionsApplication";
 pub const TRANSACTION_APPLICATION: &str = "catalogueApplication";
+pub const TRANSACTION_SET_PACKAGE_VERSION: &str = "setPackageVersion";
 
 pub const INDEX_NOMS_CATALOGUES: &str = "noms_catalogues";
 pub const CHAMP_NOM_CATALOGUE: &str = "nom";

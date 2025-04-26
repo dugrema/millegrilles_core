@@ -127,6 +127,7 @@ pub fn preparer_queues(manager: &CataloguesManager) -> Vec<QueueType> {
 
     let commandes = vec![
         TRANSACTION_APPLICATION,  // Transaction est initialement recue sous forme de commande uploadee par ServiceMonitor ou autre source
+        TRANSACTION_SET_PACKAGE_VERSION,
     ];
     for commande in commandes {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, commande), exchange: Securite::L3Protege});

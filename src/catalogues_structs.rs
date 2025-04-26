@@ -62,3 +62,10 @@ impl TryFrom<String> for PackageVersion {
         Ok(Self {major, minor, build})
     }
 }
+
+#[derive(Clone, Deserialize)]
+pub struct SetPackageVersionTransaction {
+    pub name: String,
+    pub version: String,
+}
+
