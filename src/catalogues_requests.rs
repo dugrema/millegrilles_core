@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use log::{debug, error, warn};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::ValidateurX509;
@@ -9,9 +10,10 @@ use millegrilles_common_rust::mongo_dao::{convertir_bson_value, filtrer_doc_id, 
 use millegrilles_common_rust::mongodb::options::FindOptions;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
-use millegrilles_common_rust::serde_json::json;
+use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use serde::{Deserialize, Serialize};
+
 use crate::catalogues_constants::*;
 use crate::catalogues_structs::Catalogue;
 
@@ -55,9 +57,12 @@ struct CatalogueApplicationDeps {
     nom: String,
     version: String,
     securite: Option<String>,
+    description: Option<HashMap<String, String>>,
     #[serde(rename="securityLevels")]
     security_levels: Option<Vec<String>>,
     dependances: Option<Vec<CatalogueDependance>>,
+    nginx: Option<HashMap<String, Value>>,
+    web: Option<HashMap<String, Value>>,
 }
 
 #[derive(Serialize)]
@@ -158,6 +163,20 @@ struct ReponseNom {
     nom: String,
 }
 
+#[derive(Serialize)]
+struct CatalogueInformationResponse {
+    ok: bool,
+    nom: String,
+    securite: Option<String>,
+    version: String,
+    description: Option<HashMap<String, String>>,
+    dependances: Option<Vec<Value>>,
+    nginx: Option<HashMap<String, Value>>,
+    web: Option<HashMap<String, Value>>,
+    #[serde(rename="securityLevels")]
+    security_levels: Option<Vec<String>>,
+}
+
 async fn repondre_application<M>(middleware: &M, m: MessageValide)
                                  -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -167,26 +186,31 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     let message_nom: ReponseNom = message_contenu.deserialize()?;
     let nom_application = message_nom.nom;
 
-    let filtre = doc! {"nom": nom_application};
-    let collection = middleware.get_collection(NOM_COLLECTION_CATALOGUES)?;
-
-    let val = match collection.find_one(filtre, None).await? {
-        Some(mut c) => {
-            filtrer_doc_id(&mut c);
-            match convertir_bson_value(c) {
-                Ok(v) => v,
-                Err(e) => {
-                    let msg_erreur = format!("Erreur conversion doc vers json : {:?}", e);
-                    warn!("{}", msg_erreur.as_str());
-                    json!({"ok": false, "err": msg_erreur})
-                }
-            }
-        },
-        None => json!({"ok": false, "err": "Application inconnue"})
+    let filtre = doc! {"nom": &nom_application};
+    let collection = middleware.get_collection_typed::<Catalogue>(NOM_COLLECTION_CATALOGUES)?;
+    let mut catalogue = match collection.find_one(filtre, None).await? {
+        Some(c) => c,
+        None => return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown application"))?))
     };
 
-    match middleware.build_reponse(&val) {
-        Ok(m) => Ok(Some(m.0)),
-        Err(e) => Err(format!("Erreur preparation reponse applications : {:?}", e))?
-    }
+    let filtre_version = doc!{"nom": nom_application, "version": catalogue.version};
+    let collection_versions = middleware.get_collection_typed::<Catalogue>(NOM_COLLECTION_CATALOGUES_VERSIONS)?;
+    let package_version = match collection_versions.find_one(filtre_version, None).await? {
+        Some(c) => c,
+        None => return Ok(Some(middleware.reponse_err(Some(404), None, Some("Unknown application version"))?))
+    };
+
+    let response = CatalogueInformationResponse {
+        ok: true,
+        nom: package_version.nom,
+        version: package_version.version,
+        securite: Some(package_version.securite),
+        security_levels: package_version.security_levels,
+        dependances: package_version.dependances,
+        nginx: package_version.nginx,
+        description: package_version.description,
+        web: package_version.web,
+    };
+
+    Ok(Some(middleware.build_reponse(&response)?.0))
 }
