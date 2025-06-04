@@ -1528,41 +1528,55 @@ async fn request_filehost_for_instance<M>(middleware: &M, message: MessageValide
     let filehost_id = match requete.filehost_id {
         Some(inner) => Some(inner),  // Filehost provided
         None => {
-            // Check if instance configuration overrides with filehost_id
+            // Check if configuration overrides with filehost_id
             let collection_instances =
                 middleware.get_collection_typed::<ServerInstanceConfigurationRow>(NOM_COLLECTION_INSTANCE_CONFIGURATION)?;
             let filtre = doc! {"instance_id": &instance_id, "name": "filehost_id"};
+            debug!("Filehost loading filter (from instance_id): {:?}", filtre);
             match collection_instances.find_one(filtre, None).await? {
                 Some(inner) => Some(inner.value),
                 None => {
                     // Check if there is a filehost directly on this instance
                     let filtre_filehosts = doc! {"instance_id": &instance_id, "deleted": false};
+                    debug!("Filehost loading from configured id: {:?}", filtre_filehosts);
                     match collection_filehosts.find_one(filtre_filehosts, None).await? {
-                        Some(inner) => Some(inner.filehost_id),
-                        None => None
+                        Some(inner) => {
+                            return Ok(Some(middleware.build_reponse(RequestFilehostForInstanceResponse { ok: true, filehost: inner.into() })?.0))
+                        },
+                        None => {
+                            // Load the default filehost_id
+                            let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+                            let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
+                            match collection_configuration.find_one(filtre, None).await? {
+                                Some(inner) => Some(inner.value),
+                                None => None
+                            }
+                        }
                     }
                 }
             }
         }
     };
 
-    let filehost_id = match filehost_id {
-        Some(inner) => Some(inner),  // Alrady got it
-        None => {
-            // Load the default filehost_id
-            let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
-            let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
-            match collection_configuration.find_one(filtre, None).await? {
-                Some(inner) => Some(inner.value),
-                None => None
-            }
-        }
-    };
+    // let filehost_id = match filehost_id {
+    //     Some(inner) => Some(inner),  // Alrady got it
+    //     None => {
+    //         // Load the default filehost_id
+    //         let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+    //         let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
+    //         match collection_configuration.find_one(filtre, None).await? {
+    //             Some(inner) => Some(inner.value),
+    //             None => None
+    //         }
+    //     }
+    // };
 
     let filtre = match filehost_id.as_ref() {
         Some(inner) => doc!{"filehost_id": inner, "deleted": false},
         None => doc!{"deleted": false, "external_url": {"$exists": true}}  // Pick random with external_url if any available
     };
+
+    debug!("Filehost loading filter: {:?}", filtre);
     match collection_filehosts.find_one(filtre, None).await? {
         Some(inner) => {
             let filehost: RequeteFilehostItem = inner.into();

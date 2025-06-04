@@ -286,8 +286,8 @@ pub struct FilehostingCongurationRow {
 
 #[derive(Serialize, Deserialize)]
 pub struct FileStorageInfo {
-    pub count: u64,
-    pub size: u64,
+    pub count: i64,
+    pub size: i64,
 }
 
 #[derive(Serialize, Deserialize)]
