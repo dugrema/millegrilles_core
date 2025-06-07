@@ -237,7 +237,7 @@ pub struct TransactionSupprimerConsignationInstance {
     pub instance_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct FilehostServerRow {
     pub filehost_id: String,
     pub instance_id: Option<String>,
@@ -250,7 +250,7 @@ pub struct FilehostServerRow {
     pub created: DateTime<Utc>,
     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
     pub modified: DateTime<Utc>,
-    pub fuuid: Option<FileUsage>,
+    pub fuuid: Option<FileUsageMongo>,  // Workaround in f64 to handle mapping issue, NOT SERIALIZABLE
 }
 
 impl Into<RequeteFilehostItem> for FilehostServerRow {
@@ -265,7 +265,7 @@ impl Into<RequeteFilehostItem> for FilehostServerRow {
             sync_active: self.sync_active,
             created: self.created,
             modified: self.modified,
-            fuuid: self.fuuid,
+            fuuid: match self.fuuid {Some (inner) => Some(inner.into()), None => None},
         }
     }
 }
@@ -343,4 +343,20 @@ pub struct ServerInstanceConfigurationRow {
     pub instance_id: String,
     pub name: String,
     pub value: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct FileUsageMongo {
+    // Note: using f64 rather than usize/u64 because of random bug loading large values with mongo client 2.8.1
+    pub count: Option<f64>,
+    pub size: Option<f64>,
+}
+
+impl Into<FileUsage> for FileUsageMongo {
+    fn into(self) -> FileUsage {
+        FileUsage {
+            count: Some(self.count.unwrap_or(0f64) as usize),
+            size: Some(self.size.unwrap_or(0f64) as usize),
+        }
+    }
 }
