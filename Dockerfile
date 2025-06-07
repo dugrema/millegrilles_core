@@ -12,7 +12,8 @@ ENV APP_FOLDER=/usr/src/app \
     MG_REDIS_PASSWORD_FILE=/run/secrets/passwd.redis.txt
 
 RUN mkdir -p /var/opt/millegrilles/archives && chown 983:980 /var/opt/millegrilles/archives && \
-    apt-get update && apt-get install -y ca-certificates && apt-get clean
+    apt-get update && apt-get install -y ca-certificates && apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 FROM stage1
 
