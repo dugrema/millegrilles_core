@@ -1,6 +1,6 @@
 [package]
 name = "millegrilles_core"
-version = "2025.4.112"
+version = "2025.4.113"
 edition = "2024"
 
 [dependencies]
@@ -12,3 +12,4 @@ log = { version = "0.4.14", features = ["max_level_debug", "release_max_level_in
 env_logger = "0.9"
 serde = { version = "1.0", features = ["derive"] }
 webauthn-rs = { "version" = "0.4", "features" = ["danger-allow-state-serialisation"] }
+totp-rs = { "version" = "5.7.0", features = ["default", "gen_secret", "qr", "serde_support", "zeroize"] }

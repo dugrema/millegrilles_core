@@ -1,29 +1,32 @@
+use std::time::SystemTime;
 use log::{debug, error, warn};
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
+use totp_rs::{Algorithm, TOTP, Secret};
 
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
 use millegrilles_common_rust::chrono::{DateTime, NaiveDateTime, Timelike, Utc};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
-use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE};
+use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE, DOMAINE_NOM_MAITREDESCOMPTES};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
-use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
+use millegrilles_common_rust::jwt_simple::prelude::{Base64, Deserialize, Serialize};
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, Middleware};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
-use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, start_transaction_regular, MongoDao};
+use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, filtrer_doc_id, start_transaction_regular, MongoDao};
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
-use millegrilles_common_rust::{chrono, hex, millegrilles_cryptographie, openssl, reqwest, serde_json, uuid};
+use millegrilles_common_rust::{base64_url, chrono, hex, millegrilles_cryptographie, openssl, reqwest, serde_json, uuid};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::bson::{Bson, bson, DateTime as DateTimeBson, doc};
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
-use millegrilles_common_rust::hachages::hacher_bytes_vu8;
+use millegrilles_common_rust::hachages::{hacher_bytes_vu8, Hacheur};
 use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::transactions::{marquer_transaction, EtatTransaction};
 use millegrilles_common_rust::common_messages::{MessageConfirmation, ReponseSignatureCertificat};
 use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
+use millegrilles_common_rust::millegrilles_cryptographie::hachages::{hacher_bytes, HachageCode, HacheurBlake2s256};
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use millegrilles_common_rust::mongodb::ClientSession;
@@ -32,7 +35,7 @@ use crate::maitredescomptes_common::{charger_compte_user_id, commande_maj_usager
 use crate::maitredescomptes_constants::*;
 use crate::maitredescomptes_manager::MaitreDesComptesManager;
 use crate::maitredescomptes_structs::{ChallengeAuthenticationWebauthn, CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, CompteUsager, ConfirmationSigneeDelegationGlobale, CookieSession, DocChallenge, RequeteGetCookieUsager, TransactionAjouterCle, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionSupprimerCles};
-use crate::maitredescomptes_transactions::transaction_ajouter_delegation_signee;
+use crate::maitredescomptes_transactions::{transaction_ajouter_delegation_signee, CommandRegisterOtp, TransactionRegisterOtp};
 use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
 
 pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire: &MaitreDesComptesManager, m: MessageValide)
@@ -58,11 +61,14 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m, gestionnaire, &mut session).await,
+            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
 
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m, &mut session).await,
+            COMMAND_AUTHENTICATE_OTP => command_authenticate_otp(middleware, m, &mut session).await,
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m, &mut session).await,
             COMMANDE_AJOUTER_CSR_RECOVERY => commande_ajouter_csr_recovery(middleware, m, &mut session).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m, &mut session).await,
+            COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
             COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m, &mut session).await,
 
             // Commandes inconnues
@@ -72,6 +78,8 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
         match action.as_str() {
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m, &mut session).await,
             COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m, &mut session).await,
+            COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
+            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: exchange L1) : {}, message dropped", DOMAIN_NAME, action))?,
@@ -83,6 +91,7 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_SUPPRIMER_CLES => commande_supprimer_cles(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_RESET_WEBAUTHN_USAGER => commande_reset_webauthn_usager(middleware, gestionnaire, m, &mut session).await,
+            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
 
             // Commandes usager standard
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire, &mut session).await,
@@ -90,6 +99,7 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => commande_signer_compte_par_proprietaire(middleware, m, &mut session).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m, &mut session).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m, gestionnaire, &mut session).await,
+            COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
 
             // Commandes inconnues
             _ => Ok(Some(middleware.reponse_err(252, None, Some("Acces refuse"))?))
@@ -101,6 +111,8 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m, &mut session).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m, gestionnaire, &mut session).await,
+            COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
+            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: user_id): {}, message dropped", DOMAIN_NAME, action))?,
@@ -1230,7 +1242,7 @@ async fn commande_generer_challenge<M>(middleware: &M, message: MessageValide, s
                                        -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
-    debug!("commande_generer_challenge : {:?}", message);
+    debug!("commande_generer_challenge : {:?}", message.type_message);
 
     let message_ref = message.message.parse()?;
     let message_contenu = message_ref.contenu()?;
@@ -1494,4 +1506,293 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
     };
 
     signer_demande_certificat_usager(middleware, compte_usager, commande.demande_certificat, session).await
+}
+
+#[derive(Deserialize)]
+struct CommandeGenererOtp {
+    // #[serde(rename="userId")]
+    // user_id: Option<String>,
+    username: String,
+    hostname: String,
+    // delegation: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ResponseGenerateOtp {
+    correlation: String,
+    qr_base64: String,
+}
+
+async fn command_generate_otp<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
+{
+    debug!("command_generate_otp : {:?}", message.type_message);
+
+    let message_ref = message.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: CommandeGenererOtp = message_contenu.deserialize()?;
+    let username = commande.username.as_str();
+    let hostname = commande.hostname.as_str();
+
+    let user_id = match message.certificat.get_user_id()? {
+        Some(inner) => inner.to_owned(),
+        None => Err(format!("core_maitredescomptes.commande_generer_challenge Erreur message sans user_id"))?
+    };
+
+    let compte: CompteUsager = {
+        let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+        let filtre = doc! { CHAMP_USER_ID: &user_id };
+        let resultat = match collection.find_one_with_session(filtre, None, session).await? {
+            Some(inner) => inner,
+            None => {
+                let reponse = json!({"ok": true, "code": 1, "err": "Usager inconnu"});
+                match middleware.build_reponse(reponse) {
+                    Ok(m) => return Ok(Some(m.0)),
+                    Err(e) => Err(format!("Erreur preparation reponse commande_generer_challenge : {:?}", e))?
+                }
+            }
+        };
+        convertir_bson_deserializable(resultat)?
+    };
+
+    // Generate a new temporary TOTP for user_id
+    let secret = Secret::generate_secret();
+
+    // Save the user_id/secret for potential new TOTP credentials.
+    let secret_string = secret.to_string();
+    debug!("command_generate_otp New secret: {:?}", secret_string);
+
+    let authenticator_id = format!("{}", username);
+
+    let totp = TOTP::new(
+        Algorithm::SHA512,
+        6,
+        1,
+        30,
+        secret.to_bytes().unwrap(),
+        Some(hostname.to_string()),
+        authenticator_id
+    ).unwrap();
+
+    let totp_url = totp.get_url();
+    debug!("TOTP url: {}", totp_url);
+    // Hash the url to obfuscate the secret
+    let challenge_hashvalue = base64_url::encode(&hacher_bytes(totp_url.as_bytes(), HachageCode::Blake2s256));
+
+    let challenge_row = DocChallenge::new_challenge_totp(&user_id, hostname, &challenge_hashvalue, totp_url);
+    let collection = middleware.get_collection_typed::<DocChallenge>(NOM_COLLECTION_CHALLENGES)?;
+    collection.insert_one_with_session(challenge_row, None, session).await?;
+
+    // let token = totp.generate_current().unwrap();
+    let qr_base64 = totp.get_qr_base64().expect("totp.get_qr_base64");
+    debug!("New TOTP base 64 QR: {}", qr_base64);
+    let reponse = ResponseGenerateOtp {correlation: challenge_hashvalue, qr_base64};
+
+    Ok(Some(middleware.build_reponse_chiffree(reponse, message.certificat.as_ref())?.0))
+}
+
+async fn command_register_otp<M>(middleware: &M, message: MessageValide, gestionnaire: &MaitreDesComptesManager, session: &mut ClientSession)
+                                 -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao,
+{
+    debug!("command_add_otp : {:?}", &message.type_message);
+    // Verify authorization
+    let user_id = match message.certificat.get_user_id()? {
+        Some(inner) => inner.to_owned(),
+        None => Err(format!("command_add_otp No user_id on certificate"))?
+    };
+
+    // Validate content by deserializing
+    let command = {
+        let message_ref = message.message.parse()?;
+        match message_ref.contenu()?.deserialize::<CommandRegisterOtp>() {
+            Ok(inner) => inner,
+            Err(e) => return Ok(Some(middleware.reponse_err(Some(1), None, Some(format!("Invalid message parameters: {:?}", e).as_str()))?))
+        }
+    };
+
+    let filter = doc!{"userId": &user_id, "type_challenge": "totp", "hostname": &command.hostname, "challenge": &command.correlation};
+    debug!("Loading TOTP challenge with: {:?}", filter);
+    let collection = middleware.get_collection_typed::<DocChallenge>(NOM_COLLECTION_CHALLENGES)?;
+    let challenge = match collection.find_one_with_session(filter, None, session).await {
+        Ok(Some(inner)) => inner,
+        Ok(None) => return Ok(Some(middleware.reponse_err(Some(404), None, Some("Challenge not found"))?)),
+        Err(e) => return Ok(Some(middleware.reponse_err(Some(500), None, Some(format!("Error loading challenge: {:?}", e).as_str()))?))
+    };
+
+    let totp_url = match challenge.totp_url {
+        Some(inner) => inner,
+        None => return Ok(Some(middleware.reponse_err(Some(500), None, Some("TOTP challeng information lost"))?))
+    };
+
+    let totp = match TOTP::from_url(&totp_url) {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("TOTP URL loading error: {:?}", e))?
+    };
+
+    let current_code = match totp.check_current(command.code.as_str()) {
+        Ok(inner) => inner,
+        Err(e) => Err(format!("TOTP checking error - invalid time: {:?}", e))?
+    };
+
+    if ! current_code {
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("TOTP code is invalid"))?))
+    }
+
+    // Process new transaction
+    let transaction = TransactionRegisterOtp {
+        user_id,
+        hostname: command.hostname,
+        totp_url,
+    };
+
+    sauvegarder_traiter_transaction_serializable_v2(middleware, &transaction, gestionnaire, session,
+                                                    DOMAINE_NOM_MAITREDESCOMPTES, TRANSACTION_REGISTER_OTP).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct CommandAuthenticateOtp {
+    user_id: String,
+    hostname: String,
+    pin: String,
+    #[serde(rename = "demandeCertificat")]
+    demande_certificat: Option<DemandeSignatureCertificatWebauthn>,
+    #[serde(rename = "dureeSession", skip_serializing_if = "Option::is_none")]
+    duree_session: Option<i64>,
+}
+
+async fn command_authenticate_otp<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
+{
+    debug!("commande_authentifier_usager : {:?}", message);
+
+    let idmg = middleware.idmg();
+    let message_ref = message.message.parse()?;
+    let message_contenu = message_ref.contenu()?;
+    let commande: CommandAuthenticateOtp = message_contenu.deserialize()?;
+
+    todo!();
+
+    // let doc_webauth_state = match charger_challenge_authentification(
+    //     middleware, &commande.user_id, &commande.hostname, &commande.challenge, session).await
+    // {
+    //     Ok(inner) => inner,
+    //     Err(e) => {
+    //         error!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn inconnu ou expire : {:?}", e);
+    //         let reponse_ok = json!({"ok": false, "err": "Challenge inconnu ou expire", "code": 1});
+    //         return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
+    //     }
+    // };
+
+    // // let mut passkey_authentication: PasskeyAuthenticationAjuste = doc_webauth_state.passkey_authentication.try_into()?;
+    // let flag_generer_nouveau_certificat = commande.demande_certificat.is_some();
+    // let demande_certificat = match commande.demande_certificat {
+    //     Some(demande) => {
+    //         debug!("commande_authentifier_usager Demande certificat recue : {:?}", demande);
+    //         let hachage = demande.valider()?;
+    //         debug!("commande_authentifier_usager Hachage calcule pour demande de certificat : {:?}", hachage);
+    //         Some(demande)
+    //     },
+    //     None => None
+    // };
+    //
+    // // Verifier authentification
+    // let reg: PublicKeyCredential = commande.commande_webauthn.webauthn.try_into()?;
+    // let cred_id = reg.id.clone();
+    // debug!("commande_authentifier_usager Cred id : {}", cred_id);
+    // let resultat = match verifier_challenge_authentification(
+    //     &commande.hostname, idmg, reg, passkey_authentication.try_into()?
+    // ) {
+    //     Ok(inner) => inner,
+    //     Err(e) => {
+    //         error!("core_maitredescomptes.commande_authentifier_webauthn Erreur verification challenge webauthn : {:?}", e);
+    //         let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 2});
+    //         return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
+    //     }
+    // };
+    // debug!("commande_authentifier_webauthn Resultat webauth OK : {:?}", resultat);
+    //
+    // // Supprimer challenge pour eviter reutilisation
+    // {
+    //     let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
+    //     let filtre = doc! {
+    //         CHAMP_USER_ID: &commande.user_id,
+    //         "hostname": &commande.hostname,
+    //         "type_challenge": "authentication",
+    //         "challenge": &commande.challenge,
+    //     };
+    //     collection.delete_one_with_session(filtre, None, session).await?;
+    // }
+    //
+    // // Conserver dernier acces pour la passkey
+    // {
+    //     let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+    //     let filtre = doc! {
+    //         CHAMP_USER_ID: &commande.user_id,
+    //         "hostname": &commande.hostname,
+    //         "passkey.cred.cred_id": cred_id,
+    //     };
+    //     let ops = doc! { "$set": { CHAMP_DERNIER_AUTH: Utc::now() } };
+    //     collection.update_one_with_session(filtre, ops, None, session).await?;
+    // }
+    //
+    // let mut reponse_ok = json!({
+    //     "ok": true,
+    //     "counter": resultat.counter(),
+    //     "userVerification": resultat.user_verified(),
+    // });
+    //
+    // if let Some(demande_certificat) = demande_certificat {
+    //     debug!("Generer le nouveau certificat pour l'usager et le retourner");
+    //     let user_id = &commande.user_id;
+    //     let csr = demande_certificat.csr;
+    //     let compte_usager = match charger_compte_user_id(middleware, &commande.user_id, session).await {
+    //         Ok(inner) => match inner {
+    //             Some(inner) => inner,
+    //             None => {
+    //                 error!("core_maitredescomptes.commande_authentifier_webauthn Compte usager inconnu pour generer certificat");
+    //                 let reponse_ok = json!({"ok": false, "err": "Compte usager inconnu pour generer nouveau certificat", "code": 3});
+    //                 return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
+    //             }
+    //         },
+    //         Err(e) => {
+    //             error!("core_maitredescomptes.commande_authentifier_webauthn Erreur chargement compte usager pour generer certificat : {:?}", e);
+    //             let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 4});
+    //             return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
+    //         }
+    //     };
+    //     let nom_usager = &compte_usager.nom_usager;
+    //     // let securite = SECURITE_1_PUBLIC;
+    //     let reponse_commande = signer_certificat_usager(
+    //         middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
+    //     let reponse_ref = reponse_commande.parse()?;
+    //     let message_contenu = reponse_ref.contenu()?;
+    //     let info_certificat: ReponseSignatureCertificat = message_contenu.deserialize()?;
+    //     if let Some(certificat) = info_certificat.certificat {
+    //         // Inserer le certificat dans la reponse
+    //         reponse_ok.as_object_mut().expect("as_object_mut")
+    //             .insert("certificat".to_string(), certificat.into());
+    //     }
+    // }
+    //
+    // if let Some(duree_session) = commande.commande_webauthn.duree_session {
+    //     debug!("Creer cookie de session");
+    //     match creer_session_cookie(middleware, &commande.user_id, &commande.hostname, duree_session, session).await {
+    //         Ok(inner) => {
+    //             reponse_ok.as_object_mut().expect("as_object_mut")
+    //                 .insert("cookie".to_string(), inner.into());
+    //         },
+    //         Err(e) => {
+    //             error!("Erreur creation cookie session : {:?}", e);
+    //         }
+    //     }
+    // }
+    //
+    // debug!("Reponse authentification : {:?}", reponse_ok);
+    //
+    // Ok(Some(middleware.build_reponse(reponse_ok)?.0))
 }

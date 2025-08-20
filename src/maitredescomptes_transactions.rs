@@ -9,12 +9,15 @@ use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::constantes::{RolesCertificats, Securite, CHAMP_CREATION, CHAMP_MODIFICATION};
+use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::serde_json::json;
+use millegrilles_common_rust::bson::DateTime as DateTimeBson;
+
 use crate::maitredescomptes_common::{emettre_maj_compte_usager, sauvegarder_credential};
 use crate::maitredescomptes_constants::*;
-use crate::maitredescomptes_structs::{CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, ConfirmationSigneeDelegationGlobale, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionSupprimerCles};
+use crate::maitredescomptes_structs::{CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, ConfirmationSigneeDelegationGlobale, TotpCredentialsRow, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionSupprimerCles};
 use crate::webauthn::CredentialWebauthn;
 
 pub async fn aiguillage_transaction_maitredescomptes<M, T>(middleware: &M, transaction: T, session: &mut ClientSession)
@@ -43,6 +46,7 @@ where
         TRANSACTION_MAJ_USAGER_DELEGATIONS => transaction_maj_usager_delegations(middleware, transaction, session).await,
         TRANSACTION_SUPPRIMER_CLES => transaction_supprimer_cles(middleware, transaction, session).await,
         TRANSACTION_RESET_WEBAUTHN_USAGER => transaction_reset_webauthn_usager(middleware, transaction, session).await,
+        TRANSACTION_REGISTER_OTP => transaction_register_otp(middleware, transaction, session).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
@@ -345,3 +349,41 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CommandRegisterOtp {
+    pub code: String,
+    pub hostname: String,
+    pub correlation: String,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TransactionRegisterOtp {
+    pub user_id: String,
+    pub hostname: String,
+    pub totp_url: String,
+}
+
+async fn transaction_register_otp<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let command: TransactionRegisterOtp = match serde_json::from_str(transaction.transaction.contenu.as_str()) {
+        Ok(t) => t,
+        Err(e) => Err(format!("transaction_register_otp Error converting to TransactionRegisterOtp: {:?}", e))?
+    };
+
+    let row = TotpCredentialsRow {
+        user_id: command.user_id,
+        hostname: command.hostname,
+        totp_url: command.totp_url,
+        date_creation: DateTimeBson::now(),
+
+    };
+
+    let collection = middleware.get_collection_typed::<TotpCredentialsRow>(NOM_COLLECTION_TOTP_CREDENTIALS)?;
+    collection.insert_one_with_session(&row, None, session).await?;
+
+    Ok(None)
+}
+

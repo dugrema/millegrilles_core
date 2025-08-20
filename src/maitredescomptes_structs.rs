@@ -40,6 +40,9 @@ pub struct DocChallenge {
 
     /// Pour une authentification webauthn
     pub webauthn_authentication: Option<ChallengeAuthenticationWebauthn>,
+
+    /// TOTP configuration
+    pub totp_url: Option<String>,
 }
 
 impl DocChallenge {
@@ -64,6 +67,7 @@ impl DocChallenge {
             date_creation: DateTimeBson::now(),
             webauthn_registration: Some(webauthn_registration),
             webauthn_authentication: None,
+            totp_url: None,
         }
     }
 
@@ -85,6 +89,7 @@ impl DocChallenge {
             date_creation: DateTimeBson::now(),
             webauthn_registration: None,
             webauthn_authentication: Some(webauthn_authentication),
+            totp_url: None,
         }
     }
 
@@ -104,6 +109,22 @@ impl DocChallenge {
             date_creation: DateTimeBson::now(),
             webauthn_registration: None,
             webauthn_authentication: None,
+            totp_url: None,
+        }
+    }
+
+    pub fn new_challenge_totp<U,V,C,T>(user_id: U, hostname: V, challenge: C, totp_url: T) -> Self
+        where U: Into<String>, V: Into<String>, C: Into<String>, T: Into<String>
+    {
+        Self {
+            user_id: user_id.into(),
+            type_challenge: "totp".to_string(),
+            hostname: hostname.into(),
+            challenge: challenge.into(),
+            date_creation: DateTimeBson::now(),
+            webauthn_registration: None,
+            webauthn_authentication: None,
+            totp_url: Some(totp_url.into())
         }
     }
 }
@@ -279,4 +300,13 @@ pub struct CommandeResetWebauthnUsager {
     pub reset_webauthn: Option<bool>,
     #[serde(rename="evictAllSessions")]
     pub evict_all_sessions: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TotpCredentialsRow {
+    pub user_id: String,
+    pub hostname: String,
+    pub totp_url: String,
+    #[serde(rename="_mg-creation")]
+    pub date_creation: DateTimeBson,
 }

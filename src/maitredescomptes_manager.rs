@@ -142,6 +142,8 @@ pub fn preparer_queues(_manager: &MaitreDesComptesManager) -> Vec<QueueType> {
         // Commandes
         COMMANDE_AUTHENTIFIER_WEBAUTHN,
         COMMANDE_SUPPRIMER_COOKIE,
+        COMMAND_GENERATE_OTP,
+        TRANSACTION_REGISTER_OTP,
     ];
     for commande in commandes_publiques {
         rk_volatils.push(ConfigRoutingExchange {routing_key: format!("commande.{}.{}", DOMAIN_NAME, commande), exchange: Securite::L1Public});

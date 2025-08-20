@@ -5,6 +5,7 @@ pub const NOM_COLLECTION_RECOVERY: &str = "CoreMaitreDesComptes/recovery";
 pub const NOM_COLLECTION_ACTIVATIONS: &str = "CoreMaitreDesComptes/activations";
 pub const NOM_COLLECTION_CHALLENGES: &str = "CoreMaitreDesComptes/challenges";
 pub const NOM_COLLECTION_WEBAUTHN_CREDENTIALS: &str = "CoreMaitreDesComptes/webauthnCredentials";
+pub const NOM_COLLECTION_TOTP_CREDENTIALS: &str = "CoreMaitreDesComptes/totpCredentials";
 pub const NOM_COLLECTION_COOKIES: &str = "CoreMaitreDesComptes/cookies";
 
 pub const NOM_Q_TRANSACTIONS: &str = "CoreMaitreDesComptes/transactions";
@@ -26,7 +27,9 @@ pub const COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE: &str = "signerCompteParPropri
 // const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
 pub const COMMANDE_AJOUTER_CSR_RECOVERY: &str = "ajouterCsrRecovery";
 pub const COMMANDE_AUTHENTIFIER_WEBAUTHN: &str = "authentifierWebauthn";
+pub const COMMAND_AUTHENTICATE_OTP: &str = "authenticateOtp";
 pub const COMMANDE_GENERER_CHALLENGE: &str = "genererChallenge";
+pub const COMMAND_GENERATE_OTP: &str = "generateOtp";
 pub const COMMANDE_SUPPRIMER_COOKIE: &str = "supprimerCookieSession";
 
 pub const TRANSACTION_INSCRIRE_USAGER: &str = "inscrireUsager";
@@ -36,6 +39,7 @@ pub const TRANSACTION_MAJ_USAGER_DELEGATIONS: &str = "majUsagerDelegations";
 pub const TRANSACTION_AJOUTER_DELEGATION_SIGNEE: &str = "ajouterDelegationSignee";
 pub const TRANSACTION_SUPPRIMER_CLES: &str = "supprimerCles";
 pub const TRANSACTION_RESET_WEBAUTHN_USAGER: &str = "resetWebauthnUsager";
+pub const TRANSACTION_REGISTER_OTP: &str = "registerOtp";
 
 pub const EVENEMENT_EVICT_USAGER: &str = "evictUsager";
 pub const EVENEMENT_MAJ_COMPTE_USAGER: &str = "majCompteUsager";
