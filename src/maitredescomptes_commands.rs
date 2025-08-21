@@ -1648,6 +1648,7 @@ async fn command_register_otp<M>(middleware: &M, message: MessageValide, gestion
         user_id,
         hostname: command.hostname,
         totp_url,
+        reset_keys: command.reset_keys,
     };
 
     sauvegarder_traiter_transaction_serializable_v2(middleware, &transaction, gestionnaire, session,

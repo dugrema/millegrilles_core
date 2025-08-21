@@ -231,9 +231,14 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     let cred_id = webauthn_credential.cred_id().to_string();
 
     let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+    let collection_totp = middleware.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
     if reset_cles {
         // Supprimer toutes les cles pour le user_id dans la collection credentials
         debug!("transaction_ajouter_cle Reset toutes les cles webautn pour user_id {}", user_id);
+        let filtre = doc! { "user_id": user_id };
+        if let Err(e) = collection_totp.delete_many_with_session(filtre, None, session).await {
+            Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur delete cles totp"))?
+        }
         let filtre = doc! { CHAMP_USER_ID: user_id };
         if let Err(e) = collection.delete_many_with_session(filtre, None, session).await {
             Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur delete cles webauthn"))?
@@ -355,6 +360,7 @@ pub struct CommandRegisterOtp {
     pub code: String,
     pub hostname: String,
     pub correlation: String,
+    pub reset_keys: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -362,6 +368,7 @@ pub struct TransactionRegisterOtp {
     pub user_id: String,
     pub hostname: String,
     pub totp_url: String,
+    pub reset_keys: Option<bool>,
 }
 
 async fn transaction_register_otp<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
@@ -373,8 +380,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         Err(e) => Err(format!("transaction_register_otp Error converting to TransactionRegisterOtp: {:?}", e))?
     };
 
+    let user_id = command.user_id.as_str();
+
     let row = TotpCredentialsRow {
-        user_id: command.user_id,
+        user_id: command.user_id.clone(),
         hostname: command.hostname,
         totp_url: command.totp_url,
         date_creation: DateTimeBson::now(),
@@ -382,6 +391,23 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     };
 
     let collection = middleware.get_collection_typed::<TotpCredentialsRow>(NOM_COLLECTION_TOTP_CREDENTIALS)?;
+
+    // Get key reset flag
+    let reset_keys = command.reset_keys.unwrap_or_else(|| false);
+    if reset_keys {
+        // Supprimer toutes les cles pour le user_id dans la collection credentials
+        debug!("transaction_register_otp Reset toutes les cles webautn/totp pour user_id {}", user_id);
+        let filtre = doc! { "user_id": user_id };
+        if let Err(e) = collection.delete_many_with_session(filtre, None, session).await {
+            Err(format!("core_maitredescomptes.transaction_register_otp Erreur delete cles totp"))?
+        }
+        let collection_webauthn = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+        let filtre = doc! { CHAMP_USER_ID: user_id };
+        if let Err(e) = collection_webauthn.delete_many_with_session(filtre, None, session).await {
+            Err(format!("core_maitredescomptes.transaction_register_otp Erreur delete cles webauthn"))?
+        }
+    }
+
     collection.insert_one_with_session(&row, None, session).await?;
 
     Ok(None)
