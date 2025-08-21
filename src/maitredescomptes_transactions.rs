@@ -385,7 +385,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
     let row = TotpCredentialsRow {
         user_id: command.user_id.clone(),
-        hostname: command.hostname,
+        // hostname: command.hostname,
         correlation: command.correlation,
         encrypted_totp_url: command.encrypted_totp_url,
         date_creation: DateTimeBson::now(),

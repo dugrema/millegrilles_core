@@ -306,7 +306,7 @@ pub struct CommandeResetWebauthnUsager {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct TotpCredentialsRow {
     pub user_id: String,
-    pub hostname: String,
+    // pub hostname: String,
     pub correlation: String,
     pub encrypted_totp_url: EncryptedDocument,
     #[serde(rename="_mg-creation")]

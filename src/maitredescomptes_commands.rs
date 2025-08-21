@@ -1703,7 +1703,8 @@ async fn command_authenticate_otp<M>(middleware: &M, gestionnaire: &MaitreDesCom
 
     // Test the code with all registered TOTP codes for this user_id/hostname.
     let collection = middleware.get_collection_typed::<TotpCredentialsRow>(NOM_COLLECTION_TOTP_CREDENTIALS)?;
-    let filtre = doc!{"user_id": &command.user_id, "hostname": &command.hostname};
+    // let filtre = doc!{"user_id": &command.user_id, "hostname": &command.hostname};
+    let filtre = doc!{"user_id": &command.user_id};
     let mut cursor = collection.find(filtre, None).await?;
     let mut valid = false;
     let mut totp_url_used = None;
@@ -1716,7 +1717,7 @@ async fn command_authenticate_otp<M>(middleware: &M, gestionnaire: &MaitreDesCom
         let totp = match TOTP::from_url(&totp_url) {
             Ok(inner) => inner,
             Err(e) => {
-                warn!("command_authenticate_otp Error loading TOTP URL for user_id:{}, hostname:{}: {:?}", row.user_id, row.hostname, e);
+                warn!("command_authenticate_otp Error loading TOTP URL for user_id:{}: {:?}", row.user_id, e);
                 continue;
             }
         };
@@ -1744,11 +1745,14 @@ async fn command_authenticate_otp<M>(middleware: &M, gestionnaire: &MaitreDesCom
         let collection = middleware.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
         let filtre = doc! {
             "user_id": &command.user_id,
-            "hostname": &command.hostname,
+            // "hostname": &command.hostname,
             "correlation": &correlation,
         };
         debug!("Update TOTP access date for: {:?}", filtre);
-        let ops = doc! { "$set": { CHAMP_DERNIER_AUTH: Utc::now() } };
+        let ops = doc! { "$set": {
+            "last_login_date": Utc::now(),
+            "last_login_hostname": &command.hostname,
+        } };
         collection.update_one_with_session(filtre, ops, None, session).await?;
     }
 
