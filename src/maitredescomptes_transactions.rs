@@ -367,6 +367,7 @@ pub struct CommandRegisterOtp {
 pub struct TransactionRegisterOtp {
     pub user_id: String,
     pub hostname: String,
+    pub correlation: String,
     pub encrypted_totp_url: EncryptedDocument,
     pub reset_keys: Option<bool>,
 }
@@ -385,9 +386,9 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     let row = TotpCredentialsRow {
         user_id: command.user_id.clone(),
         hostname: command.hostname,
+        correlation: command.correlation,
         encrypted_totp_url: command.encrypted_totp_url,
         date_creation: DateTimeBson::now(),
-
     };
 
     let collection = middleware.get_collection_typed::<TotpCredentialsRow>(NOM_COLLECTION_TOTP_CREDENTIALS)?;

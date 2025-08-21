@@ -1654,6 +1654,7 @@ async fn command_register_otp<M>(middleware: &M, gestionnaire: &MaitreDesComptes
     let transaction = TransactionRegisterOtp {
         user_id,
         hostname: command.hostname,
+        correlation: command.correlation,
         encrypted_totp_url,
         reset_keys: command.reset_keys,
     };
@@ -1706,8 +1707,10 @@ async fn command_authenticate_otp<M>(middleware: &M, gestionnaire: &MaitreDesCom
     let mut cursor = collection.find(filtre, None).await?;
     let mut valid = false;
     let mut totp_url_used = None;
+    let mut correlation = None;
     while cursor.advance().await? {
         let row = cursor.deserialize_current()?;
+        correlation = Some(row.correlation);
         let totp_url_bytes = gestionnaire.decrypt_document(middleware, &row.encrypted_totp_url).await?;
         let totp_url = String::from_utf8(totp_url_bytes)?;
         let totp = match TOTP::from_url(&totp_url) {
@@ -1737,16 +1740,17 @@ async fn command_authenticate_otp<M>(middleware: &M, gestionnaire: &MaitreDesCom
     }
 
     // Conserver dernier acces pour la passkey
-    // {
-    //     let collection = middleware.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
-    //     let filtre = doc! {
-    //         CHAMP_USER_ID: &command.user_id,
-    //         "hostname": &command.hostname,
-    //         "totp_url": &totp_url_used,
-    //     };
-    //     let ops = doc! { "$set": { CHAMP_DERNIER_AUTH: Utc::now() } };
-    //     collection.update_one_with_session(filtre, ops, None, session).await?;
-    // }
+    {
+        let collection = middleware.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
+        let filtre = doc! {
+            "user_id": &command.user_id,
+            "hostname": &command.hostname,
+            "correlation": &correlation,
+        };
+        debug!("Update TOTP access date for: {:?}", filtre);
+        let ops = doc! { "$set": { CHAMP_DERNIER_AUTH: Utc::now() } };
+        collection.update_one_with_session(filtre, ops, None, session).await?;
+    }
 
     let mut reponse_ok = TotpAuthenticationResponse {ok: true, user_verified: true, cookie: None, certificat: None};
 
