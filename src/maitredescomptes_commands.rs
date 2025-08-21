@@ -34,7 +34,7 @@ use crate::error::Error as CoreError;
 use crate::maitredescomptes_common::{charger_compte_user_id, commande_maj_usager_delegations, emettre_maj_compte_usager, sauvegarder_credential};
 use crate::maitredescomptes_constants::*;
 use crate::maitredescomptes_manager::MaitreDesComptesManager;
-use crate::maitredescomptes_structs::{ChallengeAuthenticationWebauthn, CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, CompteUsager, ConfirmationSigneeDelegationGlobale, CookieSession, DocChallenge, RequeteGetCookieUsager, TransactionAjouterCle, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionSupprimerCles};
+use crate::maitredescomptes_structs::{ChallengeAuthenticationWebauthn, CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, CompteUsager, ConfirmationSigneeDelegationGlobale, CookieSession, DocChallenge, RequeteGetCookieUsager, TotpCredentialsRow, TransactionAjouterCle, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionSupprimerCles};
 use crate::maitredescomptes_transactions::{transaction_ajouter_delegation_signee, CommandRegisterOtp, TransactionRegisterOtp};
 use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
 
@@ -64,7 +64,7 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
 
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m, &mut session).await,
-            COMMAND_AUTHENTICATE_OTP => command_authenticate_otp(middleware, m, &mut session).await,
+            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, m, &mut session).await,
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m, &mut session).await,
             COMMANDE_AJOUTER_CSR_RECOVERY => commande_ajouter_csr_recovery(middleware, m, &mut session).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m, &mut session).await,
@@ -77,6 +77,7 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
     } else if m.certificat.verifier_exchanges(vec!(Securite::L1Public))? {
         match action.as_str() {
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m, &mut session).await,
+            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, m, &mut session).await,
             COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m, &mut session).await,
             COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
             TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
@@ -100,6 +101,7 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m, &mut session).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m, gestionnaire, &mut session).await,
             COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
+            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, m, &mut session).await,
 
             // Commandes inconnues
             _ => Ok(Some(middleware.reponse_err(252, None, Some("Acces refuse"))?))
@@ -112,6 +114,7 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m, gestionnaire, &mut session).await,
             COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
+            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, m, &mut session).await,
             TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
 
             // Commandes inconnues
@@ -784,7 +787,7 @@ async fn commande_authentifier_webauthn<M>(middleware: &M, message: MessageValid
                                            -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
-    debug!("commande_authentifier_usager : {:?}", message);
+    debug!("commande_authentifier_webauthn : {:?}", message.type_message);
 
     let idmg = middleware.idmg();
     let message_ref = message.message.parse()?;
@@ -1366,7 +1369,7 @@ async fn supprimer_cookie<M>(middleware: &M, message: MessageValide, session: &m
                              -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
-    debug!("supprimer_cookie : {:?}", message);
+    debug!("supprimer_cookie : {:?}", message.type_message);
 
     let message_ref = message.message.parse()?;
     let message_contenu = message_ref.contenu()?;
@@ -1655,144 +1658,131 @@ async fn command_register_otp<M>(middleware: &M, message: MessageValide, gestion
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct CommandAuthenticateOtp {
+    #[serde(rename = "userId")]
     user_id: String,
     hostname: String,
-    pin: String,
-    #[serde(rename = "demandeCertificat")]
-    demande_certificat: Option<DemandeSignatureCertificatWebauthn>,
-    #[serde(rename = "dureeSession", skip_serializing_if = "Option::is_none")]
-    duree_session: Option<i64>,
+    #[serde(rename = "totpCode")]
+    totp_code: String,
+    #[serde(rename = "certificateRequest")]
+    certificate_request: Option<DemandeSignatureCertificatWebauthn>,
+    #[serde(rename = "sessionDuration", skip_serializing_if = "Option::is_none")]
+    session_duration: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct TotpAuthenticationResponse {
+    ok: bool,
+    user_verified: bool,
+    cookie: Option<CookieSession>,
+    certificat: Option<Vec<String>>,
 }
 
 async fn command_authenticate_otp<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
-    debug!("commande_authentifier_usager : {:?}", message);
+    debug!("command_authenticate_otp : {:?}", message.type_message);
 
     let idmg = middleware.idmg();
     let message_ref = message.message.parse()?;
     let message_contenu = message_ref.contenu()?;
-    let commande: CommandAuthenticateOtp = message_contenu.deserialize()?;
+    let command: CommandAuthenticateOtp = message_contenu.deserialize()?;
 
-    todo!();
+    debug!("TOTP authentication command: {:?}", command);
 
-    // let doc_webauth_state = match charger_challenge_authentification(
-    //     middleware, &commande.user_id, &commande.hostname, &commande.challenge, session).await
-    // {
-    //     Ok(inner) => inner,
-    //     Err(e) => {
-    //         error!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn inconnu ou expire : {:?}", e);
-    //         let reponse_ok = json!({"ok": false, "err": "Challenge inconnu ou expire", "code": 1});
-    //         return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
-    //     }
-    // };
+    let totp_code = command.totp_code;
 
-    // // let mut passkey_authentication: PasskeyAuthenticationAjuste = doc_webauth_state.passkey_authentication.try_into()?;
-    // let flag_generer_nouveau_certificat = commande.demande_certificat.is_some();
-    // let demande_certificat = match commande.demande_certificat {
-    //     Some(demande) => {
-    //         debug!("commande_authentifier_usager Demande certificat recue : {:?}", demande);
-    //         let hachage = demande.valider()?;
-    //         debug!("commande_authentifier_usager Hachage calcule pour demande de certificat : {:?}", hachage);
-    //         Some(demande)
-    //     },
-    //     None => None
-    // };
-    //
-    // // Verifier authentification
-    // let reg: PublicKeyCredential = commande.commande_webauthn.webauthn.try_into()?;
-    // let cred_id = reg.id.clone();
-    // debug!("commande_authentifier_usager Cred id : {}", cred_id);
-    // let resultat = match verifier_challenge_authentification(
-    //     &commande.hostname, idmg, reg, passkey_authentication.try_into()?
-    // ) {
-    //     Ok(inner) => inner,
-    //     Err(e) => {
-    //         error!("core_maitredescomptes.commande_authentifier_webauthn Erreur verification challenge webauthn : {:?}", e);
-    //         let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 2});
-    //         return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
-    //     }
-    // };
-    // debug!("commande_authentifier_webauthn Resultat webauth OK : {:?}", resultat);
-    //
-    // // Supprimer challenge pour eviter reutilisation
-    // {
-    //     let collection = middleware.get_collection(NOM_COLLECTION_CHALLENGES)?;
-    //     let filtre = doc! {
-    //         CHAMP_USER_ID: &commande.user_id,
-    //         "hostname": &commande.hostname,
-    //         "type_challenge": "authentication",
-    //         "challenge": &commande.challenge,
-    //     };
-    //     collection.delete_one_with_session(filtre, None, session).await?;
-    // }
-    //
-    // // Conserver dernier acces pour la passkey
-    // {
-    //     let collection = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
-    //     let filtre = doc! {
-    //         CHAMP_USER_ID: &commande.user_id,
-    //         "hostname": &commande.hostname,
-    //         "passkey.cred.cred_id": cred_id,
-    //     };
-    //     let ops = doc! { "$set": { CHAMP_DERNIER_AUTH: Utc::now() } };
-    //     collection.update_one_with_session(filtre, ops, None, session).await?;
-    // }
-    //
-    // let mut reponse_ok = json!({
-    //     "ok": true,
-    //     "counter": resultat.counter(),
-    //     "userVerification": resultat.user_verified(),
-    // });
-    //
-    // if let Some(demande_certificat) = demande_certificat {
-    //     debug!("Generer le nouveau certificat pour l'usager et le retourner");
-    //     let user_id = &commande.user_id;
-    //     let csr = demande_certificat.csr;
-    //     let compte_usager = match charger_compte_user_id(middleware, &commande.user_id, session).await {
-    //         Ok(inner) => match inner {
-    //             Some(inner) => inner,
-    //             None => {
-    //                 error!("core_maitredescomptes.commande_authentifier_webauthn Compte usager inconnu pour generer certificat");
-    //                 let reponse_ok = json!({"ok": false, "err": "Compte usager inconnu pour generer nouveau certificat", "code": 3});
-    //                 return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
-    //             }
-    //         },
-    //         Err(e) => {
-    //             error!("core_maitredescomptes.commande_authentifier_webauthn Erreur chargement compte usager pour generer certificat : {:?}", e);
-    //             let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 4});
-    //             return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
-    //         }
-    //     };
-    //     let nom_usager = &compte_usager.nom_usager;
-    //     // let securite = SECURITE_1_PUBLIC;
-    //     let reponse_commande = signer_certificat_usager(
-    //         middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
-    //     let reponse_ref = reponse_commande.parse()?;
-    //     let message_contenu = reponse_ref.contenu()?;
-    //     let info_certificat: ReponseSignatureCertificat = message_contenu.deserialize()?;
-    //     if let Some(certificat) = info_certificat.certificat {
-    //         // Inserer le certificat dans la reponse
-    //         reponse_ok.as_object_mut().expect("as_object_mut")
-    //             .insert("certificat".to_string(), certificat.into());
-    //     }
-    // }
-    //
-    // if let Some(duree_session) = commande.commande_webauthn.duree_session {
-    //     debug!("Creer cookie de session");
-    //     match creer_session_cookie(middleware, &commande.user_id, &commande.hostname, duree_session, session).await {
-    //         Ok(inner) => {
-    //             reponse_ok.as_object_mut().expect("as_object_mut")
-    //                 .insert("cookie".to_string(), inner.into());
-    //         },
-    //         Err(e) => {
-    //             error!("Erreur creation cookie session : {:?}", e);
-    //         }
-    //     }
-    // }
-    //
-    // debug!("Reponse authentification : {:?}", reponse_ok);
-    //
-    // Ok(Some(middleware.build_reponse(reponse_ok)?.0))
+    // Test the code with all registered TOTP codes for this user_id/hostname.
+    let collection = middleware.get_collection_typed::<TotpCredentialsRow>(NOM_COLLECTION_TOTP_CREDENTIALS)?;
+    let filtre = doc!{"user_id": &command.user_id, "hostname": &command.hostname};
+    let mut cursor = collection.find(filtre, None).await?;
+    let mut valid = false;
+    let mut totp_url_used = None;
+    while cursor.advance().await? {
+        let row = cursor.deserialize_current()?;
+        let totp = match TOTP::from_url(&row.totp_url) {
+            Ok(inner) => inner,
+            Err(e) => {
+                warn!("command_authenticate_otp Error loading TOTP URL for user_id:{}, hostname:{}: {:?}", row.user_id, row.hostname, e);
+                continue;
+            }
+        };
+        match totp.check_current(totp_code.as_str()) {
+            Ok(true) => {
+                valid = true;  // Code is verified and valid
+                totp_url_used = Some(row.totp_url);
+                break
+            }
+            Ok(false) => continue,
+            Err(e) => {
+                warn!("command_authenticate_otp Error validating TOTP code: {:?}", e);
+                continue
+            }
+        }
+    }
+
+    if ! valid {
+        // No valid TOTP url, rejecting
+        return Ok(Some(middleware.reponse_err(Some(401), None, Some("Invalid TOTP code"))?));
+    }
+
+    // Conserver dernier acces pour la passkey
+    {
+        let collection = middleware.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
+        let filtre = doc! {
+            CHAMP_USER_ID: &command.user_id,
+            "hostname": &command.hostname,
+            "totp_url": &totp_url_used,
+        };
+        let ops = doc! { "$set": { CHAMP_DERNIER_AUTH: Utc::now() } };
+        collection.update_one_with_session(filtre, ops, None, session).await?;
+    }
+
+    let mut reponse_ok = TotpAuthenticationResponse {ok: true, user_verified: true, cookie: None, certificat: None};
+
+    if let Some(certificate_request) = command.certificate_request {
+        debug!("Generer le nouveau certificat pour l'usager et le retourner");
+        let user_id = &command.user_id;
+        let csr = certificate_request.csr;
+        let compte_usager = match charger_compte_user_id(middleware, &command.user_id, session).await {
+            Ok(inner) => match inner {
+                Some(inner) => inner,
+                None => {
+                    error!("core_maitredescomptes.commande_authentifier_webauthn Compte usager inconnu pour generer certificat");
+                    let reponse_ok = json!({"ok": false, "err": "Compte usager inconnu pour generer nouveau certificat", "code": 3});
+                    return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
+                }
+            },
+            Err(e) => {
+                error!("core_maitredescomptes.commande_authentifier_webauthn Erreur chargement compte usager pour generer certificat : {:?}", e);
+                let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 4});
+                return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
+            }
+        };
+        let nom_usager = &compte_usager.nom_usager;
+        // let securite = SECURITE_1_PUBLIC;
+        let reponse_commande = signer_certificat_usager(
+            middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
+        let reponse_ref = reponse_commande.parse()?;
+        let message_contenu = reponse_ref.contenu()?;
+        let info_certificat: ReponseSignatureCertificat = message_contenu.deserialize()?;
+        if let Some(certificate) = info_certificat.certificat {
+            // Inserer le certificat dans la reponse
+            reponse_ok.certificat = Some(certificate);
+        }
+    }
+
+    if let Some(session_duration) = command.session_duration {
+        debug!("Creer cookie de session");
+        match creer_session_cookie(middleware, &command.user_id, &command.hostname, session_duration, session).await {
+            Ok(inner) => {
+                reponse_ok.cookie = Some(inner);
+            },
+            Err(e) => {
+                error!("Erreur creation cookie session : {:?}", e);
+            }
+        }
+    }
+
+    Ok(Some(middleware.build_reponse(reponse_ok)?.0))
 }
