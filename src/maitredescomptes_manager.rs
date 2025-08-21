@@ -17,9 +17,10 @@ use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::Mess
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::messages_generiques::MessageCedule;
 use millegrilles_common_rust::middleware::{Middleware, MiddlewareMessages};
-use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::{Cipher, CleChiffrageHandler, CleDechiffrageX25519Impl, CleSecreteSerialisee, Decipher};
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage::CleSecreteMgs4;
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::{Cipher, CleChiffrageHandler, CleChiffrageX25519Impl, CleDechiffrageX25519Impl, CleSecreteSerialisee, Decipher};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
-use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_mgs4::{CipherMgs4, DecipherMgs4};
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_mgs4::{CipherMgs4, CleSecreteCipher, DecipherMgs4};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_mgs4::CleSecreteCipher::CleDerivee;
 use millegrilles_common_rust::millegrilles_cryptographie::x25519::CleSecreteX25519;
 use millegrilles_common_rust::mongodb::ClientSession;
@@ -36,7 +37,7 @@ pub struct MaitreDesComptesManager {
     /// Lazy-initialized secret key handler. The key is created on first use.
     pub key_handler: Mutex<Option<SecretKeyHandler>>,
     /// Cache of keys used to decrypt content previously generated. Key is the key_id.
-    pub key_cache: Mutex<HashMap<String, CleDechiffrageX25519Impl>>,
+    pub key_cache: Mutex<HashMap<String, CleSecreteMgs4>>,
 }
 
 impl GestionnaireDomaineV2 for MaitreDesComptesManager {
@@ -194,12 +195,7 @@ impl MaitreDesComptesManager {
         let secret_key = {
             let mutex = self.key_cache.lock().expect("key_cache.lock()");
             match (*mutex).get(key_id) {
-                Some(secret) => {
-                    match &secret.cle_secrete {
-                        Some(cle_secrete) => Some(cle_secrete.clone()),
-                        _ => None
-                    }
-                },
+                Some(secret) => Some(secret.clone()),
                 None => None
             }
         };
@@ -207,12 +203,22 @@ impl MaitreDesComptesManager {
         let secret_key = match secret_key {
             None => {
                 // Load the key
+                debug!("Load secret key {} from KeyMaster", key_id);
                 let mut keys = get_cles_rechiffrees_v2(middleware, DOMAINE_NOM_MAITREDESCOMPTES, vec![key_id], Some(false)).await?;
                 let secret: CleSecreteSerialisee = match keys.pop() {
                     Some(secret) => secret.try_into()?,
                     None => Err("Key not received")?
                 };
-                secret.cle_secrete()?
+                let secret = secret.cle_secrete()?;
+
+                // Save key in the cache
+                let mut mutex = self.key_cache.lock().expect("key_cache.lock()");
+                if mutex.len() >= 128 {    // About 4kb of keys max
+                    mutex.clear(); // Clear the whole cache, start over.
+                }
+                mutex.insert(key_id.clone(), secret.clone());
+
+                secret
             }
             Some(secret_key) => secret_key,
         };
