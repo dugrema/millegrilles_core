@@ -52,6 +52,7 @@ pub const INDEX_RECOVERY_UNIQUE: &str = "recovery_code_unique";
 pub const INDEX_CHALLENGES_UNIQUE: &str = "challenges_unique";
 pub const INDEX_WEBAUTHN_UNIQUE: &str = "webauthn_unique";
 pub const INDEX_COOKIE_UNIQUE: &str = "cookie_unique";
+pub const INDEX_TOTP_UNIQUE: &str = "totp_unique";
 
 pub const CHAMP_USER_ID: &str = "userId";
 pub const CHAMP_USAGER_NOM: &str = "nomUsager";

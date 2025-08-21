@@ -442,5 +442,20 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_cookie)
     ).await?;
 
+    let options_unique_totp = IndexOptions {
+        nom_index: Some(String::from(INDEX_TOTP_UNIQUE)),
+        unique: true
+    };
+    let champs_index_totp = vec!(
+        ChampIndex {nom_champ: String::from("user_id"), direction: 1},
+        ChampIndex {nom_champ: String::from("correlation"), direction: 1},
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_TOTP_CREDENTIALS,
+        champs_index_totp,
+        Some(options_unique_totp)
+    ).await?;
+
     Ok(())
 }
