@@ -1,10 +1,14 @@
+use std::collections::HashMap;
+use std::sync::Mutex;
 use log::{debug, warn};
 use millegrilles_common_rust::bson::{Bson, bson, DateTime as DateTimeBson, doc};
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::constantes::Securite;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_v2;
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_mgs4::CleSecreteCipher;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
+use millegrilles_common_rust::millegrilles_cryptographie::x25519::CleSecreteX25519;
 use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, MongoDao};
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
@@ -135,4 +139,11 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     }
 
     Ok(Some(middleware.build_reponse(&reponse)?.0))
+}
+
+pub struct SecretKeyHandler {
+    /// Key used to encrypt secrets generated in this session
+    pub encryption_key: CleSecreteCipher,
+    /// Current encryption_key id
+    pub key_id: String,
 }

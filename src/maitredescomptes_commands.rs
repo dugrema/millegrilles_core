@@ -25,6 +25,7 @@ use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::transactions::{marquer_transaction, EtatTransaction};
 use millegrilles_common_rust::common_messages::{MessageConfirmation, ReponseSignatureCertificat};
 use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use millegrilles_common_rust::millegrilles_cryptographie::hachages::{hacher_bytes, HachageCode, HacheurBlake2s256};
 use millegrilles_common_rust::tokio_stream::StreamExt;
@@ -61,14 +62,14 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             TRANSACTION_INSCRIRE_USAGER => inscrire_usager(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m, gestionnaire, &mut session).await,
-            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
+            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, gestionnaire, m, &mut session).await,
 
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m, &mut session).await,
-            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, m, &mut session).await,
+            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, gestionnaire, m, &mut session).await,
             COMMANDE_SIGNER_COMPTEUSAGER => commande_signer_compte_par_usager(middleware, m, &mut session).await,
             COMMANDE_AJOUTER_CSR_RECOVERY => commande_ajouter_csr_recovery(middleware, m, &mut session).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m, &mut session).await,
-            COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
+            COMMAND_GENERATE_OTP => command_generate_otp(middleware, gestionnaire, m, &mut session).await,
             COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m, &mut session).await,
 
             // Commandes inconnues
@@ -77,10 +78,10 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
     } else if m.certificat.verifier_exchanges(vec!(Securite::L1Public))? {
         match action.as_str() {
             COMMANDE_AUTHENTIFIER_WEBAUTHN => commande_authentifier_webauthn(middleware, m, &mut session).await,
-            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, m, &mut session).await,
+            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, gestionnaire, m, &mut session).await,
             COMMANDE_SUPPRIMER_COOKIE => supprimer_cookie(middleware, m, &mut session).await,
-            COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
-            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
+            COMMAND_GENERATE_OTP => command_generate_otp(middleware, gestionnaire, m, &mut session).await,
+            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, gestionnaire, m, &mut session).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: exchange L1) : {}, message dropped", DOMAIN_NAME, action))?,
@@ -92,7 +93,7 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             TRANSACTION_MAJ_USAGER_DELEGATIONS => commande_maj_usager_delegations(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_SUPPRIMER_CLES => commande_supprimer_cles(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_RESET_WEBAUTHN_USAGER => commande_reset_webauthn_usager(middleware, gestionnaire, m, &mut session).await,
-            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
+            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, gestionnaire, m, &mut session).await,
 
             // Commandes usager standard
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire, &mut session).await,
@@ -100,8 +101,8 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => commande_signer_compte_par_proprietaire(middleware, m, &mut session).await,
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m, &mut session).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m, gestionnaire, &mut session).await,
-            COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
-            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, m, &mut session).await,
+            COMMAND_GENERATE_OTP => command_generate_otp(middleware, gestionnaire, m, &mut session).await,
+            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, gestionnaire, m, &mut session).await,
 
             // Commandes inconnues
             _ => Ok(Some(middleware.reponse_err(252, None, Some("Acces refuse"))?))
@@ -113,9 +114,9 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
             COMMANDE_GENERER_CHALLENGE => commande_generer_challenge(middleware, m, &mut session).await,
             TRANSACTION_AJOUTER_CLE => commande_ajouter_cle(middleware, m, gestionnaire, &mut session).await,
             TRANSACTION_AJOUTER_DELEGATION_SIGNEE => commande_ajouter_delegation_signee(middleware, m, gestionnaire, &mut session).await,
-            COMMAND_GENERATE_OTP => command_generate_otp(middleware, m, &mut session).await,
-            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, m, &mut session).await,
-            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, m, gestionnaire, &mut session).await,
+            COMMAND_GENERATE_OTP => command_generate_otp(middleware, gestionnaire, m, &mut session).await,
+            COMMAND_AUTHENTICATE_TOTP => command_authenticate_otp(middleware, gestionnaire, m, &mut session).await,
+            TRANSACTION_REGISTER_OTP => command_register_otp(middleware, gestionnaire, m, &mut session).await,
 
             // Commandes inconnues
             _ => Err(format!("Commande {} inconnue (section: user_id): {}, message dropped", DOMAIN_NAME, action))?,
@@ -1526,9 +1527,9 @@ struct ResponseGenerateOtp {
     qr_base64: String,
 }
 
-async fn command_generate_otp<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
+async fn command_generate_otp<M>(middleware: &M, gestionnaire: &MaitreDesComptesManager, message: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
+where M: ValidateurX509 + GenerateurMessages + CleChiffrageHandler + MongoDao + IsConfigNoeud
 {
     debug!("command_generate_otp : {:?}", message.type_message);
 
@@ -1583,7 +1584,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
     // Hash the url to obfuscate the secret
     let challenge_hashvalue = base64_url::encode(&hacher_bytes(totp_url.as_bytes(), HachageCode::Blake2s256));
 
-    let challenge_row = DocChallenge::new_challenge_totp(&user_id, hostname, &challenge_hashvalue, totp_url);
+    // Encrypt the TOTP url, it contains the secret value
+    let mut encrypted_url = gestionnaire.encrypt_string(middleware, totp_url).await?;
+
+    let challenge_row = DocChallenge::new_challenge_totp(&user_id, hostname, &challenge_hashvalue, encrypted_url);
     let collection = middleware.get_collection_typed::<DocChallenge>(NOM_COLLECTION_CHALLENGES)?;
     collection.insert_one_with_session(challenge_row, None, session).await?;
 
@@ -1595,7 +1599,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
     Ok(Some(middleware.build_reponse_chiffree(reponse, message.certificat.as_ref())?.0))
 }
 
-async fn command_register_otp<M>(middleware: &M, message: MessageValide, gestionnaire: &MaitreDesComptesManager, session: &mut ClientSession)
+async fn command_register_otp<M>(middleware: &M, gestionnaire: &MaitreDesComptesManager, message: MessageValide, session: &mut ClientSession)
                                  -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao,
 {
@@ -1624,11 +1628,14 @@ async fn command_register_otp<M>(middleware: &M, message: MessageValide, gestion
         Err(e) => return Ok(Some(middleware.reponse_err(Some(500), None, Some(format!("Error loading challenge: {:?}", e).as_str()))?))
     };
 
-    let totp_url = match challenge.totp_url {
+    let encrypted_totp_url = match challenge.totp_url_encrypted {
         Some(inner) => inner,
         None => return Ok(Some(middleware.reponse_err(Some(500), None, Some("TOTP challeng information lost"))?))
     };
 
+    // Decrypt the url
+    let totp_url_doc = gestionnaire.decrypt_document(middleware, &encrypted_totp_url).await?;
+    let totp_url = String::from_utf8(totp_url_doc)?;
     let totp = match TOTP::from_url(&totp_url) {
         Ok(inner) => inner,
         Err(e) => Err(format!("TOTP URL loading error: {:?}", e))?
@@ -1647,7 +1654,7 @@ async fn command_register_otp<M>(middleware: &M, message: MessageValide, gestion
     let transaction = TransactionRegisterOtp {
         user_id,
         hostname: command.hostname,
-        totp_url,
+        encrypted_totp_url,
         reset_keys: command.reset_keys,
     };
 
@@ -1678,7 +1685,7 @@ struct TotpAuthenticationResponse {
     certificat: Option<Vec<String>>,
 }
 
-async fn command_authenticate_otp<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
+async fn command_authenticate_otp<M>(middleware: &M, gestionnaire: &MaitreDesComptesManager, message: MessageValide, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
     where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
@@ -1701,7 +1708,9 @@ async fn command_authenticate_otp<M>(middleware: &M, message: MessageValide, ses
     let mut totp_url_used = None;
     while cursor.advance().await? {
         let row = cursor.deserialize_current()?;
-        let totp = match TOTP::from_url(&row.totp_url) {
+        let totp_url_bytes = gestionnaire.decrypt_document(middleware, &row.encrypted_totp_url).await?;
+        let totp_url = String::from_utf8(totp_url_bytes)?;
+        let totp = match TOTP::from_url(&totp_url) {
             Ok(inner) => inner,
             Err(e) => {
                 warn!("command_authenticate_otp Error loading TOTP URL for user_id:{}, hostname:{}: {:?}", row.user_id, row.hostname, e);
@@ -1711,7 +1720,7 @@ async fn command_authenticate_otp<M>(middleware: &M, message: MessageValide, ses
         match totp.check_current(totp_code.as_str()) {
             Ok(true) => {
                 valid = true;  // Code is verified and valid
-                totp_url_used = Some(row.totp_url);
+                totp_url_used = Some(totp_url);
                 break
             }
             Ok(false) => continue,
@@ -1728,16 +1737,16 @@ async fn command_authenticate_otp<M>(middleware: &M, message: MessageValide, ses
     }
 
     // Conserver dernier acces pour la passkey
-    {
-        let collection = middleware.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
-        let filtre = doc! {
-            CHAMP_USER_ID: &command.user_id,
-            "hostname": &command.hostname,
-            "totp_url": &totp_url_used,
-        };
-        let ops = doc! { "$set": { CHAMP_DERNIER_AUTH: Utc::now() } };
-        collection.update_one_with_session(filtre, ops, None, session).await?;
-    }
+    // {
+    //     let collection = middleware.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
+    //     let filtre = doc! {
+    //         CHAMP_USER_ID: &command.user_id,
+    //         "hostname": &command.hostname,
+    //         "totp_url": &totp_url_used,
+    //     };
+    //     let ops = doc! { "$set": { CHAMP_DERNIER_AUTH: Utc::now() } };
+    //     collection.update_one_with_session(filtre, ops, None, session).await?;
+    // }
 
     let mut reponse_ok = TotpAuthenticationResponse {ok: true, user_verified: true, cookie: None, certificat: None};
 

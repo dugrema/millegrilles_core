@@ -6,6 +6,7 @@ use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesOwned;
 use millegrilles_common_rust::{base64_url, chrono, openssl, serde_json};
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 
@@ -42,7 +43,7 @@ pub struct DocChallenge {
     pub webauthn_authentication: Option<ChallengeAuthenticationWebauthn>,
 
     /// TOTP configuration
-    pub totp_url: Option<String>,
+    pub totp_url_encrypted: Option<EncryptedDocument>,
 }
 
 impl DocChallenge {
@@ -67,7 +68,7 @@ impl DocChallenge {
             date_creation: DateTimeBson::now(),
             webauthn_registration: Some(webauthn_registration),
             webauthn_authentication: None,
-            totp_url: None,
+            totp_url_encrypted: None,
         }
     }
 
@@ -89,7 +90,7 @@ impl DocChallenge {
             date_creation: DateTimeBson::now(),
             webauthn_registration: None,
             webauthn_authentication: Some(webauthn_authentication),
-            totp_url: None,
+            totp_url_encrypted: None,
         }
     }
 
@@ -109,12 +110,12 @@ impl DocChallenge {
             date_creation: DateTimeBson::now(),
             webauthn_registration: None,
             webauthn_authentication: None,
-            totp_url: None,
+            totp_url_encrypted: None,
         }
     }
 
-    pub fn new_challenge_totp<U,V,C,T>(user_id: U, hostname: V, challenge: C, totp_url: T) -> Self
-        where U: Into<String>, V: Into<String>, C: Into<String>, T: Into<String>
+    pub fn new_challenge_totp<U,V,C>(user_id: U, hostname: V, challenge: C, encrypted_url: EncryptedDocument) -> Self
+        where U: Into<String>, V: Into<String>, C: Into<String>
     {
         Self {
             user_id: user_id.into(),
@@ -124,7 +125,7 @@ impl DocChallenge {
             date_creation: DateTimeBson::now(),
             webauthn_registration: None,
             webauthn_authentication: None,
-            totp_url: Some(totp_url.into())
+            totp_url_encrypted: Some(encrypted_url)
         }
     }
 }
@@ -306,7 +307,7 @@ pub struct CommandeResetWebauthnUsager {
 pub struct TotpCredentialsRow {
     pub user_id: String,
     pub hostname: String,
-    pub totp_url: String,
+    pub encrypted_totp_url: EncryptedDocument,
     #[serde(rename="_mg-creation")]
     pub date_creation: DateTimeBson,
 }

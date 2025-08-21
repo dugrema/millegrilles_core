@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Mutex;
 use crate::maitredescomptes_manager::{preparer_index_mongodb as preparer_index_mongodb_maitredescomptes, MaitreDesComptesManager};
 use log::{debug, info, warn};
@@ -69,7 +70,7 @@ async fn initialiser<M>(middleware: &'static M) -> Result<
 where M: Middleware + IsConfigNoeud
 {
     let managers = Managers {
-        maitredescomptes: MaitreDesComptesManager {},
+        maitredescomptes: MaitreDesComptesManager {key_handler: Mutex::new(None), key_cache: Mutex::new(HashMap::new()),},
         topology: TopologyManager {},
         catalogues: CataloguesManager {catalogues_charges: Mutex::new(false)},
         pki: PkiManager {},

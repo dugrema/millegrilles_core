@@ -14,7 +14,7 @@ use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::bson::DateTime as DateTimeBson;
-
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use crate::maitredescomptes_common::{emettre_maj_compte_usager, sauvegarder_credential};
 use crate::maitredescomptes_constants::*;
 use crate::maitredescomptes_structs::{CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, ConfirmationSigneeDelegationGlobale, TotpCredentialsRow, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionSupprimerCles};
@@ -367,7 +367,7 @@ pub struct CommandRegisterOtp {
 pub struct TransactionRegisterOtp {
     pub user_id: String,
     pub hostname: String,
-    pub totp_url: String,
+    pub encrypted_totp_url: EncryptedDocument,
     pub reset_keys: Option<bool>,
 }
 
@@ -385,7 +385,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     let row = TotpCredentialsRow {
         user_id: command.user_id.clone(),
         hostname: command.hostname,
-        totp_url: command.totp_url,
+        encrypted_totp_url: command.encrypted_totp_url,
         date_creation: DateTimeBson::now(),
 
     };
