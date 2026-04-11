@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use millegrilles_common_rust::chrono;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
-use millegrilles_common_rust::dechiffrage::DataChiffre;
 use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::serde_json::Value;
 use serde::{Deserialize, Serialize};
@@ -14,39 +13,6 @@ use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, 
 pub struct TransactionSetFilehostInstance {
     pub instance_id: String,
     pub filehost_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TransactionConfigurerConsignation {
-    pub instance_id: String,
-    pub type_store: Option<String>,
-    pub url_download: Option<String>,
-    pub url_archives: Option<String>,
-    pub consignation_url: Option<String>,
-    pub sync_intervalle: Option<i64>,
-    pub sync_actif: Option<bool>,
-    pub supporte_archives: Option<bool>,
-    pub data_chiffre: Option<DataChiffre>,
-    // SFTP
-    pub hostname_sftp: Option<String>,
-    pub username_sftp: Option<String>,
-    pub port_sftp: Option<u16>,
-    pub remote_path_sftp: Option<String>,
-    pub key_type_sftp: Option<String>,
-    // AWS S3
-    pub s3_access_key_id: Option<String>,
-    pub s3_region: Option<String>,
-    pub s3_endpoint: Option<String>,
-    pub s3_bucket: Option<String>,
-    // Backup
-    pub type_backup: Option<String>,
-    pub hostname_sftp_backup: Option<String>,
-    pub port_sftp_backup: Option<u16>,
-    pub username_sftp_backup: Option<String>,
-    pub remote_path_sftp_backup: Option<String>,
-    pub key_type_sftp_backup: Option<String>,
-    pub backup_intervalle_secs: Option<i64>,
-    pub backup_limit_bytes: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,55 +102,6 @@ pub struct TransactionSetCleidBackupDomaine {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InfoService {
-    pub etat: Option<String>,
-    pub labels: Option<HashMap<String, String>>,
-    pub replicas: Option<usize>,
-    pub image: Option<String>,
-    pub version: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ApplicationConfiguree {
-    pub nom: String,
-    pub version: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct WebAppLink {
-    pub name: String,
-    pub labels: Option<HashMap<String, Value>>,
-    pub securite: String,
-    pub url: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct PresenceMonitor {
-    #[serde(serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
-    #[serde(default)]
-    pub date_presence: Option<chrono::DateTime<Utc>>,
-    pub domaine: Option<String>,
-    pub domaines: Option<Vec<String>>,
-    pub instance_id: String,
-    pub services: Option<HashMap<String, InfoService>>,
-    pub applications_configurees: Option<Vec<ApplicationConfiguree>>,
-    pub containers: Option<HashMap<String, Value>>,
-    pub disk: Option<Vec<Value>>,
-    pub fqdn_detecte: Option<String>,
-    pub hostname: Option<String>,
-    pub info: Option<HashMap<String, Value>>,
-    pub ip_detectee: Option<String>,
-    pub load_average: Option<Vec<Value>>,
-    pub securite: Option<String>,
-    pub system_battery: Option<Value>,
-    pub system_fans: Option<Value>,
-    pub system_temperature: Option<HashMap<String, Value>>,
-    pub webapps: Option<Vec<WebAppLink>>,
-    pub consignation_id: Option<String>,
-    pub filehost_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerInstanceStatus {
     pub instance_id: String,
     pub disk: Option<Vec<Value>>,
@@ -201,40 +118,10 @@ pub struct ServerInstanceStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InformationApplication {
-    pub application: String,
-    pub securite: Option<String>,
-    pub url: Option<String>,
-    pub millegrille: Option<String>,
-    pub name_property: Option<String>,
-    pub supporte_usagers: Option<bool>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct InformationMonitor {
-    pub domaines: Option<Vec<String>>,
-    pub instance_id: String,
-    pub securite: Option<String>,
-    pub onion: Option<String>,
-    pub applications: Option<Vec<InformationApplication>>,
-    pub applications_configurees: Option<Vec<ApplicationConfiguree>>,
-    #[serde(serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
-    #[serde(default)]
-    pub date_presence: Option<chrono::DateTime<Utc>>,
-    pub webapps: Option<Vec<WebAppLink>>,
-    pub consignation_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresenceDomaine {
     pub domaine: Option<String>,
     pub instance_id: Option<String>,
     pub reclame_fuuids: Option<bool>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TransactionSupprimerConsignationInstance {
-    pub instance_id: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -303,16 +190,6 @@ pub struct EventNewFuuid {
     pub filehost_id: String,
     pub fuuid: String,
 }
-
-// #[derive(Serialize, Deserialize)]
-// pub struct FuuidReclameRow {
-//     pub fuuid: String,
-//     #[serde(with="bson::serde_helpers::chrono_datetime_as_bson_datetime")]
-//     pub last_claim: DateTime<Utc>,
-// }
-
-#[derive(Deserialize)]
-pub struct RowFuuid { pub fuuid: String }
 
 #[derive(Serialize, Deserialize)]
 pub struct FilehostTransfer {

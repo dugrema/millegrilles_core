@@ -17,8 +17,7 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::common_messages::{PresenceFichiersRepertoire, RequeteFilehostItem, RequestFilehostForInstanceResponse};
-use millegrilles_common_rust::dechiffrage::DataChiffre;
+use millegrilles_common_rust::common_messages::{RequeteFilehostItem, RequestFilehostForInstanceResponse};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::error::Error as CommonError;
@@ -28,7 +27,7 @@ use crate::topology_commands::FuuidVisitResponseItem;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceWebApplication};
-use crate::topology_structs::{ApplicationPublique, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus};
+use crate::topology_structs::{ApplicationPublique, FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -137,24 +136,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct RequeteFicheMillegrille {
     idmg: String,
-}
-
-impl TryInto<ApplicationPublique> for InformationApplication {
-    type Error = String;
-
-    fn try_into(self) -> Result<ApplicationPublique, Self::Error> {
-        let url = match self.url {
-            Some(u) => u,
-            None => Err(format!("core_topologie.TryInto<ApplicationPublique> URL manquant"))?
-        };
-        Ok(ApplicationPublique {
-            application: self.application,
-            version: None,
-            url,
-            preference: ADRESSE_PREFERENCE_PRIMAIRE,
-            nature: ADRESSE_NATURE_DNS.into(),
-        })
-    }
 }
 
 async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValide)
@@ -311,6 +292,7 @@ struct RequeteGetTokenHebergement {
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct HebergementTokenRow {
     idmg: String,
     role: String,
@@ -1053,227 +1035,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(reponse))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct ParametresGetCleConfiguration {
-    // ref_hachage_bytes: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReponseConsignationSatellite {
-    pub instance_id: String,
-    pub consignation_url: Option<String>,
-    pub type_store: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sync_intervalle: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    sync_actif: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    supporte_archives: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    data_chiffre: Option<DataChiffre>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url_download: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub url_archives: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hostnames: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub primaire: Option<bool>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hostname_sftp: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub port_sftp: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub username_sftp: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote_path_sftp: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_type_sftp: Option<String>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub s3_access_key_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub s3_region: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub s3_endpoint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub s3_bucket: Option<String>,
-
-    // Backup
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub type_backup: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub hostname_sftp_backup: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub port_sftp_backup: Option<u16>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub username_sftp_backup: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remote_path_sftp_backup: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub key_type_sftp_backup: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub backup_intervalle_secs: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub backup_limit_bytes: Option<usize>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub principal: Option<PresenceFichiersRepertoire>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub archive: Option<PresenceFichiersRepertoire>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub orphelin: Option<PresenceFichiersRepertoire>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub manquant: Option<PresenceFichiersRepertoire>,
-
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub espace_disponible: Option<usize>,
-    #[serde(rename = "_mg-derniere-modification", skip_serializing_if = "Option::is_none", serialize_with="optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
-    #[serde(default)]
-    pub derniere_modification: Option<chrono::DateTime<Utc>>,
-
-    pub supprime: Option<bool>,
-}
-
-// async fn requete_get_cle_configuration<M>(middleware: &M, m: MessageValide)
-//                                           -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-// where M: GenerateurMessages + MongoDao
-// {
-//     debug!("requete_get_cle_configuration Message : {:?}", &m.type_message);
-//     let message_ref = m.message.parse()?;
-//     let message_contenu = message_ref.contenu()?;
-//     let requete: ParametresGetCleConfiguration = message_contenu.deserialize()?;
-//     debug!("requete_get_cle_configuration cle parsed : {:?}", requete);
-//
-//     if ! m.certificat.verifier_roles(vec![RolesCertificats::Fichiers])? {
-//         // let reponse = json!({"err": true, "message": "certificat doit etre de role fichiers"});
-//         // return Ok(Some(middleware.formatter_reponse(reponse, None)?));
-//         return Ok(Some(middleware.reponse_err(None, Some("Certificat doit etre de role fichiers"), None)?))
-//     }
-//
-//     // Utiliser certificat du message client (requete) pour demande de rechiffrage
-//     let instance_id = m.certificat.get_common_name()?;
-//     let pem_rechiffrage = m.certificat.chaine_pem()?;
-//     // let pem_rechiffrage: Vec<String> = fp_certs.into_iter().map(|cert| cert.pem).collect();
-//
-//     // Recuperer information de dechiffrage (avec cle_id) pour cette instance
-//     let filtre = doc!("instance_id": &instance_id);
-//     let collection = middleware.get_collection_typed::<ReponseConsignationSatellite>(NOM_COLLECTION_FICHIERS)?;
-//     let consignation_instance = match collection.find_one(filtre, None).await? {
-//         Some(inner) => inner,
-//         None => {
-//             info!("requete_get_cle_configuration Aucune configuration pour fichiers sur instance {}", instance_id);
-//             return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration de fichiers trouvees"))?))
-//         }
-//     };
-//
-//     let data_chiffre = match consignation_instance.data_chiffre {
-//         Some(inner) => inner,
-//         None => {
-//             info!("requete_get_cle_configuration Aucune configuration pour fichiers sur instance {}", instance_id);
-//             return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration chiffree trouvee pour les fichiers"))?))
-//         }
-//     };
-//
-//     let cle_id = match data_chiffre.cle_id {
-//         Some(inner) => inner,
-//         None => match data_chiffre.ref_hachage_bytes {
-//             Some(inner) => inner,
-//             None => {
-//                 info!("requete_get_cle_configuration Aucune configuration cle_id/ref_hachage_bytes trouve pour {}", instance_id);
-//                 return Ok(Some(middleware.reponse_err(1, None, Some("Aucune configuration cle_id/ref_hachage_bytes trouve trouvee pour les fichiers"))?))
-//             }
-//         }
-//     };
-//
-//     let permission = RequeteDechiffrage {
-//         domaine: DOMAIN_NAME.to_string(),
-//         liste_hachage_bytes: None,
-//         cle_ids: Some(vec![cle_id]),
-//         certificat_rechiffrage: Some(pem_rechiffrage),
-//         inclure_signature: None,
-//     };
-//
-//     let (reply_to, correlation_id) = match &m.type_message {
-//         TypeMessageOut::Requete(r) => {
-//             let reply_q = match r.reply_to.as_ref() {
-//                 Some(inner) => inner.as_str(),
-//                 None => Err(String::from("requete_get_cle_configuration Reply to manquant"))?
-//             };
-//             let correlation_id = match r.correlation_id.as_ref() {
-//                 Some(inner) => inner.as_str(),
-//                 None => Err(String::from("requete_get_cle_configuration Correlation id manquant"))?
-//             };
-//             (reply_q, correlation_id)
-//         }
-//         _ => Err(String::from("requete_get_cle_configuration Mauvais type de message"))?
-//     };
-//
-//     let routage = RoutageMessageAction::builder(
-//         DOMAINE_NOM_MAITREDESCLES, MAITREDESCLES_REQUETE_DECHIFFRAGE_V2, vec![Securite::L3Protege]
-//     )
-//         .reply_to(reply_to)
-//         .correlation_id(correlation_id)
-//         .blocking(false)
-//         .build();
-//
-//     debug!("requete_get_cle_configuration Transmettre requete permission dechiffrage cle : {:?}", permission);
-//     middleware.transmettre_requete(routage, &permission).await?;
-//
-//     Ok(None)  // Aucune reponse a transmettre, c'est le maitre des cles qui va repondre
-// }
-
 #[derive(Clone, Deserialize)]
 struct MessageInstanceId {
     instance_id: Option<String>
 }
-
-// async fn liste_noeuds<M>(middleware: &M, message: MessageValide)
-//                          -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-// where M: ValidateurX509 + GenerateurMessages + MongoDao
-// {
-//     debug!("liste_noeuds");
-//     if !message.certificat.verifier_exchanges(vec!(Securite::L3Protege, Securite::L4Secure))? {
-//         if !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-//             return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
-//         }
-//     }
-//
-//     let mut curseur = {
-//         let mut filtre = doc! {};
-//         let message_ref = message.message.parse()?;
-//         let message_contenu = message_ref.contenu()?;
-//         let message_instance_id: MessageInstanceId = message_contenu.deserialize()?;
-//         if let Some(inner) = message_instance_id.instance_id.as_ref() {
-//             filtre.insert("instance_id", inner.to_owned());
-//         }
-//         let collection = middleware.get_collection_typed::<PresenceMonitor>(NOM_COLLECTION_NOEUDS)?;
-//         match collection.find(filtre, None).await {
-//             Ok(c) => c,
-//             Err(e) => Err(format!("core_topologie.liste_noeuds Erreur chargement applications : {:?}", e))?
-//         }
-//     };
-//
-//     let mut noeuds = Vec::new();
-//     while let Some(r) = curseur.next().await {
-//         match r {
-//             Ok(d) => noeuds.push(d),
-//             Err(e) => warn!("core_topologie.liste_noeuds Erreur lecture document sous liste_noeuds() : {:?}", e)
-//         }
-//     }
-//
-//     debug!("Noeuds : {:?}", noeuds);
-//     let liste = json!({"resultats": noeuds});
-//     let reponse = match middleware.build_reponse(liste) {
-//         Ok(m) => m.0,
-//         Err(e) => Err(format!("core_topologie.liste_noeuds Erreur preparation reponse noeuds : {:?}", e))?
-//     };
-//     Ok(Some(reponse))
-// }
-
 #[derive(Serialize)]
 struct RequestServerInstancesResponse {
     ok: bool,
@@ -1316,55 +1081,13 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(middleware.build_reponse(response)?.0))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RequeteConfigurationFichiers {}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ReponseConfigurationFichiers {
-    liste: Vec<ReponseConsignationSatellite>,
-    ok: bool,
-}
-
-// async fn requete_configuration_fichiers<M>(middleware: &M, message: MessageValide)
-//                                            -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-// where M: ValidateurX509 + GenerateurMessages + MongoDao
-// {
-//     let message_ref = message.message.parse()?;
-//     let message_contenu = message_ref.contenu()?;
-//     let requete: RequeteConfigurationFichiers = message_contenu.deserialize()?;
-//     debug!("requete_configuration_fichiers Parsed : {:?}", requete);
-//
-//     let mut liste = Vec::new();
-//
-//     let filtre = doc! {};
-//     let collection = middleware.get_collection_typed::<ReponseConsignationSatellite>(NOM_COLLECTION_FICHIERS)?;
-//     let mut curseur = collection.find(filtre, None).await?;
-//     while let Some(fiche) = curseur.next().await {
-//         // let doc_inner = inner?;
-//         let fiche = fiche?;
-//
-//         // Extraire date BSON separement
-//         // let date_modif = match doc_inner.get(CHAMP_MODIFICATION) {
-//         //     Some(inner) => Some(DateEpochSeconds::try_from(inner.to_owned())?),
-//         //     None => None
-//         // };
-//
-//         // let fiche: ReponseConsignationSatellite = convertir_bson_deserializable(doc_inner)?;
-//         // fiche.derniere_modification = date_modif;  // Re-injecter date
-//
-//         liste.push(fiche);
-//     }
-//
-//     let reponse = ReponseConfigurationFichiers { liste, ok: true };
-//     Ok(Some(middleware.build_reponse(reponse)?.0))
-// }
-
 #[derive(Deserialize)]
 struct RequeteGetCleidBackupDomaine {
     domaine: String,
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct RowCoreTopologieDomaines {
     domaine: String,
     instance_id: String,
@@ -1583,12 +1306,6 @@ async fn request_filehost_for_instance<M>(middleware: &M, message: MessageValide
         }
     }
 
-}
-
-#[derive(Deserialize)]
-struct FilehostForExternalRequest {
-    instance_id: Option<String>,
-    filehost_id: Option<String>,
 }
 
 #[derive(Serialize)]

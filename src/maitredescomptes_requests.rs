@@ -703,6 +703,7 @@ struct PasskeyAuthenticationCred {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 struct RowWebauthnCredentials {
     #[serde(rename="userId")]
     user_id: String,
@@ -714,6 +715,7 @@ struct RowWebauthnCredentials {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 struct RowActivationInfo {
     #[serde(rename="userId")]
     user_id: String,
@@ -732,6 +734,7 @@ impl From<RowActivationInfo> for ActivationReponse {
 }
 
 #[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
 struct RowCookieInfo {
     user_id: String,
     hostname: String,

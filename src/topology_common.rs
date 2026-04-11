@@ -500,6 +500,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
 // }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct InstanceConfiguredAppRow {
     instance_id: String,
     app_name: String,

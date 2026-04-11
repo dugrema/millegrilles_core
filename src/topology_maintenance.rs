@@ -76,15 +76,8 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     Ok(())
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct RowInstanceActivite {
-    instance_id: String,
-    hostname: Option<String>,
-    date_presence: Option<i64>,
-    date_hors_ligne: Option<i64>,
-}
-
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct FuuidFilehostRow {
     #[serde(rename="_id")]
     id: ObjectId,
@@ -315,6 +308,7 @@ pub async fn emit_filehost_transfersupdated_event<M>(middleware: &M) -> Result<(
 
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct SyncStatusRow {
     claimer: String,
     claimer_type: String,
@@ -728,6 +722,7 @@ async fn maintain_unclaimed_fuuids<M>(middleware: &M) -> Result<(), Error>
 }
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 struct ObjectToArrayKeyStringValueDate {
     k: String,
     #[serde(default, with = "opt_chrono_datetime_as_bson_datetime")]
