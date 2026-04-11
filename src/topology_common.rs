@@ -12,14 +12,14 @@ use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, DOMAINE_RELAIWEB};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::{millegrilles_cryptographie, serde_json};
-use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
+use millegrilles_common_rust::jwt_simple::prelude::Deserialize;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::reqwest::Url;
 use crate::topology_constants::*;
 use crate::topology_requests::InstanceWebappsRow;
-use crate::topology_structs::{ApplicationPublique, ApplicationsV2, FichePublique, InformationApplicationInstance, InformationInstance, InformationMonitor, JwtHebergement, ReponseRelaiWeb, ReponseUrlEtag, RequeteRelaiWeb, ServerInstanceStatus};
+use crate::topology_structs::{ApplicationsV2, FichePublique, InformationApplicationInstance, InformationInstance, JwtHebergement, ReponseRelaiWeb, ReponseUrlEtag, RequeteRelaiWeb, ServerInstanceStatus};
 
 pub async fn maj_fiche_publique<M>(middleware: &M, fiche: &FichePublique, etag: Option<ReponseUrlEtag>) -> Result<(), Error>
 where M: MongoDao

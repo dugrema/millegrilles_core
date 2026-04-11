@@ -1,29 +1,25 @@
 use std::collections::{HashMap, HashSet};
 use log::{debug, error, info, warn};
-use log::kv::Source;
-use millegrilles_common_rust::bson::{doc, Bson, Array, DateTime};
+use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono;
 use millegrilles_common_rust::common_messages::{BackupEvent, PresenceFichiersRepertoire};
-use millegrilles_common_rust::constantes::{Securite, EVENEMENT_PRESENCE_DOMAINE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE, RolesCertificats, BACKUP_EVENEMENT_MAJ};
+use millegrilles_common_rust::constantes::{Securite, EVENEMENT_PRESENCE_DOMAINE, CHAMP_CREATION, CHAMP_MODIFICATION, RolesCertificats, BACKUP_EVENEMENT_MAJ};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
-use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_serializable_v2;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
-use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
-use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, start_transaction_regular, MongoDao};
+use millegrilles_common_rust::mongo_dao::{convertir_to_bson, start_transaction_regular, MongoDao};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOptions, UpdateOptions};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
-use millegrilles_common_rust::serde_json::{json, Value};
+use millegrilles_common_rust::serde_json::Value;
 use serde::{Deserialize, Serialize};
 
 use crate::topology_common::generer_contenu_fiche_publique;
 use crate::topology_manager::TopologyManager;
 use crate::topology_constants::*;
-use crate::topology_structs::{EventFilehostUsage, EventNewFuuid, PresenceDomaine, PresenceMonitor, RowFilehostFuuid, RowFilehostId, RowFuuid, TransactionSetFichiersPrimaire};
-use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
+use crate::topology_structs::{EventFilehostUsage, EventNewFuuid, PresenceDomaine, RowFilehostFuuid, RowFilehostId};
 use millegrilles_common_rust::mongodb::ClientSession;
 use crate::topology_maintenance::emit_filehost_transfersupdated_event;
 
@@ -452,7 +448,7 @@ async fn process_transfers<M>(middleware: &M, filehost_id: &str, fuuid: &str, se
             // Ajouter le filehost_id qui vient d'emettre l'evenement newFuuid (meme s'il devrait deja etre dans la liste).
             filehost_ids_visits.insert(filehost_id.to_owned());
 
-            let mut missing_from = filehost_ids.difference(&filehost_ids_visits);
+            let missing_from = filehost_ids.difference(&filehost_ids_visits);
             debug!("entretien_transfert_fichiers File {} missing from {:?}", row.fuuid, missing_from);
             let options = UpdateOptions::builder().upsert(true).build();
             let ops = doc! {
