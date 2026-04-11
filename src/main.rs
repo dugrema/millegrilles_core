@@ -10,7 +10,6 @@ mod validateur_pki_mongo;
 mod webauthn;
 mod error;
 mod builder;
-mod common;
 
 // Maitre des comptes
 mod maitredescomptes_manager;
