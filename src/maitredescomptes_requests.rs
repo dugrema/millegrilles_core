@@ -1,9 +1,9 @@
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, RequestChallengeResponse};
 
-use millegrilles_common_rust::bson::{Bson, bson, DateTime as DateTimeBson, doc};
+use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::constantes::{RolesCertificats, Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
@@ -14,14 +14,14 @@ use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
 use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::{base64_url, chrono, openssl, serde_json, uuid};
+use millegrilles_common_rust::{openssl, uuid};
 use millegrilles_common_rust::mongodb::options::{FindOneOptions, FindOptions};
-use millegrilles_common_rust::serde_json::{json, Value};
+use millegrilles_common_rust::serde_json::json;
 
 use crate::maitredescomptes_constants::*;
 use crate::error::Error as CoreError;
 use crate::maitredescomptes_structs::{CompteUsager, CookieSession, DocChallenge, RequeteGetCookieUsager};
-use crate::webauthn::{ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
+use crate::webauthn::{CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration};
 
 pub async fn consommer_requete_maitredescomptes<M>(middleware: &M, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -67,10 +67,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
                 },
             }
         },
-        _ => {
-            error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
-            Ok(None)
-        },
+        // _ => {
+        //     error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
+        //     Ok(None)
+        // },
     }
 }
 
@@ -218,7 +218,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
 
     let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
     let mut reponse_charger_usager: ReponseChargerUsager = match collection.find_one(filtre, None).await? {
-        Some(mut doc_usager) => {
+        Some(doc_usager) => {
             match convertir_bson_deserializable::<CompteUsager>(doc_usager) {
                 Ok(v) => ReponseChargerUsager::from(v),
                 Err(e) => {
@@ -465,7 +465,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
         let mut curseur = collection.find(filtre, ops).await?;
 
         while let Some(d) = curseur.next().await {
-            let mut doc_usager = d?;
+            let doc_usager = d?;
             debug!("get_userid_par_nomusager Usager trouve : {:?}", doc_usager);
             let nom_usager = doc_usager.get_str(CHAMP_USAGER_NOM)?;
             let user_id = doc_usager.get_str(CHAMP_USER_ID)?;
