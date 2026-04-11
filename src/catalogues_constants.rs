@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 pub const DOMAIN_NAME: &str = "CoreCatalogues";
 pub const NOM_COLLECTION_CATALOGUES: &str = "CoreCatalogues/catalogues";
 pub const NOM_COLLECTION_CATALOGUES_VERSIONS: &str = "CoreCatalogues/catalogues_versions";

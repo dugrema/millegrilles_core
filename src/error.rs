@@ -5,6 +5,7 @@ use millegrilles_common_rust::url::ParseError;
 use webauthn_rs::prelude::WebauthnError;
 
 #[derive(Debug)]
+#[allow(unused)]
 pub enum Error {
     MillegrillesCryptographie(millegrilles_common_rust::millegrilles_cryptographie::error::Error),
     MillegrillesCommon(millegrilles_common_rust::error::Error),

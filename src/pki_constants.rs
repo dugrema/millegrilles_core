@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 pub const DOMAIN_NAME: &str = "CorePki";
 pub const DOMAINE_LEGACY_NOM: &str = "Pki";
 pub const COLLECTION_CERTIFICAT_NOM: &str = "CorePki/certificat";

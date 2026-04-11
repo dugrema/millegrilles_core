@@ -24,7 +24,7 @@ where M: Middleware
     debug!("Consommer commande : {:?}", &m.message);
 
     // Note : aucune verification d'autorisation - tant que le certificat est valide (deja verifie), on repond.
-    let (domaine, action) = match &m.type_message {
+    let (_domaine, action) = match &m.type_message {
         TypeMessageOut::Commande(r) => {
             (r.domaine.clone(), r.action.clone())
         }
@@ -79,11 +79,11 @@ struct CommandeSauvegarderCertificat {
     ca: Option<String>
 }
 
-pub async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
+pub async fn traiter_commande_sauvegarder_certificat<M>(middleware: &M, m: MessageValide, _session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let domaine = match &m.type_message {
+    let _domaine = match &m.type_message {
         TypeMessageOut::Evenement(r) |
         TypeMessageOut::Commande(r) => {
             r.domaine.clone()
@@ -117,7 +117,7 @@ struct ReponseCertificatSigne {
     certificat: Vec<String>,
 }
 
-async fn valider_demande_signature_csr<'a, M>(middleware: &M, m: &'a MessageValide)
+async fn valider_demande_signature_csr<'a, M>(_middleware: &M, m: &'a MessageValide)
                                               -> Result<(), millegrilles_common_rust::error::Error>
 where M: GenerateurMessages + IsConfigNoeud
 {

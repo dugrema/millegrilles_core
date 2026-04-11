@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 pub const DOMAIN_NAME: &str = "CoreTopologie";
 pub const NOM_COLLECTION_DOMAINES: &str = "CoreTopologie/domaines";
 // pub const NOM_COLLECTION_INSTANCES: &str = "CoreTopologie/instances";

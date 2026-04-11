@@ -110,7 +110,7 @@ where M: Middleware
 #[derive(Deserialize)]
 struct CommandeSupprimerInstance {instance_id: String}
 
-async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
+async fn traiter_commande_supprimer_instance<M>(middleware: &M, message: MessageValide, _gestionnaire: &TopologyManager, _session: &mut ClientSession)
                                                 -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -215,7 +215,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     {
         let mut message_owned = message.message.parse_to_owned()?;
         // let message_contenu = message_ref.contenu()?;
-        let commande: TransactionSetFichiersPrimaire = match message_owned.deserialize() {
+        let _commande: TransactionSetFichiersPrimaire = match message_owned.deserialize() {
             Ok(inner) => inner,
             Err(e) => {
                 Err(format!("traiter_commande_configurer_consignation Erreur convertir {:?}", e))?
@@ -866,7 +866,7 @@ struct CommandFileVisit {
     done: Option<bool>,
 }
 
-async fn command_file_visit<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
+async fn command_file_visit<M>(middleware: &M, m: MessageValide, _gestionnaire: &TopologyManager, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -1087,7 +1087,7 @@ struct CommandBatchTransfersResponse {
     fuuids: Option<Vec<CommandBatchTransfersResponseFuuid>>
 }
 
-async fn commande_filehost_batch_transfers<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
+async fn commande_filehost_batch_transfers<M>(middleware: &M, m: MessageValide, _session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {
@@ -1179,7 +1179,7 @@ async fn parse_filehost_visits<M>(middleware: &M, mut curseur: Cursor<FilehostTr
     Ok(fuuids_list)
 }
 
-async fn commande_filehost_reset_visits_claims<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
+async fn commande_filehost_reset_visits_claims<M>(middleware: &M, m: MessageValide, _session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {
@@ -1235,7 +1235,7 @@ pub async fn command_filehost_set_default<M>(middleware: &M, message: MessageVal
     Ok(reponse)
 }
 
-async fn commande_filehost_reset_transfers<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
+async fn commande_filehost_reset_transfers<M>(middleware: &M, m: MessageValide, _session: &mut ClientSession)
                                               -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
@@ -1306,7 +1306,7 @@ struct RequestFuuidsVisits {
 }
 
 /// Receives a batch of file claims from a domain
-async fn commande_domain_visits_claims<M>(middleware: &M, m: MessageValide, session: &mut ClientSession)
+async fn commande_domain_visits_claims<M>(middleware: &M, m: MessageValide, _session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
     where M: GenerateurMessages + MongoDao
 {

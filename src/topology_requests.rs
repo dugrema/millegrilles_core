@@ -385,7 +385,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
                 }
             };
 
-            let (jwt, url_verifie) = match demander_jwt_hebergement(middleware, &fiche_publique, None).await {
+            let (jwt, _url_verifie) = match demander_jwt_hebergement(middleware, &fiche_publique, None).await {
                 Ok(inner) => inner,
                 Err(e) => {
                     error!("requete_get_token_hebergement Erreur demande JWT pour hebergement : {:?}", e);
@@ -444,7 +444,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     debug!("liste_domaines {:?}", message.type_message);
     if !message.certificat.verifier_exchanges(vec!(Securite::L2Prive, Securite::L3Protege, Securite::L4Secure))? {
         if message.certificat.get_user_id()?.is_some() && !message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-            let refus = json!({"ok": false, "err": "Acces refuse"});
+            let _refus = json!({"ok": false, "err": "Acces refuse"});
             // let reponse = match middleware.formatter_reponse(&refus, None) {
             let reponse = match middleware.reponse_err(None, None, Some("Acces refuse")) {
                 Ok(m) => m,
@@ -1019,7 +1019,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             };
 
             match date_modification {
-                Some(d) => {
+                Some(_d) => {
                     resolved_dns.insert(doc_adresse.adresse, Some(doc_adresse.idmg));
                 }
                 None => {

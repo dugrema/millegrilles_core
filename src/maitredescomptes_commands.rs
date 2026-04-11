@@ -42,7 +42,7 @@ pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire
 {
     debug!("Consommer commande : {:?}", &m.type_message);
 
-    let (action, domaine) = match &m.type_message {
+    let (action, _domaine) = match &m.type_message {
         TypeMessageOut::Commande(r) => {
             (r.action.clone(), r.domaine.clone())
         },
@@ -294,7 +294,7 @@ async fn inscrire_usager<M>(middleware: &M, message: MessageValide, gestionnaire
 where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
 {
     debug!("inscrire_usager Consommer inscrire_usager : {:?}", &message.type_message);
-    let (transaction, message_id) = {
+    let (transaction, _message_id) = {
         let message_ref = message.message.parse()?;
         let message_contenu = message_ref.contenu()?;
         let transaction: TransactionInscrireUsager = message_contenu.deserialize()?;
@@ -319,7 +319,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
         None => {
             debug!("inscrire_usager L'usager '{}' n'existe pas, on genere un certificat", nom_usager);
             let user_id = &transaction.user_id;
-            let securite = &transaction.securite;
+            let _securite = &transaction.securite;
 
             // Generer certificat usager si CSR present
             let certificat = match transaction.csr {
@@ -350,7 +350,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
             };
 
             // sauvegarder_transaction(middleware, &message, NOM_COLLECTION_TRANSACTIONS).await?;
-            let resultat_inscrire_usager = sauvegarder_traiter_transaction_v2(
+            let _resultat_inscrire_usager = sauvegarder_traiter_transaction_v2(
                 middleware, message, gestionnaire, session).await?;
 
             if let Err(e) = emettre_maj_compte_usager(middleware, user_id, Some(EVENEMENT_INSCRIRE_COMPTE_USAGER), session).await {
@@ -380,7 +380,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     debug!("Consommer ajouter_cle : {:?}", &message.type_message);
 
     let message_ref = message.message.parse()?;
-    let uuid_transaction = message_ref.id.to_owned();
+    let _uuid_transaction = message_ref.id.to_owned();
 
     let certificat = message.certificat.as_ref();
 
@@ -434,7 +434,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         }
     };
 
-    let compte_usager = match charger_compte_user_id(middleware, &user_id_certificat, session).await? {
+    let _compte_usager = match charger_compte_user_id(middleware, &user_id_certificat, session).await? {
         Some(inner) => inner,
         None => {
             let err = json!({"ok": false, "code": 2, "err": format!("Usager inconnu pour userId (2) : {}", user_id_certificat)});
@@ -492,7 +492,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
         }
     };
 
-    let message_id = {
+    let _message_id = {
         // Valider contenu
         let message_ref = message.message.parse()?;
         let message_contenu = message_ref.contenu()?;
@@ -518,7 +518,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
         }
 
         // Valider la signature de la cle de millegrille
-        if let Err(e) = message_confirmation.verifier_signature() {
+        if let Err(_e) = message_confirmation.verifier_signature() {
             // if signature != true || hachage != true {
             // let err = json!({"ok": false, "code": 3, "err": "Permission refusee, signature/hachage confirmation invalides"});
             debug!("ajouter_delegation_signee autorisation acces refuse");
@@ -804,7 +804,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
     };
 
     let mut passkey_authentication: PasskeyAuthenticationAjuste = doc_webauth_state.passkey_authentication.try_into()?;
-    let flag_generer_nouveau_certificat = commande.commande_webauthn.demande_certificat.is_some();
+    let _flag_generer_nouveau_certificat = commande.commande_webauthn.demande_certificat.is_some();
     let demande_certificat = match commande.commande_webauthn.demande_certificat {
         Some(demande) => {
             debug!("commande_authentifier_usager Demande certificat recue : {:?}", demande);
@@ -1689,7 +1689,7 @@ async fn command_authenticate_otp<M>(middleware: &M, gestionnaire: &MaitreDesCom
 {
     debug!("command_authenticate_otp : {:?}", message.type_message);
 
-    let idmg = middleware.idmg();
+    let _idmg = middleware.idmg();
     let message_ref = message.message.parse()?;
     let message_contenu = message_ref.contenu()?;
     let command: CommandAuthenticateOtp = message_contenu.deserialize()?;

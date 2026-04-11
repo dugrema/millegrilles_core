@@ -571,7 +571,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     debug!("get_liste_proprietaires : {:?}", &message.message);
     let message_ref = message.message.parse()?;
     let message_contenu = message_ref.contenu()?;
-    let requete: RequeteListeUsagers = message_contenu.deserialize()?;
+    let _requete: RequeteListeUsagers = message_contenu.deserialize()?;
 
     let usagers = {
         let filtre = doc! { CHAMP_DELEGATION_GLOBALE: DELEGATION_PROPRIETAIRE };

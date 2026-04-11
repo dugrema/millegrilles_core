@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 pub const DOMAIN_NAME: &str = "CoreMaitreDesComptes";
 pub const COLLECTION_NAME_TRANSACTIONS: &str = DOMAIN_NAME;
 pub const NOM_COLLECTION_USAGERS: &str = "CoreMaitreDesComptes/usagers";

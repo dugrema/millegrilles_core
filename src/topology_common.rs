@@ -57,7 +57,7 @@ where M: MongoDao
     };
 
     let collection = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
-    for (instance_id, instance) in &fiche.instances {
+    for (_instance_id, instance) in &fiche.instances {
         if let Some(domaines) = instance.domaines.as_ref() {
             for domaine in domaines {
 
@@ -65,7 +65,7 @@ where M: MongoDao
 
                 let mut set_ops = doc!{"idmg": &idmg_tiers};
                 match domaine_etag {
-                    Some(inner) => match etag.as_ref() {
+                    Some(_inner) => match etag.as_ref() {
                         Some(inner) => {
                             set_ops.insert("etag", inner.etag.as_str());
                         },
@@ -125,7 +125,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
 
     if let Some(url) = url {
         // Verifier que le URL existe encore dans la fiche
-        if let Some(hostname) = url.host_str() {
+        if let Some(_hostname) = url.host_str() {
             // TODO
         }
     }
@@ -176,7 +176,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
                     if let Some(value) = reponse.json {
                         match serde_json::from_value::<MessageMilleGrillesOwned>(value) {
                             Ok(inner) => inner,
-                            Err(e) => {
+                            Err(_e) => {
                                 error!("demander_jwt_hebergement Erreur deserialize reponse, ** SKIP **");
                                 continue
                             }
@@ -192,7 +192,7 @@ where M: GenerateurMessages + MongoDao + ValidateurX509
         };
 
         // Verifier le message recu
-        if let Err(e) = message_owned.verifier_signature() {
+        if let Err(_e) = message_owned.verifier_signature() {
             error!("demander_jwt_hebergement Erreur verification signature message JWT, **SKIP**");
             continue
         }

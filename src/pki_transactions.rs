@@ -56,7 +56,7 @@ impl From<CorePkiCollectionRow> for TransactionCertificat {
     }
 }
 
-async fn sauvegarder_certificat<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
+async fn sauvegarder_certificat<M>(middleware: &M, transaction: TransactionValide, _session: &mut ClientSession)
                                    -> Result<Option<MessageMilleGrillesBufferDefault>, CommonError>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {

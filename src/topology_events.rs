@@ -29,7 +29,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 {
     debug!("Consommer evenement : {:?}", &m.type_message);
 
-    let (domaine, action) = match &m.type_message {
+    let (_domaine, action) = match &m.type_message {
         TypeMessageOut::Evenement(r) => {
             (r.domaine.clone(), r.action.clone())
         }
@@ -79,7 +79,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
     }
 }
 
-async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
+async fn traiter_presence_domaine<M>(middleware: &M, m: MessageValide, _gestionnaire: &TopologyManager)
                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -127,7 +127,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 
     let collection = middleware.get_collection(NOM_COLLECTION_DOMAINES)?;
     let options = FindOneAndUpdateOptions::builder().upsert(true).build();
-    let result = match collection.find_one_and_update(filtre, ops, Some(options)).await {
+    let _result = match collection.find_one_and_update(filtre, ops, Some(options)).await {
         Ok(r) => r,
         Err(e) => Err(format!("Erreur find document sur transaction domaine : {:?}", e))?
     };
