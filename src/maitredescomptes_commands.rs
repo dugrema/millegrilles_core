@@ -37,7 +37,7 @@ use crate::maitredescomptes_constants::*;
 use crate::maitredescomptes_manager::MaitreDesComptesManager;
 use crate::maitredescomptes_structs::{ChallengeAuthenticationWebauthn, CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, CompteUsager, ConfirmationSigneeDelegationGlobale, CookieSession, DocChallenge, RequeteGetCookieUsager, TotpCredentialsRow, TransactionAjouterCle, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionSupprimerCles};
 use crate::maitredescomptes_transactions::{transaction_ajouter_delegation_signee, CommandRegisterOtp, TransactionRegisterOtp};
-use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
+use crate::webauthn::{ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
 
 pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire: &MaitreDesComptesManager, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>

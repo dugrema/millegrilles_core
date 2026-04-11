@@ -21,7 +21,7 @@ use millegrilles_common_rust::serde_json::{json, Value};
 use crate::maitredescomptes_constants::*;
 use crate::error::Error as CoreError;
 use crate::maitredescomptes_structs::{CompteUsager, CookieSession, DocChallenge, RequeteGetCookieUsager};
-use crate::webauthn::{authenticate_complete, ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
+use crate::webauthn::{ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
 
 pub async fn consommer_requete_maitredescomptes<M>(middleware: &M, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>

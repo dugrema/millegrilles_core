@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::error::Error;
+
 use std::sync::Arc;
 
 use log::{debug, warn, error, info};
@@ -13,7 +13,7 @@ use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::formatteur_messages::FormatteurMessage;
 use millegrilles_common_rust::futures::stream::FuturesUnordered;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, GenerateurMessagesImpl, RoutageMessageReponse, RoutageMessageAction};
-use millegrilles_common_rust::middleware::{configurer as configurer_messages, EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, ReponseCertificatMaitredescles, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait, repondre_certificat, MiddlewareMessage};
+use millegrilles_common_rust::middleware::{EmetteurCertificat, formatter_message_certificat, IsConfigurationPki, upsert_certificat, Middleware, MiddlewareMessages, RedisTrait, MiddlewareRessources, RabbitMqTrait, EmetteurNotificationsTrait, repondre_certificat};
 use millegrilles_common_rust::middleware_db_v2::preparer as preparer_middleware_db_v2;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
@@ -28,18 +28,18 @@ use millegrilles_common_rust::rabbitmq_dao::{NamedQueue, TypeMessageOut};
 use millegrilles_common_rust::recepteur_messages::{ErreurVerification, TypeMessage};
 use millegrilles_common_rust::serde::{Deserialize, Serialize};
 use millegrilles_common_rust::serde_json::json;
-use millegrilles_common_rust::tokio::sync::{mpsc, Notify};
+use millegrilles_common_rust::tokio::sync::Notify;
 use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::redis_dao::RedisDao;
 use millegrilles_common_rust::tokio::sync::mpsc::Sender;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::static_cell::StaticCell;
-use millegrilles_common_rust::tokio;
+
 use crate::pki_constants::{COLLECTION_CERTIFICAT_NOM, DOMAIN_NAME as PKI_DOMAINE_NOM, PKI_DOCUMENT_CHAMP_FINGERPRINT_PK};
 use crate::pki_structs::CorePkiCertificat;
 
-use millegrilles_common_rust::backup_v2::thread_backup_v2;
+
 
 // Middleware avec MongoDB et validateur X509 lie a la base de donnees
 pub struct MiddlewareDbPki {
@@ -516,7 +516,7 @@ static MIDDLEWARE_DB_PKI: StaticCell<MiddlewareDbPki> = StaticCell::new();
 /// Version speciale du middleware avec un acces direct au sous-domaine Pki dans MongoDB
 pub fn preparer_middleware_pki() -> MiddlewareHooks {
 
-    let (middleware, mut futures) = preparer_middleware_db_v2().expect("preparer_middleware_db_v2");
+    let (middleware, futures) = preparer_middleware_db_v2().expect("preparer_middleware_db_v2");
 
     let config = middleware.ressources.ressources.configuration.as_ref().as_ref();
     let resources = &middleware.ressources.ressources;

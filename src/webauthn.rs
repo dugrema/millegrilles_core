@@ -1,28 +1,21 @@
-use std::error::Error;
-use std::fmt::{Debug, Formatter};
-
-use log::{debug, error, info, warn};
-use millegrilles_common_rust::multibase;
-use millegrilles_common_rust::rand;
-use millegrilles_common_rust::rand::Rng;
-use millegrilles_common_rust::serde::{Deserialize, Serialize};
-use millegrilles_common_rust::serde_json;
-use millegrilles_common_rust::serde_json::{json, Value, Map};
-use millegrilles_common_rust::bson::{doc, Document, Array, Bson, DateTime as DateTimeBson};
-use webauthn_rs::{Webauthn, WebauthnBuilder};
-use millegrilles_common_rust::openssl;
-use std::convert::TryInto;
-use millegrilles_common_rust::openssl::bn::{BigNumRef, BigNum};
-use millegrilles_common_rust::multihash::Code;
+use log::{debug, info};
+use millegrilles_common_rust::bson::{doc, DateTime as DateTimeBson};
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
 use millegrilles_common_rust::hachages::verifier_hachage_serializable;
-use millegrilles_common_rust::reqwest::Url;
-use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
-use millegrilles_common_rust::uuid;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage::random_vec;
+use millegrilles_common_rust::multibase;
+use millegrilles_common_rust::multihash::Code;
+use millegrilles_common_rust::reqwest::Url;
+use millegrilles_common_rust::serde::{Deserialize, Serialize};
+use millegrilles_common_rust::serde_json;
+use millegrilles_common_rust::serde_json::{json, Map, Value};
+use millegrilles_common_rust::uuid;
+use std::convert::TryInto;
+use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
+use webauthn_rs::{Webauthn, WebauthnBuilder};
 
-use crate::maitredescomptes_structs::{DocChallenge, TransactionAjouterCle};
 use crate::error::Error as CoreError;
+use crate::maitredescomptes_structs::{DocChallenge, TransactionAjouterCle};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CredentialWebauthn {
@@ -43,7 +36,7 @@ fn build_webauthn<H,S>(hostname: H, idmg: S) -> Result<Webauthn, CoreError> wher
     let rp_id = hostname.as_ref();
     let rp_origin = Url::parse(format!("https://{}/", rp_id).as_str())?;
     debug!("generer_challenge_registration builder webauthn rp_origin parsed: {}", rp_origin);
-    let mut builder = WebauthnBuilder::new(rp_id, &rp_origin)?
+    let builder = WebauthnBuilder::new(rp_id, &rp_origin)?
         .rp_name(idmg);
 
     let webauthn = builder.build()?;
@@ -66,7 +59,7 @@ pub fn generer_challenge_registration<I,T,U,V,W,X>(
         None => Err(format!("webauthn generer_challenge_registration Format url rp invalide : {}", rp_origin_str))?
     };
     debug!("generer_challenge_registration builder webauthn rp_origin parsed: {}", rp_origin);
-    let mut builder = WebauthnBuilder::new(rp_id, &rp_origin)?
+    let builder = WebauthnBuilder::new(rp_id, &rp_origin)?
         .rp_name(idmg);
     let webauthn = builder.build()?;
 
@@ -127,7 +120,7 @@ pub fn verifier_challenge_registration<S>(idmg: S, doc_registration: &DocChallen
     let rp_id = doc_registration.hostname.as_str();
     let rp_origin = Url::parse(format!("https://{}/", rp_id).as_str())?;
     debug!("generer_challenge_registration builder webauthn rp_origin parsed: {}", rp_origin);
-    let mut builder = WebauthnBuilder::new(rp_id, &rp_origin)?
+    let builder = WebauthnBuilder::new(rp_id, &rp_origin)?
         .rp_name(idmg);
     let webauthn = builder.build()?;
 
@@ -377,28 +370,28 @@ fn verifier_commande<S>(commande: &CommandeWebauthn, message: &S) -> Result<bool
 }
 
 /// Verifier signature avec webauthn
-pub fn authenticate_complete(credentials: u64, challenge: ConfigChallenge, rsp: PublicKeyCredential)  // , challenge: &Challenge, response: AuthenticatorAssertionResponseRaw, credentials: Vec<Credential>) -> Result<bool, millegrilles_common_rust::error::Error> {
-    -> Result<u32, millegrilles_common_rust::error::Error>
-{
-    todo!("fix me");
-    // let val_auth_state = json!({
-    //     "credentials": credentials,
-    //     "policy": "preferred",
-    //     "challenge": challenge.challenge_b64.clone(),
-    // });
-    //
-    // let state: AuthenticationState = serde_json::from_value(val_auth_state)?;
-    // let mut webauthn = Webauthn::new(challenge);
-    //
-    // match webauthn.authenticate_credential(rsp, state)? {
-    //     Some((_, counter)) => {
-    //         debug!("Credential OK, info : {:?}", counter);
-    //         Ok(counter)
-    //     },
-    //     None => Ok(0),
-    // }
-
-}
+// pub fn authenticate_complete(credentials: u64, challenge: ConfigChallenge, rsp: PublicKeyCredential)  // , challenge: &Challenge, response: AuthenticatorAssertionResponseRaw, credentials: Vec<Credential>) -> Result<bool, millegrilles_common_rust::error::Error> {
+//     -> Result<u32, millegrilles_common_rust::error::Error>
+// {
+//     todo!("fix me");
+//     // let val_auth_state = json!({
+//     //     "credentials": credentials,
+//     //     "policy": "preferred",
+//     //     "challenge": challenge.challenge_b64.clone(),
+//     // });
+//     //
+//     // let state: AuthenticationState = serde_json::from_value(val_auth_state)?;
+//     // let mut webauthn = Webauthn::new(challenge);
+//     //
+//     // match webauthn.authenticate_credential(rsp, state)? {
+//     //     Some((_, counter)) => {
+//     //         debug!("Credential OK, info : {:?}", counter);
+//     //         Ok(counter)
+//     //     },
+//     //     None => Ok(0),
+//     // }
+//
+// }
 
 // fn convertir_creds_compte(doc_compte: Document) -> Result<Vec<webauthn_rs::proto::Credential>, millegrilles_common_rust::error::Error> {
 //     let element_webauthn = doc_compte.get_array("webauthn")?;
@@ -509,10 +502,10 @@ pub fn valider_commande<M, S>(hostname: S, challenge: S, message: &M) -> Result<
 
 #[cfg(test)]
 mod webauthn_test {
+    use crate::test_setup::setup;
     use millegrilles_common_rust::bson::Uuid;
     use millegrilles_common_rust::multibase::Base;
     use millegrilles_common_rust::reqwest::Url;
-    use crate::test_setup::setup;
 
     use super::*;
     use millegrilles_common_rust::serde_json::Value;
