@@ -1,38 +1,34 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::from_utf8;
-use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use log::{debug, error, info, warn};
 
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::{bson, bson::doc};
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
-use millegrilles_common_rust::chrono::{DateTime, Utc};
+use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::{chrono, millegrilles_cryptographie, serde_json};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
-use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, MongoDao};
-use millegrilles_common_rust::mongodb::options::{FindOneOptions, FindOptions, Hint, UpdateOptions};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
+use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, MongoDao};
+use millegrilles_common_rust::mongodb::options::FindOptions;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
-use millegrilles_common_rust::serde_json::{json, Value};
-use millegrilles_common_rust::url::Url;
+use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::common_messages::{ReponseInformationConsignationFichiers, RequeteConsignationFichiers, PresenceFichiersRepertoire, RequeteDechiffrage, RequeteFilehostItem, RequestFilehostForInstanceResponse};
+use millegrilles_common_rust::common_messages::{PresenceFichiersRepertoire, RequeteFilehostItem, RequestFilehostForInstanceResponse};
 use millegrilles_common_rust::dechiffrage::DataChiffre;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::error::Error as CommonError;
-use millegrilles_common_rust::middleware::sauvegarder_traiter_transaction_v2;
 use millegrilles_common_rust::common_messages::FilehostForInstanceRequest;
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use crate::topology_commands::FuuidVisitResponseItem;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
-use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceContainer, PresenceInstanceWebApplication};
-use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{ApplicationConfiguree, ApplicationPublique, ApplicationsV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, InformationApplicationInstance, InformationInstance, InformationMonitor, PresenceMonitor, ReponseRelaiWeb, ReponseUrlEtag, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, TransactionConfigurerConsignation, WebAppLink};
+use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceWebApplication};
+use crate::topology_structs::{ApplicationPublique, FichePublique, FilehostServerRow, FilehostingCongurationRow, InformationApplication, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -125,16 +121,16 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         }
                     }
                 },
-                _ => {
-                    error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
-                    Ok(None)
-                }
+                // _ => {
+                //     error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
+                //     Ok(None)
+                // }
             }
         },
-        _ => {
-            error!("Message requete/action sans exchange autorise : '{}'. Message dropped.", action);
-            Ok(None)
-        }
+        // _ => {
+        //     error!("Message requete/action sans exchange autorise : '{}'. Message dropped.", action);
+        //     Ok(None)
+        // }
     }
 }
 
@@ -187,7 +183,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
             };
             match collection.find_one(filtre, None).await? {
                 Some(doc_fiche) => {
-                    let mut fiche: FichePublique = convertir_bson_deserializable(doc_fiche)?;
+                    let fiche: FichePublique = convertir_bson_deserializable(doc_fiche)?;
                     Some(fiche)
                 },
                 None => None
