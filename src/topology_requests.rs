@@ -1365,7 +1365,7 @@ struct RequeteGetCleidBackupDomaine {
 }
 
 #[derive(Deserialize)]
-struct RowCoreTopologieDomaines {
+pub struct RowCoreTopologieDomaines {
     domaine: String,
     instance_id: String,
     dirty: Option<bool>,

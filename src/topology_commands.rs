@@ -1,14 +1,11 @@
 use log::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
-use std::str::from_utf8;
 use std::time::Duration;
-use webauthn_rs::prelude::Url;
 
-use crate::topology_common::maj_fiche_publique;
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, ReponseUrlEtag, RowFilehostFuuid, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
+use crate::topology_structs::{FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, RowFilehostFuuid, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
 
 use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction, TransactionFilehostSetDefault};
 
@@ -22,7 +19,7 @@ use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageM
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, Middleware};
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::epochseconds;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned};
 use millegrilles_common_rust::mongo_dao::{convertir_to_bson, start_transaction_regular, MongoDao};
 use millegrilles_common_rust::mongodb::options::{FindOptions, UpdateOptions};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
@@ -337,119 +334,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(reponse)
 }
 
-#[derive(Deserialize)]
-struct CommandeAjouterConsignationHebergee {
-    url: String,
-}
 
-struct ReponseCommandeAjouterConsignationHebergee {
-    ok: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct ReponseRelaiWeb {
-    code: Option<u16>,
-    verify_ok: Option<bool>,
-    headers: Option<HashMap<String, String>>,
-    json: Option<Value>,
-    text: Option<String>,
-}
-
-async fn charger_fiche<M>(middleware: &M, url: &Url, etag: Option<&String>)
-                          -> Result<Option<FichePublique>, millegrilles_common_rust::error::Error>
-where M: ValidateurX509 + GenerateurMessages + MongoDao
-{
-    debug!("charger_fiche {:?}", url);
-
-    let routage = RoutageMessageAction::builder(DOMAINE_RELAIWEB, COMMANDE_RELAIWEB_GET, vec![Securite::L1Public])
-        .build();
-
-    let hostname = match url.host_str() {
-        Some(inner) => inner,
-        None => Err(Error::Str("charger_fiche Url sans hostname"))?
-    };
-    let mut url_fiche = url.clone();
-    url_fiche.set_path("fiche.json");
-    let requete = json!({
-        "url": url_fiche.as_str(),
-        "headers": {
-            "Cache-Control": "public, max-age=604800",
-            "If-None-Match": etag,
-        }
-    });
-
-    let reponse = {
-        let reponse_http = middleware.transmettre_commande(routage, &requete).await?;
-        debug!("charger_fiche Reponse http : {:?}", reponse_http);
-        match reponse_http {
-            Some(reponse) => match reponse {
-                TypeMessage::Valide(reponse) => Ok(reponse),
-                _ => Err(format!("core_topologie.charger_fiche Mauvais type de message recu en reponse"))
-            },
-            None => Err(format!("core_topologie.charger_fiche Aucun message recu en reponse"))
-        }
-    }?;
-
-    // Mapper message avec la fiche
-    let message_ref = reponse.message.parse()?;
-    debug!("charger_fiche Reponse fiche :\n{}", from_utf8(&reponse.message.buffer)?);
-    let message_contenu = message_ref.contenu()?;
-    let reponse_fiche: ReponseRelaiWeb = message_contenu.deserialize()?;
-
-    // Verifier code reponse HTTP
-    match reponse_fiche.code {
-        Some(c) => {
-            if c == 304 {
-                // Aucun changement sur le serveur
-                // On fait un touch sur l'adresse du hostname verifie et on retourne la fiche
-                let filtre = doc! {"adresse": hostname};
-                let ops = doc! {"$currentDate": {CHAMP_MODIFICATION: true}};
-                let collection_adresses = middleware.get_collection(NOM_COLLECTION_MILLEGRILLES_ADRESSES)?;
-                collection_adresses.update_one(filtre, ops.clone(), None).await?;
-
-                let filtre = doc! {"adresses": hostname};
-                let collection_fiches = middleware.get_collection_typed::<FichePublique>(NOM_COLLECTION_MILLEGRILLES)?;
-                match collection_fiches.find_one_and_update(filtre, ops, None).await? {
-                    Some(fiche) => {
-                        return Ok(Some(fiche));
-                    },
-                    None => ()
-                }
-            } else if c != 200 {
-                Err(format!("core_topologie.charger_fiche Code reponse http {}", c))?
-            }
-        }
-        None => Err(Error::Str("core_topologie.charger_fiche Code reponse http manquant"))?
-    };
-
-    // Verifier presence fiche publique
-    let mut fiche_publique_message: MessageMilleGrillesOwned = match reponse_fiche.json {
-        Some(f) => match serde_json::from_value(f) {
-            Ok(inner) => inner,
-            Err(e) => Err(Error::String(format!("core_topologie.resoudre_url Fiche publique invalide : {:?}", e)))?
-        },
-        None => Err(Error::Str("core_topologie.resoudre_url Fiche publique manquante"))?
-    };
-
-    // Verifier la fiche
-    fiche_publique_message.verifier_signature()?;
-
-    // TODO : Valider le certificat de la fiche
-
-    debug!("Verification headers : {:?}", reponse_fiche.headers);
-    let etag = match reponse_fiche.headers.as_ref() {
-        Some(e) => match e.get("ETag").cloned() {
-            Some(inner) => Some(ReponseUrlEtag {url: url_fiche.clone(), etag: inner}),
-            None => None
-        },
-        None => None
-    };
-
-    // Sauvegarder et retourner la fiche
-    let fiche_publique: FichePublique = fiche_publique_message.deserialize()?;
-    maj_fiche_publique(middleware, &fiche_publique, etag).await?;
-    Ok(Some(fiche_publique))
-}
 
 // async fn commande_ajouter_consignation_hebergee<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager)
 //                                                    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -546,15 +431,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 //     Ok(Some(middleware.reponse_ok(None, None)?))
 // }
 
-#[derive(Deserialize)]
-struct RowCoreTopologieDomaines {
-    domaine: String,
-    instance_id: String,
-    dirty: Option<bool>,
-    reclame_fuuids: Option<bool>,
-    cle_id_backup: Option<String>,
-}
-
 async fn commande_set_cleid_backup_domaine<M>(middleware: &M, m: MessageValide, _gestionnaire: &TopologyManager, session: &mut ClientSession)
     -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
@@ -581,7 +457,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 
     let filtre = doc!{"domaine": &domaine};
-    let collection = middleware.get_collection_typed::<RowCoreTopologieDomaines>(NOM_COLLECTION_DOMAINES)?;
+    let collection = middleware.get_collection_typed::<crate::topology_requests::RowCoreTopologieDomaines>(NOM_COLLECTION_DOMAINES)?;
     let cle_id_backup = match commande.reset {
         Some(true) => None,
         _ => match commande.cle_id {
@@ -1002,9 +878,8 @@ where M: GenerateurMessages + MongoDao
     {
         let now = Utc::now();
         let mut batch = Vec::new();
-        let mut domains: Option<Vec<String>> = None;
         let extensions = m.certificat.extensions()?;
-        domains = extensions.domaines;
+        let domains = extensions.domaines;
         if ! fuuids_requis.is_empty() {
             for fuuid in &fuuids_requis {
                 batch.push(doc! {"fuuid": *fuuid, "claim_date": &now, "domains": &domains})
@@ -1301,7 +1176,6 @@ where M: GenerateurMessages + MongoDao
 #[derive(Deserialize)]
 struct RequestFuuidsVisits {
     fuuids: Vec<String>,
-    batch_no: Option<usize>,
     done: Option<bool>,
 }
 
@@ -1311,10 +1185,7 @@ async fn commande_domain_visits_claims<M>(middleware: &M, m: MessageValide, _ses
     where M: GenerateurMessages + MongoDao
 {
     let certificate = m.certificat;
-    let mut domains: Option<Vec<String>> = None;
-    if let Some(extensions) = certificate.get_extensions()? {
-        domains = extensions.domaines;
-    }
+    let domains = certificate.get_extensions()?.map(|e| e.domaines);
 
     let request: RequestFuuidsVisits = deser_message_buffer!(m.message);
     let now = Utc::now();
@@ -1331,17 +1202,17 @@ async fn commande_domain_visits_claims<M>(middleware: &M, m: MessageValide, _ses
     if request.done == Some(true) {
         // Put flag to indicate this domain has sent all its claims successfully
         let collection_files_status = middleware.get_collection(NOM_COLLECTION_FILEHOSTING_SYNC_STATUS)?;
-        let domains = match domains {
-            Some(inner) => inner,
-            None => Err("No domain in the certificate used for claiming files")?
-        };
-        for domain in domains {
-            let filtre = doc!{"claimer": domain, "claimer_type": "domain"};
-            let ops = doc! {
-                "$currentDate": {"date_ready": true},
-            };
-            let options = UpdateOptions::builder().upsert(true).build();
-            collection_files_status.update_one(filtre, ops, options).await?;
+        if let Some(domains) = &domains {
+            if let Some(domains_list) = domains {
+                for domain in domains_list {
+                    let filtre = doc! {"claimer": domain, "claimer_type": "domain"};
+                    let ops = doc! {
+                        "$currentDate": {"date_ready": true},
+                    };
+                    let options = UpdateOptions::builder().upsert(true).build();
+                    collection_files_status.update_one(filtre, ops, options).await?;
+                }
+            }
         }
     }
 
