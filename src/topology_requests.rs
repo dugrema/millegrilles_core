@@ -103,7 +103,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
         },
         Securite::L3Protege | Securite::L4Secure => {
             match domaine.as_str() {
-                DOMAINE_NOM => {
+                DOMAIN_NAME => {
                     match action.as_str() {
                         REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
                         // REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, m).await,
@@ -121,10 +121,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         }
                     }
                 },
-                // _ => {
-                //     error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
-                //     Ok(None)
-                // }
+                _ => {
+                    error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
+                    Ok(None)
+                }
             }
         },
         // _ => {
