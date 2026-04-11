@@ -41,13 +41,13 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     match m.certificat.verifier_exchanges(vec!(Securite::L1Public, Securite::L2Prive, Securite::L3Protege, Securite::L4Secure))? {
         true => Ok(()),
         false => match user_id {
-            Some(u) => Ok(()),
+            Some(_u) => Ok(()),
             None => Err("Commande autorisation invalide (aucun user_id, pas 2.prive, 3.protege ou 4.secure)")
         }
     }?;
 
     match domaine.as_str() {
-        DOMAINE_NOM => {
+        DOMAIN_NAME => {
             match action.as_str() {
                 REQUETE_CHARGER_USAGER => {
                     match charger_usager(middleware, m).await {
@@ -67,10 +67,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
                 },
             }
         },
-        // _ => {
-        //     error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
-        //     Ok(None)
-        // },
+        _ => {
+            error!("Message requete/domaine inconnu : '{}'. Message dropped.", domaine);
+            Ok(None)
+        },
     }
 }
 

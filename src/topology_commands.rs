@@ -194,7 +194,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     }
 }
 
-async fn traiter_commande_configurer_consignation<M>(middleware: &M, mut message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
+async fn traiter_commande_configurer_consignation<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
                                                      -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
@@ -1003,9 +1003,8 @@ where M: GenerateurMessages + MongoDao
         let now = Utc::now();
         let mut batch = Vec::new();
         let mut domains: Option<Vec<String>> = None;
-        if let extensions = m.certificat.extensions()? {
-            domains = extensions.domaines;
-        }
+        let extensions = m.certificat.extensions()?;
+        domains = extensions.domaines;
         if ! fuuids_requis.is_empty() {
             for fuuid in &fuuids_requis {
                 batch.push(doc! {"fuuid": *fuuid, "claim_date": &now, "domains": &domains})

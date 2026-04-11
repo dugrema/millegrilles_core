@@ -236,11 +236,11 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         // Supprimer toutes les cles pour le user_id dans la collection credentials
         debug!("transaction_ajouter_cle Reset toutes les cles webautn pour user_id {}", user_id);
         let filtre = doc! { "user_id": user_id };
-        if let Err(e) = collection_totp.delete_many_with_session(filtre, None, session).await {
+        if let Err(_e) = collection_totp.delete_many_with_session(filtre, None, session).await {
             Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur delete cles totp"))?
         }
         let filtre = doc! { CHAMP_USER_ID: user_id };
-        if let Err(e) = collection.delete_many_with_session(filtre, None, session).await {
+        if let Err(_e) = collection.delete_many_with_session(filtre, None, session).await {
             Err(format!("core_maitredescomptes.transaction_ajouter_cle Erreur delete cles webauthn"))?
         }
     }
@@ -399,12 +399,12 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
         // Supprimer toutes les cles pour le user_id dans la collection credentials
         debug!("transaction_register_otp Reset toutes les cles webautn/totp pour user_id {}", user_id);
         let filtre = doc! { "user_id": user_id };
-        if let Err(e) = collection.delete_many_with_session(filtre, None, session).await {
+        if let Err(_e) = collection.delete_many_with_session(filtre, None, session).await {
             Err(format!("core_maitredescomptes.transaction_register_otp Erreur delete cles totp"))?
         }
         let collection_webauthn = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
         let filtre = doc! { CHAMP_USER_ID: user_id };
-        if let Err(e) = collection_webauthn.delete_many_with_session(filtre, None, session).await {
+        if let Err(_e) = collection_webauthn.delete_many_with_session(filtre, None, session).await {
             Err(format!("core_maitredescomptes.transaction_register_otp Erreur delete cles webauthn"))?
         }
     }

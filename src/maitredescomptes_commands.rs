@@ -1704,7 +1704,6 @@ async fn command_authenticate_otp<M>(middleware: &M, gestionnaire: &MaitreDesCom
     let filtre = doc!{"user_id": &command.user_id};
     let mut cursor = collection.find(filtre, None).await?;
     let mut valid = false;
-    let mut totp_url_used = None;
     let mut correlation = None;
     while cursor.advance().await? {
         let row = cursor.deserialize_current()?;
@@ -1721,7 +1720,6 @@ async fn command_authenticate_otp<M>(middleware: &M, gestionnaire: &MaitreDesCom
         match totp.check_current(totp_code.as_str()) {
             Ok(true) => {
                 valid = true;  // Code is verified and valid
-                totp_url_used = Some(totp_url);
                 break
             }
             Ok(false) => continue,

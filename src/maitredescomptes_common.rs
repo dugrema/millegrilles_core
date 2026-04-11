@@ -109,14 +109,14 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
     debug!("Consommer commande_maj_usager_delegations : {:?}", &message.type_message);
 
     // Valider contenu
-    let (message_id, commande) = {
+    let (_message_id, commande) = {
         let message_ref = message.message.parse()?;
         let message_contenu = message_ref.contenu()?;
         let commande: TransactionMajUsagerDelegations = message_contenu.deserialize()?;
         let message_id = message_ref.id.to_owned();
         (message_id, commande)
     };
-    let user_id = commande.user_id.as_str();
+    let _user_id = commande.user_id.as_str();
 
     // Commande valide, on sauvegarde et traite la transaction
     // let uuid_transaction = message_ref.id;

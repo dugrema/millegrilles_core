@@ -64,7 +64,7 @@ where
     };
 
     let fingerprint = match domaine.as_str() {
-        DOMAINE_NOM => {
+        DOMAIN_NAME => {
             let message_ref = m.message.parse()?;
             let message_contenu = match message_ref.contenu() {
                 Ok(inner) => inner,
@@ -117,7 +117,7 @@ where
     //     Some(e) => { vec![Securite::try_from(e)?] },
     //     None => { vec![Securite::L1Public] }
     // };
-    let mut builder_routage = RoutageMessageAction::builder("certificat", "infoCertificat", exchange);
+    let builder_routage = RoutageMessageAction::builder("certificat", "infoCertificat", exchange);
     // if let Some(e) = m.exchange {
     //     let securite = Securite::try_from(e)?;
     //     builder_routage = builder_routage.exchanges(vec![securite]);
