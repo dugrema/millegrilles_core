@@ -3,7 +3,7 @@ use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::BackupStarter;
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::configuration::ConfigMessages;
-use millegrilles_common_rust::constantes::{Securite, BACKUP_CHAMP_BACKUP_TRANSACTIONS, PKI_DOCUMENT_CHAMP_FINGERPRINT, PKI_DOMAINE_CERTIFICAT_NOM, PKI_TRANSACTION_NOUVEAU_CERTIFICAT, TRANSACTION_CHAMP_BACKUP_FLAG, TRANSACTION_CHAMP_COMPLETE, TRANSACTION_CHAMP_EVENEMENT_COMPLETE, TRANSACTION_CHAMP_ID, TRANSACTION_CHAMP_TRANSACTION_TRAITEE};
+use millegrilles_common_rust::constantes::{Securite, PKI_DOCUMENT_CHAMP_FINGERPRINT, PKI_DOMAINE_CERTIFICAT_NOM};
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::domaines_traits::{AiguillageTransactions, ConsommateurMessagesBus, GestionnaireBusMillegrilles, GestionnaireDomaineV2};
 use millegrilles_common_rust::domaines_v2::{prepare_mongodb_domain_indexes, GestionnaireDomaineSimple};
@@ -15,7 +15,6 @@ use millegrilles_common_rust::middleware::{Middleware, MiddlewareMessages};
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
 use millegrilles_common_rust::recepteur_messages::MessageValide;
-use crate::maitredescomptes_manager::preparer_index_mongodb;
 use crate::pki_commands::consommer_commande_pki;
 use crate::pki_constants::*;
 use crate::pki_events::consommer_evenement_pki;
@@ -111,11 +110,11 @@ impl GestionnaireDomaineSimple for PkiManager {
     }
 }
 
-pub fn preparer_queues(manager: &PkiManager) -> Vec<QueueType> {
+pub fn preparer_queues(_manager: &PkiManager) -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     let niveaux_securite_public = vec!(Securite::L1Public);  //, Securite::L2Prive, Securite::L3Protege);
-    let niveaux_securite_prive = vec!(Securite::L2Prive);  //, Securite::L3Protege);
+    // let niveaux_securite_prive = vec!(Securite::L2Prive);  //, Securite::L3Protege);
 
     // RK 1.public (inclus 2.prive et 3.protege)
     for niveau in niveaux_securite_public {

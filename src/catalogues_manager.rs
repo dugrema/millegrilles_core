@@ -4,7 +4,7 @@ use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::BackupStarter;
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::configuration::ConfigMessages;
-use millegrilles_common_rust::constantes::{Securite, BACKUP_CHAMP_BACKUP_TRANSACTIONS, TRANSACTION_CHAMP_BACKUP_FLAG, TRANSACTION_CHAMP_COMPLETE, TRANSACTION_CHAMP_EVENEMENT_COMPLETE, TRANSACTION_CHAMP_ID, TRANSACTION_CHAMP_TRANSACTION_TRAITEE};
+use millegrilles_common_rust::constantes::Securite;
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::domaines_traits::{AiguillageTransactions, ConsommateurMessagesBus, GestionnaireBusMillegrilles, GestionnaireDomaineV2};
 use millegrilles_common_rust::domaines_v2::{prepare_mongodb_domain_indexes, GestionnaireDomaineSimple};
@@ -22,7 +22,6 @@ use crate::catalogues_events::consommer_evenement_catalogues;
 use crate::catalogues_maintenance::traiter_cedule_catalogues;
 use crate::catalogues_requests::consommer_requete_catalogues;
 use crate::catalogues_transactions::aiguillage_transaction_catalogues;
-use crate::maitredescomptes_manager::preparer_index_mongodb;
 
 pub struct CataloguesManager {
     pub catalogues_charges: Mutex<bool>
@@ -116,7 +115,7 @@ impl GestionnaireDomaineSimple for CataloguesManager {
     }
 }
 
-pub fn preparer_queues(manager: &CataloguesManager) -> Vec<QueueType> {
+pub fn preparer_queues(_manager: &CataloguesManager) -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     // RK 3.protege seulement

@@ -21,7 +21,6 @@ use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::rabbitmq_dao::{ConfigQueue, ConfigRoutingExchange, QueueType};
 use millegrilles_common_rust::recepteur_messages::MessageValide;
-use crate::maitredescomptes_manager::preparer_index_mongodb;
 
 pub struct TopologyManager {}
 
@@ -117,7 +116,7 @@ impl GestionnaireDomaineSimple for TopologyManager {
     }
 }
 
-pub fn preparer_queues(manager: &TopologyManager) -> Vec<QueueType> {
+pub fn preparer_queues(_manager: &TopologyManager) -> Vec<QueueType> {
     let mut rk_volatils = Vec::new();
 
     // RK 3.protege seulement
@@ -452,14 +451,14 @@ where M: MongoDao + ConfigMessages
         nom_index: Some(String::from("filehost_fuuid")),
         unique: true,
     };
-    let champs_index__transferts_filehostfuuid = vec!(
+    let champs_index_transferts_filehostfuuid = vec!(
         ChampIndex { nom_champ: String::from("destination_filehost_id"), direction: 1 },
         ChampIndex { nom_champ: String::from("fuuid"), direction: 1 },
     );
     middleware.create_index(
         middleware,
         NOM_COLLECTION_FILEHOSTING_TRANSFERS,
-        champs_index__transferts_filehostfuuid,
+        champs_index_transferts_filehostfuuid,
         Some(options_unique_transferts_filehostfuuid),
     ).await?;
 
