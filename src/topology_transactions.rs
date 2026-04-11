@@ -2,20 +2,18 @@ use log::{debug, error};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::db_structs::TransactionValide;
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
+use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
-use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, MongoDao};
+use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::serde_json;
 use crate::topology_constants::*;
-use crate::topology_structs::{FilehostServerRow, FilehostingCongurationRow, PresenceDomaine, PresenceMonitor, TransactionConfigurerConsignation, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance, TransactionSupprimerConsignationInstance};
+use crate::topology_structs::{FilehostingCongurationRow, PresenceDomaine, TransactionSetFilehostInstance};
 use millegrilles_common_rust::chrono::Utc;
-use millegrilles_common_rust::common_messages::ReponseInformationConsignationFichiers;
 use millegrilles_common_rust::constantes::{CHAMP_MODIFICATION, CHAMP_CREATION, Securite};
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::mongodb::ClientSession;
-use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, ReturnDocument, UpdateOptions};
-use millegrilles_common_rust::serde_json::json;
+use millegrilles_common_rust::mongodb::options::UpdateOptions;
 
 pub async fn aiguillage_transaction_topology<M, T>(middleware: &M, transaction: T, session: &mut ClientSession) -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where
@@ -397,7 +395,7 @@ struct HostfileAddTransactionResponse {
     filehost_id: String
 }
 
-async fn filehost_add<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
+async fn filehost_add<M>(middleware: &M, transaction: TransactionValide, _session: &mut ClientSession)
                          -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where M: GenerateurMessages + MongoDao
 {
