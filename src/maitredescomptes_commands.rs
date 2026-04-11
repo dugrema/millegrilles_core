@@ -1,43 +1,40 @@
-use std::time::SystemTime;
 use log::{debug, error, warn};
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RequestChallengeResponse};
 use totp_rs::{Algorithm, TOTP, Secret};
 
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
-use millegrilles_common_rust::chrono::{DateTime, NaiveDateTime, Timelike, Utc};
+use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
 use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE, DOMAINE_NOM_MAITREDESCOMPTES};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
-use millegrilles_common_rust::jwt_simple::prelude::{Base64, Deserialize, Serialize};
+use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, Middleware};
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
-use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, filtrer_doc_id, start_transaction_regular, MongoDao};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageValidable};
+use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convertir_to_bson, start_transaction_regular, MongoDao};
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::{base64_url, chrono, hex, millegrilles_cryptographie, openssl, reqwest, serde_json, uuid};
 use millegrilles_common_rust::serde_json::{json, Value};
-use millegrilles_common_rust::bson::{Bson, bson, DateTime as DateTimeBson, doc};
+use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
-use millegrilles_common_rust::hachages::{hacher_bytes_vu8, Hacheur};
+use millegrilles_common_rust::hachages::{hacher_bytes_vu8};
 use millegrilles_common_rust::multihash::Code;
-use millegrilles_common_rust::transactions::{marquer_transaction, EtatTransaction};
-use millegrilles_common_rust::common_messages::{MessageConfirmation, ReponseSignatureCertificat};
+use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
 use millegrilles_common_rust::certificats::{charger_csr, get_csr_subject};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
-use millegrilles_common_rust::millegrilles_cryptographie::hachages::{hacher_bytes, HachageCode, HacheurBlake2s256};
-use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
+use millegrilles_common_rust::millegrilles_cryptographie::hachages::{hacher_bytes, HachageCode};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds};
 use millegrilles_common_rust::mongodb::ClientSession;
 use crate::error::Error as CoreError;
 use crate::maitredescomptes_common::{charger_compte_user_id, commande_maj_usager_delegations, emettre_maj_compte_usager, sauvegarder_credential};
 use crate::maitredescomptes_constants::*;
 use crate::maitredescomptes_manager::MaitreDesComptesManager;
-use crate::maitredescomptes_structs::{ChallengeAuthenticationWebauthn, CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, CompteUsager, ConfirmationSigneeDelegationGlobale, CookieSession, DocChallenge, RequeteGetCookieUsager, TotpCredentialsRow, TransactionAjouterCle, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionSupprimerCles};
-use crate::maitredescomptes_transactions::{transaction_ajouter_delegation_signee, CommandRegisterOtp, TransactionRegisterOtp};
-use crate::webauthn::{ClientAssertionResponse, CompteCredential, ConfigChallenge, Credential, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, multibase_to_safe, valider_commande, verifier_challenge_authentification, verifier_challenge_registration};
+use crate::maitredescomptes_structs::{ChallengeAuthenticationWebauthn, CommandeAjouterDelegationSignee, CommandeResetWebauthnUsager, CompteUsager, ConfirmationSigneeDelegationGlobale, CookieSession, DocChallenge, RequeteGetCookieUsager, TotpCredentialsRow, TransactionAjouterCle, TransactionInscrireUsager, TransactionSupprimerCles};
+use crate::maitredescomptes_transactions::{CommandRegisterOtp, TransactionRegisterOtp};
+use crate::webauthn::{ClientAssertionResponse, CredentialWebauthn, generer_challenge_authentification, generer_challenge_registration, verifier_challenge_authentification, verifier_challenge_registration};
 
 pub async fn consommer_commande_maitredescomptes<M>(middleware: &M, gestionnaire: &MaitreDesComptesManager, m: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -301,7 +298,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
         let message_ref = message.message.parse()?;
         let message_contenu = message_ref.contenu()?;
         let transaction: TransactionInscrireUsager = message_contenu.deserialize()?;
-        let message_id = message_ref.id.clone();
+        let message_id = message_ref.id;
         (transaction, message_id)
     };
     let nom_usager = transaction.nom_usager.as_str();
@@ -1073,7 +1070,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
     };
 
     let idmg = middleware.idmg();
-    let hostname = commande.hostname.as_str();
+    // let hostname = commande.hostname.as_str();
     let resultat = match verifier_challenge_authentification(
         commande.hostname, idmg, reg, passkey_authentication.try_into()?
     ) {
@@ -1114,7 +1111,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
     // Charger CSR et calculer fingerprint, code.
     let csr_parsed = charger_csr(csr.as_str())?;
     let csr_subject = get_csr_subject(&csr_parsed.as_ref())?;
-    let common_name = match csr_subject.get("commonName") {
+    let _common_name = match csr_subject.get("commonName") {
         Some(n) => n,
         None => {
             let reponse = json!({"ok": false, "err": "Common Name absent du CSR"});
@@ -1152,7 +1149,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud
     };
     let options = UpdateOptions::builder().upsert(true).build();
     let collection = middleware.get_collection(NOM_COLLECTION_RECOVERY)?;
-    let resultat = collection.update_one_with_session(filtre, ops, Some(options), session).await?;
+    let _resultat = collection.update_one_with_session(filtre, ops, Some(options), session).await?;
 
     let reponse = json!({"ok": true, "code": &code});
     match middleware.build_reponse(reponse) {
@@ -1544,7 +1541,7 @@ where M: ValidateurX509 + GenerateurMessages + CleChiffrageHandler + MongoDao + 
         None => Err(format!("core_maitredescomptes.commande_generer_challenge Erreur message sans user_id"))?
     };
 
-    let compte: CompteUsager = {
+    let _compte: CompteUsager = {
         let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
         let filtre = doc! { CHAMP_USER_ID: &user_id };
         let resultat = match collection.find_one_with_session(filtre, None, session).await? {
@@ -1585,7 +1582,7 @@ where M: ValidateurX509 + GenerateurMessages + CleChiffrageHandler + MongoDao + 
     let challenge_hashvalue = base64_url::encode(&hacher_bytes(totp_url.as_bytes(), HachageCode::Blake2s256));
 
     // Encrypt the TOTP url, it contains the secret value
-    let mut encrypted_url = gestionnaire.encrypt_string(middleware, totp_url).await?;
+    let encrypted_url = gestionnaire.encrypt_string(middleware, totp_url).await?;
 
     let challenge_row = DocChallenge::new_challenge_totp(&user_id, hostname, &challenge_hashvalue, encrypted_url);
     let collection = middleware.get_collection_typed::<DocChallenge>(NOM_COLLECTION_CHALLENGES)?;
