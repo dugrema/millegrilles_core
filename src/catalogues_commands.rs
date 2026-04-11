@@ -4,7 +4,7 @@ use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissi
 use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::generateur_messages::GenerateurMessages;
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_v2, Middleware};
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageValidable};
 use millegrilles_common_rust::mongo_dao::{start_transaction_regular, MongoDao};
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
@@ -12,7 +12,7 @@ use millegrilles_common_rust::recepteur_messages::MessageValide;
 use serde::Deserialize;
 use crate::catalogues_manager::CataloguesManager;
 use crate::catalogues_constants::*;
-use crate::catalogues_structs::{Catalogue, MessageCatalogue, SetPackageVersionTransaction};
+use crate::catalogues_structs::{MessageCatalogue, SetPackageVersionTransaction};
 
 pub async fn consommer_commande_catalogues<M>(middleware: &M, m: MessageValide, gestionnaire: &CataloguesManager)
                                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -73,7 +73,7 @@ pub async fn traiter_commande_application<M>(middleware: &M, commande: MessageVa
 {
     debug!("traiter_commande_application Traitement catalogue application {:?}", commande.type_message);
 
-    let mut message_catalogue: MessageCatalogue = {
+    let message_catalogue: MessageCatalogue = {
         let message_ref = commande.message.parse()?;
         let message_contenu = message_ref.contenu()?;
         message_contenu.deserialize()?
@@ -117,7 +117,7 @@ pub async fn traiter_commande_application<M>(middleware: &M, commande: MessageVa
 
     // Valider le certificat et regles du catalogues.
     match middleware.valider_certificat_idmg(&catalogue_ref, "catalogues").await {
-        Ok(inner) => {
+        Ok(_) => {
             debug!("traiter_commande_application Catalogue accepte - certificat valide : {}/{}",
                 &info_catalogue.nom, &info_catalogue.version);
             // Conserver la transaction et la traiter immediatement

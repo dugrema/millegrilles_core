@@ -5,14 +5,13 @@ use std::str::from_utf8;
 use std::time::Duration;
 use webauthn_rs::prelude::Url;
 
-use crate::topology_common::{demander_jwt_hebergement, maj_fiche_publique};
+use crate::topology_common::maj_fiche_publique;
 use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
-use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, PresenceMonitor, ReponseUrlEtag, RowFilehostFuuid, TransactionConfigurerConsignation, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
+use crate::topology_structs::{FichePublique, FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, ReponseUrlEtag, RowFilehostFuuid, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
 
 use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction, TransactionFilehostSetDefault};
 
-use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
@@ -22,17 +21,15 @@ use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::messages_generiques::ReponseCommande;
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, Middleware};
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{epochseconds, optionepochseconds};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::epochseconds;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
 use millegrilles_common_rust::mongo_dao::{convertir_to_bson, start_transaction_regular, MongoDao};
-use millegrilles_common_rust::mongodb::options::{FindOneOptions, FindOptions, InsertManyOptions, UpdateOptions, WriteConcern};
+use millegrilles_common_rust::mongodb::options::{FindOptions, UpdateOptions};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::{get_domaine_action, serde_json};
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
-use millegrilles_common_rust::redis::Commands;
-use millegrilles_common_rust::mongo_dao::{opt_chrono_datetime_as_bson_datetime, map_opt_chrono_datetime_as_bson_datetime};
 use millegrilles_common_rust::mongodb::{ClientSession, Cursor};
 use crate::topology_maintenance::{add_missing_file_transfers, entretien_transfert_fichiers};
 
