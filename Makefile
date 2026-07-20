@@ -1,6 +1,6 @@
 # Variables
 NOM_APP=millegrilles_core
-VERSION?=2026.1
+VERSION?=2026.3
 BUILD_NUMBER?=local
 VBUILD=$(VERSION).$(BUILD_NUMBER)
 DOCKER_IMAGE?=registry.millegrilles.com:5000/millegrilles/core_rust
@@ -10,24 +10,27 @@ STAGING_DIR=package_staging
 
 .PHONY: all build docker-build deploy clean package
 
-all: build
+all: package
 
-build:
-	cargo build --release --package $(NOM_APP) --bin $(NOM_APP)
-	cp "target/release/$(NOM_APP)" "target/release/$(NOM_APP)_x86_64"
-	gzip -f "target/release/$(NOM_APP)_x86_64"
+# build:
+# 	cargo build --release --package $(NOM_APP) --bin $(NOM_APP)
+# 	cp "target/release/$(NOM_APP)" "target/release/$(NOM_APP)_x86_64"
+# 	gzip -f "target/release/$(NOM_APP)_x86_64"
 
-docker-build: build
+docker-build:
 	docker build -t $(DOCKER_IMAGE):$(VBUILD) .
 
-package: build
+archive-build:
 	rm -rf $(STAGING_DIR)
 	mkdir -p $(STAGING_DIR)
+	mkdir -p target/release
 	cp -r catalogue/* $(STAGING_DIR)/
 	sed -i 's/"version": "[^"]*"/"version": "$(VBUILD)"/' $(STAGING_DIR)/metadata.json
 	sed -i 's|image: "replace_me"|image: "$(DOCKER_IMAGE_NO_PORT):$(VBUILD)"|' $(STAGING_DIR)/docker-compose.yml
 	tar -czf target/release/$(CATALOGUE_ARCHIVE_NAME) -C $(STAGING_DIR) .
 	rm -rf $(STAGING_DIR)
+
+package: docker-build archive-build
 
 deploy: package
 	docker push $(DOCKER_IMAGE):$(VBUILD)

@@ -14,7 +14,10 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
 
 # Create a dummy project to pre-build dependencies
-RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
+RUN mkdir src && \
+    echo "fn main() {println!(\"dummy project\");}" > src/main.rs && \
+    cargo build --release && \
+    rm -rf src
 
 # Copy source code and build the actual application
 COPY . .
@@ -35,7 +38,7 @@ ENV APP_FOLDER=/app \
     MG_REDIS_PASSWORD_FILE=/run/secrets/passwd.redis.txt
 
 # Install runtime dependencies
-RUN mkdir -p /var/opt/millegrilles/archives && chown 983:980 /var/opt/millegrilles/archives && \
+RUN mkdir -p /var/opt/millegrilles/archives && chown 1000:1000 /var/opt/millegrilles/archives && \
     apt-get update && apt-get install -y ca-certificates libssl3 && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -43,9 +46,7 @@ WORKDIR $APP_FOLDER
 
 COPY --from=builder /app/target/release/millegrilles_core .
 
-# UID 983 mgissuer et code
-# GID 980 millegrilles
-USER 983:980
+USER 1000:1000
 
 VOLUME ["/var/opt/millegrilles/archives"]
 
