@@ -1,0 +1,8 @@
+{
+  "name": "core",
+  "version": "BUILD",
+  "labels": {
+    "en": "MilleGrilles core services",
+    "fr": "Services essentiels pour MilleGrilles"
+  }
+}

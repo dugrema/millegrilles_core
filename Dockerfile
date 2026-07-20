@@ -1,6 +1,29 @@
-FROM ubuntu as stage1
+# Build stage
+FROM rust:1-trixie AS builder
 
-ENV APP_FOLDER=/usr/src/app \
+# Install build dependencies
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy configuration files first for layer caching
+COPY Cargo.toml Cargo.lock ./
+
+# Create a dummy project to pre-build dependencies
+RUN mkdir src && echo "fn main() {}" > src/main.rs && cargo build --release && rm -rf src
+
+# Copy source code and build the actual application
+COPY . .
+RUN cargo build --release
+
+# Runtime stage
+FROM debian:trixie-slim
+
+ENV APP_FOLDER=/app \
     RUST_LOG=warn \
     MG_MQ_HOST=mq \
     MG_MONGO_HOST=mongo \
@@ -11,20 +34,19 @@ ENV APP_FOLDER=/usr/src/app \
     MG_REDIS_URL=rediss://client_rust@redis:6379#insecure \
     MG_REDIS_PASSWORD_FILE=/run/secrets/passwd.redis.txt
 
+# Install runtime dependencies
 RUN mkdir -p /var/opt/millegrilles/archives && chown 983:980 /var/opt/millegrilles/archives && \
-    apt-get update && apt-get install -y ca-certificates && apt-get clean && \
+    apt-get update && apt-get install -y ca-certificates libssl3 && apt-get clean && \
     rm -rf /var/lib/apt/lists/*
-
-FROM stage1
 
 WORKDIR $APP_FOLDER
 
-COPY target/release/millegrilles_core .
+COPY --from=builder /app/target/release/millegrilles_core .
 
 # UID 983 mgissuer et code
 # GID 980 millegrilles
 USER 983:980
 
-VOLUME /var/opt/millegrilles/archives
+VOLUME ["/var/opt/millegrilles/archives"]
 
-CMD ./millegrilles_core
+CMD ["./millegrilles_core"]
