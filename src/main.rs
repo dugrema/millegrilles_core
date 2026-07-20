@@ -1,9 +1,4 @@
 // Domaines Core (obsolete)
-// mod domaines_core;
-// mod core_catalogues;
-// mod core_maitredescomptes;
-// mod core_pki;
-// mod core_topologie;
 
 // mod ceduleur;
 mod validateur_pki_mongo;
