@@ -312,3 +312,31 @@ pub struct ManagerStatusV2 {
     pub supprime: bool,
     pub timestamp: DateTime<Utc>,
 }
+
+type ApplicationLabels = HashMap<String, String>;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PortalItem {
+    pub admin: Option<bool>,
+    pub port: Option<u16>,
+    pub path: Option<String>,
+    pub labels: Option<ApplicationLabels>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApplicationInfo {
+    pub name: String,
+    pub version: String,
+    pub labels: ApplicationLabels,
+    pub path: Option<String>,
+    pub portal: Option<Vec<PortalItem>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ApplicationStatusV2 {
+    pub instance_id: String,
+    pub applications: HashMap<String, ApplicationInfo>,
+    pub securite: String,
+    pub supprime: bool,
+    pub timestamp: DateTime<Utc>,
+}

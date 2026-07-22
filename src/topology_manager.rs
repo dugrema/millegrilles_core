@@ -223,8 +223,9 @@ pub fn preparer_queues(_manager: &TopologyManager) -> Vec<QueueType> {
 
     for exchange in vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege] {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.{}", EVENEMENT_PRESENCE_INSTANCE), exchange: exchange.clone() });
-        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.{}", EVENEMENT_PRESENCE_INSTANCE_V2), exchange: exchange.clone() });
-        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.*.{}", EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS), exchange });
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.*.{}", EVENEMENT_PRESENCE_INSTANCE_V2), exchange: exchange.clone() });
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.*.{}", EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS), exchange: exchange.clone() });
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.*.{}", EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS_V2), exchange });
     }
 
     let mut queues = Vec::new();
