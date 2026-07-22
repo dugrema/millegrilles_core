@@ -48,9 +48,8 @@ services:
           cpus: '2.0'
           memory: 200M
       restart_policy:
-        condition: on-failure
+        condition: any
         delay: 20s
-        max_attempts: 1000
     configs:
       - source: core
         target: /run/secrets/cert.pem
