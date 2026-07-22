@@ -249,21 +249,6 @@ pub fn preparer_queues(_manager: &TopologyManager) -> Vec<QueueType> {
 pub async fn preparer_index_mongodb_topologie<M>(middleware: &M) -> Result<(), millegrilles_common_rust::error::Error>
 where M: MongoDao + ConfigMessages
 {
-    // // Index noeuds
-    // let options_unique_noeuds = IndexOptions {
-    //     nom_index: Some(String::from(INDEX_NOEUDS)),
-    //     unique: true,
-    // };
-    // let champs_index_noeuds = vec!(
-    //     ChampIndex { nom_champ: String::from(CHAMP_NOEUD_ID), direction: 1 },
-    // );
-    // middleware.create_index(
-    //     middleware,
-    //     NOM_COLLECTION_NOEUDS,
-    //     champs_index_noeuds,
-    //     Some(options_unique_noeuds),
-    // ).await?;
-
     let options_unique_server_instances = IndexOptions {
         nom_index: Some(String::from("server_instance_id")),
         unique: true,
