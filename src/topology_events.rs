@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::topology_common::generer_contenu_fiche_publique;
 use crate::topology_manager::TopologyManager;
 use crate::topology_constants::*;
-use crate::topology_structs::{EventFilehostUsage, EventNewFuuid, PresenceDomaine, RowFilehostFuuid, RowFilehostId};
+use crate::topology_structs::{EventFilehostUsage, EventNewFuuid, ManagerStatusV2, PresenceDomaine, RowFilehostFuuid, RowFilehostId, SystemState};
 use millegrilles_common_rust::mongodb::ClientSession;
 use crate::topology_maintenance::emit_filehost_transfersupdated_event;
 
@@ -59,6 +59,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
         //     }
         // },
         EVENEMENT_PRESENCE_INSTANCE => process_presence_instance(middleware, m, &mut session).await,
+        EVENEMENT_PRESENCE_INSTANCE_V2 => process_presence_instance_v2(middleware, m, &mut session).await,
         EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS => process_presence_instance_applications(middleware, m, &mut session).await,
         EVENEMENT_APPLICATION_DEMARREE | EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
         EVENEMENT_FILEHOST_USAGE => traiter_evenement_filehost_usage(middleware, m, &mut session).await,
@@ -381,6 +382,76 @@ async fn process_presence_instance<M>(middleware: &M, message: MessageValide, se
         "$setOnInsert": {
             CHAMP_CREATION: timestamp,
             "supprime": false,
+        },
+        "$currentDate": {CHAMP_MODIFICATION: true}
+    };
+    let options = UpdateOptions::builder().upsert(true).build();
+    collection.update_one_with_session(filtre, ops, options, session).await?;
+
+    Ok(None)
+}
+
+#[derive(Serialize, Deserialize)]
+struct PresenceInstanceEventV2 {
+    system_state: SystemState,
+}
+
+async fn process_presence_instance_v2<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
+                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: MongoDao
+{
+    let message_ref = message.message.parse()?;
+    let event: PresenceInstanceEventV2 = message_ref.contenu()?.deserialize()?;
+
+    if ! message.certificat.verifier_roles(vec![RolesCertificats::Instance])? {
+        warn!("process_presence_instance_v2 Rejecting message not from an instance");
+        return Ok(None)
+    }
+
+    let instance_id = message.certificat.get_common_name()?;
+    let timestamp = message_ref.estampille;
+
+    let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS_V2)?;
+
+    let securite = match message.certificat.extensions() {
+        Ok(e) => {
+            match e.exchanges {
+                Some(e) => match e.get(0) {
+                    Some(e) => e.clone(),
+                    None => {
+                        warn!("process_presence_instance_v2 Rejecting message from instance with no configured exchanges (empty list) in certificate");
+                        return Ok(None);
+                    }
+                },
+                None => {
+                    warn!("process_presence_instance_v2 Rejecting message from instance with no configured exchanges in certificate");
+                    return Ok(None);
+                }
+            }
+        }
+        Err(e) => {
+            warn!("process_presence_instance_v2 Rejecting message from instance with no configured extensions in certificate (error: {})", e);
+            return Ok(None);
+        }
+    };
+
+    let filtre = doc! {"instance_id": instance_id.clone()};
+
+    let row_content = ManagerStatusV2 {
+        instance_id,
+        system_state: event.system_state,
+        securite,
+        supprime: false,
+        timestamp,
+    };
+
+    // Override the content of the table with the received event information
+    let set_ops = convertir_to_bson(row_content)?;
+
+    let ops = doc! {
+        "$set": set_ops,
+        "$setOnInsert": {
+            CHAMP_CREATION: timestamp,
         },
         "$currentDate": {CHAMP_MODIFICATION: true}
     };

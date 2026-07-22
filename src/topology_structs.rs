@@ -163,14 +163,6 @@ pub struct FilehostingCongurationRow {
     pub value: String,
 }
 
-// #[derive(Serialize, Deserialize)]
-// pub struct FilehostingFileVisit {
-//     pub fuuid: String,
-//     pub filehost_id: String,
-//     #[serde(with = "bson::serde_helpers::chrono_datetime_as_bson_datetime")]
-//     pub visit_time: DateTime<Utc>,
-// }
-
 #[derive(Serialize, Deserialize)]
 pub struct FileStorageInfo {
     pub count: i64,
@@ -236,4 +228,87 @@ impl Into<FileUsage> for FileUsageMongo {
             size: Some(self.size.unwrap_or(0f64) as usize),
         }
     }
+}
+
+// New system layout
+
+#[derive(Serialize, Deserialize)]
+pub struct HostInfo {
+    pub hostname: String,
+    pub ip_addresses: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PartitionUsageItem {
+    pub mountpoint: String,
+    pub free: u64,
+    pub used: u64,
+    pub total: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MemoryInfo {
+    pub total: u64,
+    pub available: u64,
+    pub percent: f64,
+    pub used: u64,
+    pub free: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct SwapInfo {
+    pub total: u64,
+    pub used: u64,
+    pub free: u64,
+    pub percent: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct NetworkInfo {
+    pub bytes_sent: u64,
+    pub bytes_recv: u64,
+    pub packets_sent: u64,
+    pub packets_recv: u64,
+    pub errin: u64,
+    pub errout: u64,
+    pub dropin: u64,
+    pub dropout: u64,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct DiskIOInfo {
+    pub read_bytes: u64,
+    pub write_bytes: u64,
+    pub read_count: u64,
+    pub write_count: u64,
+    pub read_time: f64,
+    pub write_time: f64,
+}
+
+
+#[derive(Serialize, Deserialize)]
+pub struct SystemState {
+    pub host: Option<HostInfo>,
+    pub disk: Vec<PartitionUsageItem>,
+    pub load_average: Vec<f64>,
+    pub memory: MemoryInfo,
+    pub swap: SwapInfo,
+    pub cpu_count: i32,
+    pub cpu_usage_percent: f64,
+    pub network: NetworkInfo,
+    pub disk_io: Option<DiskIOInfo>,
+    pub uptime_seconds: f64,
+    pub system_temperature: Option<serde_json::Value>,
+    pub system_fans: Option<serde_json::Value>,
+    pub system_battery: Option<serde_json::Value>,
+    pub apc: Option<serde_json::Value>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ManagerStatusV2 {
+    pub instance_id: String,
+    pub system_state: SystemState,
+    pub securite: String,
+    pub supprime: bool,
+    pub timestamp: DateTime<Utc>,
 }

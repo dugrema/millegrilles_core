@@ -223,6 +223,7 @@ pub fn preparer_queues(_manager: &TopologyManager) -> Vec<QueueType> {
 
     for exchange in vec![Securite::L1Public, Securite::L2Prive, Securite::L3Protege] {
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.{}", EVENEMENT_PRESENCE_INSTANCE), exchange: exchange.clone() });
+        rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.{}", EVENEMENT_PRESENCE_INSTANCE_V2), exchange: exchange.clone() });
         rk_volatils.push(ConfigRoutingExchange { routing_key: format!("evenement.instance.*.{}", EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS), exchange });
     }
 
@@ -275,6 +276,20 @@ where M: MongoDao + ConfigMessages
         NOM_COLLECTION_INSTANCE_STATUS,
         champs_index_server_instances,
         Some(options_unique_server_instances),
+    ).await?;
+
+    let options_unique_server_instances_v2 = IndexOptions {
+        nom_index: Some(String::from("server_instance_id")),
+        unique: true,
+    };
+    let champs_index_server_instances_v2 = vec!(
+        ChampIndex { nom_champ: String::from("instance_id"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_INSTANCE_STATUS_V2,
+        champs_index_server_instances_v2,
+        Some(options_unique_server_instances_v2),
     ).await?;
 
     let options_unique_server_configured_applications = IndexOptions {

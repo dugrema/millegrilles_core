@@ -2856,6 +2856,7 @@ dependencies = [
  "log",
  "millegrilles_common_rust",
  "serde",
+ "serde_json",
  "totp-rs",
  "webauthn-rs",
 ]

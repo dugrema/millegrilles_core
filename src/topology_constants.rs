@@ -20,6 +20,7 @@ pub const NOM_COLLECTION_FILEHOSTING_SYNC_STATUS: &str = "CoreTopologie/filehost
 pub const NOM_COLLECTION_FILEHOSTING_FUUIDS_WORK: &str = "CoreTopologie/filehostingFuuidsWork";
 
 pub const NOM_COLLECTION_INSTANCE_STATUS: &str = "CoreTopologie/instances/status";
+pub const NOM_COLLECTION_INSTANCE_STATUS_V2: &str = "CoreTopologie/instances/statusV2";
 pub const NOM_COLLECTION_INSTANCE_CONFIGURATION: &str = "CoreTopologie/instances/configuration";
 pub const NOM_COLLECTION_INSTANCE_CONTAINERS: &str = "CoreTopologie/instances/containers";
 pub const NOM_COLLECTION_INSTANCE_SERVICES: &str = "CoreTopologie/instances/services";
@@ -85,6 +86,8 @@ pub const COMMANDE_BACKUP_SET_DOMAIN_VERSION: &str = "setBackupDomainVersion";
 pub const EVENEMENT_PRESENCE_MONITOR: &str = "presence";
 pub const EVENEMENT_PRESENCE_FICHIERS: &str = EVENEMENT_PRESENCE_MONITOR;
 pub const EVENEMENT_PRESENCE_INSTANCE: &str = "presenceInstance";
+
+pub const EVENEMENT_PRESENCE_INSTANCE_V2: &str = "presenceInstanceV2";
 pub const EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS: &str = "presenceInstanceApplications";
 pub const EVENEMENT_FICHE_PUBLIQUE: &str = "fichePublique";
 pub const EVENEMENT_INSTANCE_SUPPRIMEE: &str = "instanceSupprimee";
