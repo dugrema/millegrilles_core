@@ -1,6 +1,7 @@
 {
   "name": "core",
   "version": "BUILD",
+  "securite": "3.protege",
   "labels": {
     "en": "MilleGrilles core services",
     "fr": "Services essentiels pour MilleGrilles"
