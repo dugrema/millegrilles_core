@@ -236,6 +236,7 @@ impl Into<FileUsage> for FileUsageMongo {
 pub struct HostInfo {
     pub hostname: String,
     pub ip_addresses: Vec<String>,
+    pub ports: HashMap<String, u16>,
 }
 
 #[derive(Serialize, Deserialize)]

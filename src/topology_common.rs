@@ -281,11 +281,13 @@ where M: MongoDao + ValidateurX509 + CleChiffrageHandler
     let mut instances: HashMap<String, InformationInstance> = HashMap::new();
     let mut applications_v2: HashMap<String, ApplicationsV2> = HashMap::new();
 
-    let map_ports = {
+    let default_map_ports = {
         let mut map_ports: HashMap<String, u16> = HashMap::new();
         map_ports.insert("http".to_string(), 80);
         map_ports.insert("https".to_string(), 443);
         map_ports.insert("wss".to_string(), 443);
+        map_ports.insert("https_mtls".to_string(), 444);
+        map_ports.insert("wss_mtls".to_string(), 444);
         map_ports
     };
 
@@ -306,12 +308,12 @@ where M: MongoDao + ValidateurX509 + CleChiffrageHandler
             continue;
         }
 
-        let hostname = match status.system_state.host {
-            Some(host) => host.hostname.clone(),
-            None => "hostname".to_string(),
+        let (hostname, ports) = match status.system_state.host {
+            Some(host) => (host.hostname.clone(), host.ports.clone()),
+            None => ("hostname".to_string(), default_map_ports.clone()),
         };
         let info_instance = InformationInstance {
-            ports: map_ports.clone(),
+            ports,
             onion: None,
             securite: status.securite,
             domaines: Some(vec![hostname]),
