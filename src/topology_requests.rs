@@ -27,7 +27,7 @@ use crate::topology_commands::FuuidVisitResponseItem;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceWebApplication};
-use crate::topology_structs::{ApplicationPublique, ApplicationStatusV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, ManagerStatusV2, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, WebItem};
+use crate::topology_structs::{ApplicationPublique, ApplicationStatusV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, WebItem};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -584,7 +584,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(reponse))
 }
 
-
 #[derive(Serialize)]
 struct ReponseListeApplicationsDeployeesV2 {
     ok: bool,
@@ -595,7 +594,6 @@ async fn liste_userapps_deployees_v2<M>(middleware: &M, message: MessageValide)
                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    // Recuperer instance_id
     let certificat = message.certificat.as_ref();
     let user_name = certificat.get_common_name()?;
     let extensions = certificat.extensions()?;
