@@ -27,7 +27,7 @@ use crate::topology_commands::FuuidVisitResponseItem;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceWebApplication};
-use crate::topology_structs::{ApplicationPublique, FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus};
+use crate::topology_structs::{ApplicationPublique, ApplicationStatusV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, ManagerStatusV2, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, WebItem};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -83,6 +83,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
                         // REQUETE_APPLICATIONS_DEPLOYEES => liste_applications_deployees(middleware, m).await,
                         REQUETE_USERAPPS_DEPLOYEES => liste_userapps_deployees(middleware, m).await,
+                        REQUETE_USERAPPS_DEPLOYEES_V2 => liste_userapps_deployees_v2(middleware, m).await,
                         REQUETE_RESOLVE_IDMG => resolve_idmg(middleware, m).await,
                         REQUETE_FICHE_MILLEGRILLE => requete_fiche_millegrille(middleware, m).await,
                         REQUETE_APPLICATIONS_TIERS => requete_applications_tiers(middleware, m).await,
@@ -497,116 +498,6 @@ struct ReponseListeApplicationsDeployees {
     resultats: Vec<ReponseApplicationDeployee>,
 }
 
-// async fn liste_applications_deployees<M>(middleware: &M, message: MessageValide)
-//                                          -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-// where M: ValidateurX509 + GenerateurMessages + MongoDao
-// {
-//     todo!();
-//     // Recuperer instance_id
-//     let certificat = message.certificat.as_ref();
-//     let instance_id = certificat.get_common_name()?;
-//     let extensions = certificat.extensions()?;
-//     let exchanges = extensions.exchanges.as_ref();
-//     debug!("liste_applications_deployees Instance_id {}, exchanges : {:?}", instance_id, exchanges);
-//
-//     let niveau_securite = if certificat.verifier_exchanges(vec![Securite::L3Protege])? {
-//         Securite::L3Protege
-//     } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-//         Securite::L3Protege
-//     } else if certificat.verifier_exchanges(vec![Securite::L2Prive])? {
-//         Securite::L2Prive
-//     } else if certificat.verifier_roles(vec![RolesCertificats::ComptePrive])? {
-//         Securite::L2Prive
-//     } else {
-//         warn!("liste_applications_deployees Acces refuse, aucunes conditions d'acces du certificat pour liste apps");
-//         // let reponse = json!({"ok": false, "err": "Acces refuse"});
-//         // return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
-//         return Ok(Some(middleware.reponse_err(None, None, Some("Acces refuse"))?))
-//     };
-//     debug!("liste_applications_deployees Niveau de securite : {:?}", niveau_securite);
-//
-//     // Retour de toutes les applications (maitrecomptes est toujours sur exchange 2.prive)
-//     let sec_cascade = securite_cascade_public(niveau_securite);
-//
-//     let mut curseur = {
-//         let filtre = doc! {};
-//         let projection = doc! {"instance_id": true, "domaine": true, "securite": true, "applications": true, "onion": true};
-//         let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
-//         let ops = FindOptions::builder().projection(Some(projection)).build();
-//         match collection.find(filtre, Some(ops)).await {
-//             Ok(c) => c,
-//             Err(e) => Err(format!("core_topologie.liste_applications_deployees Erreur chargement applications : {:?}", e))?
-//         }
-//     };
-//
-//     // Extraire liste d'applications
-//     let mut resultats = Vec::new();
-//     while let Some(row) = curseur.next().await {
-//         let info_monitor = row?;
-//         let instance_id = info_monitor.instance_id.as_str();
-//
-//         if let Some(applications) = info_monitor.applications {
-//             for app in applications {
-//                 let securite = match app.securite {
-//                     Some(s) => match securite_enum(s.as_str()) {
-//                         Ok(s) => s,
-//                         Err(e) => continue   // Skip
-//                     },
-//                     None => continue  // Skip
-//                 };
-//
-//                 // Verifier si le demandeur a le niveau de securite approprie
-//                 if sec_cascade.contains(&securite) {
-//
-//                     if let Some(url) = app.url.as_ref() {
-//                         // Preparer la valeur a exporter pour les applications
-//                         let onion = match info_monitor.onion.as_ref() {
-//                             Some(onion) => {
-//                                 let mut url_onion = Url::parse(url.as_str())?;
-//                                 url_onion.set_host(Some(onion.as_str()));
-//                                 Some(url_onion.as_str().to_owned())
-//                             },
-//                             None => None
-//                         };
-//
-//                         let mut info_app = ReponseApplicationDeployee {
-//                             instance_id: instance_id.to_owned(),
-//                             application: app.application.clone(),
-//                             securite: securite.get_str().to_owned(),
-//                             url: Some(url.to_owned()),
-//                             onion: onion.to_owned(),
-//                             name_property: None,
-//                             supporte_usagers: None,
-//                             labels: None,
-//                         };
-//
-//                         if let Some(p) = app.name_property.as_ref() {
-//                             info_app.name_property = Some(p.to_string());
-//                         }
-//
-//                         if let Some(p) = app.supporte_usagers.as_ref() {
-//                             info_app.supporte_usagers = Some(p.to_owned());
-//                         }
-//
-//                         resultats.push(info_app);
-//                     }
-//                 }
-//             }
-//         }
-//     }
-//
-//     let liste = ReponseListeApplicationsDeployees {
-//         ok: true,
-//         resultats,
-//     };
-//
-//     let reponse = match middleware.build_reponse(liste) {
-//         Ok(m) => m.0,
-//         Err(e) => Err(format!("core_topologie.liste_applications_deployees  Erreur preparation reponse applications : {:?}", e))?
-//     };
-//     Ok(Some(reponse))
-// }
-
 #[derive(Serialize, Deserialize)]
 pub struct InstanceWebappsRow {
     pub instance_id: String,
@@ -649,67 +540,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     // Retour de toutes les applications (maitrecomptes est toujours sur exchange 2.prive)
     let sec_cascade = securite_cascade_public(niveau_securite);
 
-    // let mut curseur = {
-    //     let filtre = doc! {};
-    //     let projection = doc! {"instance_id": true, "domaine": true, "securite": true, "applications": true, "onion": true, "webapps": true};
-    //     let collection = middleware.get_collection_typed::<InformationMonitor>(NOM_COLLECTION_NOEUDS)?;
-    //     let ops = FindOptions::builder().projection(Some(projection)).build();
-    //     match collection.find(filtre, Some(ops)).await {
-    //         Ok(c) => c,
-    //         Err(e) => Err(format!("topology_requests.liste_userapps_deployees Erreur chargement applications : {:?}", e))?
-    //     }
-    // };
-    //
-    // // Extraire liste d'applications
-    // let mut resultats = Vec::new();
-    // while let Some(row) = curseur.next().await {
-    //     let info_monitor = row?;
-    //     let instance_id = info_monitor.instance_id.as_str();
-    //
-    //     if let Some(applications) = info_monitor.webapps {
-    //         for app in applications {
-    //             let securite = match securite_enum(app.securite.as_str()) {
-    //                 Ok(s) => s,
-    //                 Err(e) => continue   // Skip
-    //             };
-    //
-    //             debug!("liste_userapps_deployees App {} securite {:?}", app.name, securite);
-    //
-    //             // Verifier si le demandeur a le niveau de securite approprie
-    //             if sec_cascade.contains(&securite) {
-    //                 // Preparer la valeur a exporter pour les applications
-    //                 let onion = match info_monitor.onion.as_ref() {
-    //                     Some(onion) => {
-    //                         let mut url_onion = Url::parse(app.url.as_str())?;
-    //                         if let Err(e) = url_onion.set_host(Some(onion.as_str())) {
-    //                             warn!("liste_userapps_deployees Error parsing onion url: {:?}", e);
-    //                             None
-    //                         } else {
-    //                             Some(url_onion.as_str().to_owned())
-    //                         }
-    //                     },
-    //                     None => None
-    //                 };
-    //
-    //                 let info_app = ReponseApplicationDeployee {
-    //                     instance_id: instance_id.to_owned(),
-    //                     application: app.name.clone(),
-    //                     securite: securite.get_str().to_owned(),
-    //                     url: Some(app.url.clone()),
-    //                     onion: onion.to_owned(),
-    //                     name_property: Some(app.name.clone()),
-    //                     supporte_usagers: Some(true),
-    //                     labels: Some(app.labels),
-    //                 };
-    //
-    //                 resultats.push(info_app);
-    //             } else {
-    //                 debug!("liste_userapps_deployees App {} refuse, securite insuffisante", app.name);
-    //             }
-    //         }
-    //     }
-    // }
-
     let collection = middleware.get_collection_typed::<InstanceWebappsRow>(NOM_COLLECTION_INSTANCE_WEBAPPS)?;
     let filtre = doc!{};
     let mut curseur = collection.find(filtre, None).await?;
@@ -743,6 +573,85 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     let liste = ReponseListeApplicationsDeployees {
         ok: true,
         resultats: app_list,
+    };
+
+    debug!("liste_userapps_deployees Responding application list: {:?}", serde_json::to_string(&liste));
+
+    let reponse = match middleware.build_reponse(liste) {
+        Ok(m) => m.0,
+        Err(e) => Err(format!("topology_requests.liste_userapps_deployees  Erreur preparation reponse applications : {:?}", e))?
+    };
+    Ok(Some(reponse))
+}
+
+
+#[derive(Serialize)]
+struct ReponseListeApplicationsDeployeesV2 {
+    ok: bool,
+    results: Vec<ApplicationStatusV2>,
+}
+
+async fn liste_userapps_deployees_v2<M>(middleware: &M, message: MessageValide)
+                                     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    // Recuperer instance_id
+    let certificat = message.certificat.as_ref();
+    let user_name = certificat.get_common_name()?;
+    let extensions = certificat.extensions()?;
+    let exchanges = extensions.exchanges.as_ref();
+    debug!("liste_userapps_deployees_v2 user_name {}, exchanges : {:?}", user_name, exchanges);
+
+    let is_admin = if certificat.verifier_exchanges(vec![Securite::L3Protege])? {
+        true
+    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        true
+    } else if certificat.verifier_exchanges(vec![Securite::L2Prive])? {
+        false
+    } else if certificat.verifier_roles(vec![RolesCertificats::ComptePrive])? {
+        false
+    } else {
+        warn!("liste_userapps_deployees Acces refuse, aucunes conditions d'acces du certificat pour liste apps");
+        // let reponse = json!({"ok": false, "err": "Acces refuse"});
+        // return Ok(Some(middleware.formatter_reponse(&reponse, None)?));
+        return Ok(Some(middleware.reponse_err(403, None, Some("Acces refuse"))?))
+    };
+    debug!("liste_userapps_deployees is_admin : {:?}", is_admin);
+
+    let collection = middleware.get_collection_typed::<ApplicationStatusV2>(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS_V2)?;
+    let filtre = doc!{"supprime": false};
+    let mut curseur = collection.find(filtre, None).await?;
+    let mut app_list = Vec::new();
+    while curseur.advance().await? {
+        let mut row = curseur.deserialize_current()?;
+
+        // Filter out applications by acces level
+        let mut new_app_map = HashMap::new();
+        for (nom_app, mut value) in row.applications {
+            let web = match value.web {
+                Some(web) => web,
+                None => continue,  // No web component, skip
+            };
+            if ! is_admin {
+                let web: Vec<WebItem> = web.into_iter().filter(|w| ! w.admin.unwrap_or(false)).collect();
+                value.web = Some(web);
+            } else {
+                // Admin, keep everyting
+                value.web = Some(web);  // Put back as is
+            }
+            new_app_map.insert(nom_app, value);
+        }
+
+        // Re-assign filtered map
+        if ! new_app_map.is_empty() {
+            row.applications = new_app_map;
+        app_list.push(row);
+        }
+    }
+
+    let liste = ReponseListeApplicationsDeployeesV2 {
+        ok: true,
+        results: app_list,
     };
 
     debug!("liste_userapps_deployees Responding application list: {:?}", serde_json::to_string(&liste));

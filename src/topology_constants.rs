@@ -38,6 +38,7 @@ pub const NOM_Q_TRIGGERS: &str = "CoreTopologie/triggers";
 
 pub const REQUETE_APPLICATIONS_DEPLOYEES: &str = "listeApplicationsDeployees";
 pub const REQUETE_USERAPPS_DEPLOYEES: &str = "listeUserappsDeployees";
+pub const REQUETE_USERAPPS_DEPLOYEES_V2: &str = "listeUserappsDeployeesV2";
 
 pub const REQUETE_LISTE_DOMAINES: &str = "listeDomaines";
 pub const REQUETE_LISTE_NOEUDS: &str = "listeNoeuds";
