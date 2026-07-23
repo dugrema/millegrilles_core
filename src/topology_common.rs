@@ -9,7 +9,7 @@ use millegrilles_common_rust::mongo_dao::{convertir_to_bson, MongoDao};
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::error::Error;
-use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, DOMAINE_RELAIWEB};
+use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, DOMAINE_RELAIWEB, SECURITE_2_PRIVE};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::{millegrilles_cryptographie, serde_json};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
@@ -17,7 +17,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{Mes
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::reqwest::Url;
 use crate::topology_constants::*;
-use crate::topology_structs::{ApplicationsV2, FichePublique, InformationApplicationInstance, InformationInstance, JwtHebergement, ReponseRelaiWeb, ReponseUrlEtag, RequeteRelaiWeb, ManagerStatusV2, ApplicationStatusV2};
+use crate::topology_structs::{ApplicationsV2, FichePublique, InformationApplicationInstance, InformationInstance, JwtHebergement, ReponseRelaiWeb, ReponseUrlEtag, RequeteRelaiWeb, ManagerStatusV2, ApplicationStatusV2, WebItem};
 
 pub async fn maj_fiche_publique<M>(middleware: &M, fiche: &FichePublique, etag: Option<ReponseUrlEtag>) -> Result<(), Error>
 where M: MongoDao
@@ -327,17 +327,42 @@ where M: MongoDao + ValidateurX509 + CleChiffrageHandler
         let app_status = app_cursor.deserialize_current()?;
 
         for (app_name, app_info) in app_status.applications {
-            let supporte_usager = if app_info.portal.is_some() { Some(true) } else { None };
+            // Web application filtering (remove back-end and admin apps)
+            let web_apps: Vec<WebItem> = match app_info.web {
+                Some(web_apps) => {
+                    let mut non_admin_web_apps = Vec::new();
+                    for web_app in web_apps {
+                        // Keep non-admin apps only (this is a public card)
+                        if ! web_app.admin.unwrap_or(false) {
+                            non_admin_web_apps.push(web_app);
+                        }
+                    }
+                    non_admin_web_apps
+                }
+                None => {
+                    continue;  // Not a web exposed application
+                }
+            };
+
+            if web_apps.is_empty() {
+                continue;  // No remaining exposed endpoints
+            }
+
+            let is_api = web_apps.iter().any(|item| item.api == Some(true));
+            let securite = app_info.securite.unwrap_or_else(||SECURITE_2_PRIVE.to_string());  // Default to 2.prive
+
+            // let supporte_usager = if app_info.portal.is_some() { Some(true) } else { None };
             let app_v2 = applications_v2.entry(app_name.clone()).or_insert_with(|| ApplicationsV2 {
                 instances: HashMap::new(),
                 name: Some(app_info.labels.clone()),
-                securite: app_status.securite.clone(),
-                supporte_usager,
+                securite,
+                supporte_usager: Some(!is_api),
             });
 
             let appv2_info = InformationApplicationInstance {
                 pathname: app_info.path.unwrap_or_else(|| format!("/{}", app_name)),
-                port: app_info.portal.and_then(|p| p.first().and_then(|i| i.port)),
+                // port: app_info.web.and_then(|p| p.first().and_then(|i| i.port)),
+                port: web_apps.first().and_then(|i| i.port),
                 version: app_info.version,
             };
 

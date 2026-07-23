@@ -316,20 +316,22 @@ pub struct ManagerStatusV2 {
 type ApplicationLabels = HashMap<String, String>;
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct PortalItem {
+pub struct WebItem {
     pub admin: Option<bool>,
     pub port: Option<u16>,
     pub path: Option<String>,
     pub labels: Option<ApplicationLabels>,
+    pub api: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApplicationInfo {
     pub name: String,
     pub version: String,
+    pub securite: Option<String>,
     pub labels: ApplicationLabels,
     pub path: Option<String>,
-    pub portal: Option<Vec<PortalItem>>,
+    pub web: Option<Vec<WebItem>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
