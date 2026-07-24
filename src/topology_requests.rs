@@ -26,8 +26,8 @@ use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use crate::topology_commands::FuuidVisitResponseItem;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
-use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceWebApplication};
-use crate::topology_structs::{ApplicationPublique, ApplicationStatusV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, WebItem};
+// use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceWebApplication};
+use crate::topology_structs::{ApplicationPublique, ApplicationStatusV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, ManagerStatusV2, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, WebItem};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -108,6 +108,7 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                         REQUETE_LISTE_DOMAINES => liste_domaines(middleware, m).await,
                         // REQUETE_LISTE_NOEUDS => liste_noeuds(middleware, m).await,
                         REQUEST_SERVER_INSTANCES => request_server_instances(middleware, m).await,
+                        REQUEST_SERVER_INSTANCES_V2 => request_server_instances_v2(middleware, m).await,
                         REQUEST_SERVER_INSTANCE_APPLICATIONS => request_server_instance_applications(middleware, m).await,
                         REQUEST_SERVER_INSTANCE_CONFIGURATION => request_server_instance_configuration(middleware, m).await,
                         REQUEST_FILEHOSTS_FOR_FUUIDS => request_filehosts_for_fuuids(middleware, m).await,
@@ -988,6 +989,48 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(middleware.build_reponse(response)?.0))
 }
 
+#[derive(Serialize)]
+struct RequestServerInstancesResponseV2 {
+    ok: bool,
+    results: Vec<ManagerStatusV2>,
+}
+
+async fn request_server_instances_v2<M>(middleware: &M, message: MessageValide)
+                                     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    if message.certificat.verifier_exchanges(vec!(Securite::L3Protege))? {
+        // Ok
+    } else if message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        // Ok
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access refused"))?))
+    }
+
+    let message_instance_id: MessageInstanceId = deser_message_buffer!(message.message);
+
+    let mut curseur = {
+        let filtre = match message_instance_id.instance_id.as_ref() {
+            Some(inner) => doc!{"instance_id": inner},
+            None => doc!{}
+        };
+        let collection = middleware.get_collection_typed::<ManagerStatusV2>(NOM_COLLECTION_INSTANCE_STATUS_V2)?;
+        match collection.find(filtre, None).await {
+            Ok(c) => c,
+            Err(e) => Err(format!("request_server_instances Error reading database : {:?}", e))?
+        }
+    };
+
+    let mut results = Vec::new();
+    while curseur.advance().await? {
+        let row = curseur.deserialize_current()?;
+        results.push(row);
+    }
+
+    let response = RequestServerInstancesResponseV2 {ok: true, results};
+    Ok(Some(middleware.build_reponse(response)?.0))
+}
+
 #[derive(Deserialize)]
 struct RequeteGetCleidBackupDomaine {
     domaine: String,
@@ -1365,120 +1408,122 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(middleware.build_reponse(response)?.0))
 }
 
-#[derive(Deserialize)]
-struct RequestServerInstanceApplications {instance_id: String}
+// #[derive(Deserialize)]
+// struct RequestServerInstanceApplications {instance_id: String}
 
-#[derive(Serialize)]
-struct RequestServiceInstanceApplicationsResponse {
-    ok: bool,
-    instance_id: String,
-    containers: HashMap<String, PresenceInstanceContainerRow>,
-    services: HashMap<String, PresenceInstanceServiceRow>,
-    webapps: Vec<PresenceInstanceWebApplication>,
-    configured_applications: Vec<PresenceInstanceConfiguredApplications>,
-}
+// #[derive(Serialize)]
+// struct RequestServiceInstanceApplicationsResponse {
+//     ok: bool,
+//     instance_id: String,
+//     containers: HashMap<String, PresenceInstanceContainerRow>,
+//     services: HashMap<String, PresenceInstanceServiceRow>,
+//     webapps: Vec<PresenceInstanceWebApplication>,
+//     configured_applications: Vec<PresenceInstanceConfiguredApplications>,
+// }
 
-#[derive(Serialize, Deserialize)]
-struct PresenceInstanceContainerRow {
-    instance_id: String,
-    service_name: String,
-    creation: String,
-    dead: Option<bool>,
-    etat: Option<String>,
-    finished_at: Option<String>,
-    labels: Option<HashMap<String, String>>,
-    restart_count: u32,
-    running: bool,
-}
+// #[derive(Serialize, Deserialize)]
+// struct PresenceInstanceContainerRow {
+//     instance_id: String,
+//     service_name: String,
+//     creation: String,
+//     dead: Option<bool>,
+//     etat: Option<String>,
+//     finished_at: Option<String>,
+//     labels: Option<HashMap<String, String>>,
+//     restart_count: u32,
+//     running: bool,
+// }
 
-#[derive(Serialize, Deserialize)]
-struct PresenceInstanceServiceRow {
-    instance_id: String,
-    service_name: String,
-    creation_service: String,
-    etat: Option<String>,
-    image: String,
-    labels: Option<HashMap<String, String>>,
-    maj_service: Option<String>,
-    message_tache: Option<String>,
-    replicas: Option<u32>,
-    version: Option<String>
-}
+// #[derive(Serialize, Deserialize)]
+// struct PresenceInstanceServiceRow {
+//     instance_id: String,
+//     service_name: String,
+//     creation_service: String,
+//     etat: Option<String>,
+//     image: String,
+//     labels: Option<HashMap<String, String>>,
+//     maj_service: Option<String>,
+//     message_tache: Option<String>,
+//     replicas: Option<u32>,
+//     version: Option<String>
+// }
 
-async fn request_server_instance_applications<M>(middleware: &M, message: MessageValide)
+async fn request_server_instance_applications<M>(middleware: &M, _message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
     where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    if message.certificat.verifier_exchanges(vec!(Securite::L3Protege))? {
-        // Ok
-    } else if message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
-        // Ok
-    } else {
-        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access refused"))?))
-    }
-
-    let request: RequestServerInstanceApplications = deser_message_buffer!(message.message);
-
-    let configured_applications = {
-        let filtre = doc!{"instance_id": &request.instance_id};
-        let collection =
-            middleware.get_collection_typed::<PresenceInstanceConfiguredApplications>(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS)?;
-        let mut configured_applications = Vec::new();
-        let mut cursor = collection.find(filtre, None).await?;
-        while cursor.advance().await? {
-            configured_applications.push(cursor.deserialize_current()?);
-        }
-        configured_applications
-    };
-
-    let services = {
-        let filtre = doc!{"instance_id": &request.instance_id};
-        let collection =
-            middleware.get_collection_typed::<PresenceInstanceServiceRow>(NOM_COLLECTION_INSTANCE_SERVICES)?;
-        let mut services = HashMap::new();
-        let mut cursor = collection.find(filtre, None).await?;
-        while cursor.advance().await? {
-            let row = cursor.deserialize_current()?;
-            services.insert(row.service_name.clone(), row);
-        }
-        services
-    };
-
-    let containers = {
-        let filtre = doc!{"instance_id": &request.instance_id};
-        let collection =
-            middleware.get_collection_typed::<PresenceInstanceContainerRow>(NOM_COLLECTION_INSTANCE_CONTAINERS)?;
-        let mut containers = HashMap::new();
-        let mut cursor = collection.find(filtre, None).await?;
-        while cursor.advance().await? {
-            let row = cursor.deserialize_current()?;
-            containers.insert(row.service_name.clone(), row);
-        }
-        containers
-    };
-
-    let webapps = {
-        let filtre = doc!{"instance_id": &request.instance_id};
-        let collection =
-            middleware.get_collection_typed::<PresenceInstanceWebApplication>(NOM_COLLECTION_INSTANCE_WEBAPPS)?;
-        let mut webapps = Vec::new();
-        let mut cursor = collection.find(filtre, None).await?;
-        while cursor.advance().await? {
-            let row = cursor.deserialize_current()?;
-            webapps.push(row);
-        }
-        webapps
-    };
-
-    let response = RequestServiceInstanceApplicationsResponse {
-        ok: true,
-        instance_id: request.instance_id,
-        containers,
-        services,
-        webapps,
-        configured_applications,
-    };
-    Ok(Some(middleware.build_reponse(response)?.0))
+    Ok(Some(middleware.reponse_err(Some(500), None, Some("Obsolete"))?))
+    //
+    // if message.certificat.verifier_exchanges(vec!(Securite::L3Protege))? {
+    //     // Ok
+    // } else if message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+    //     // Ok
+    // } else {
+    //     return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access refused"))?))
+    // }
+    //
+    // let request: RequestServerInstanceApplications = deser_message_buffer!(message.message);
+    //
+    // let configured_applications = {
+    //     let filtre = doc!{"instance_id": &request.instance_id};
+    //     let collection =
+    //         middleware.get_collection_typed::<PresenceInstanceConfiguredApplications>(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS)?;
+    //     let mut configured_applications = Vec::new();
+    //     let mut cursor = collection.find(filtre, None).await?;
+    //     while cursor.advance().await? {
+    //         configured_applications.push(cursor.deserialize_current()?);
+    //     }
+    //     configured_applications
+    // };
+    //
+    // let services = {
+    //     let filtre = doc!{"instance_id": &request.instance_id};
+    //     let collection =
+    //         middleware.get_collection_typed::<PresenceInstanceServiceRow>(NOM_COLLECTION_INSTANCE_SERVICES)?;
+    //     let mut services = HashMap::new();
+    //     let mut cursor = collection.find(filtre, None).await?;
+    //     while cursor.advance().await? {
+    //         let row = cursor.deserialize_current()?;
+    //         services.insert(row.service_name.clone(), row);
+    //     }
+    //     services
+    // };
+    //
+    // let containers = {
+    //     let filtre = doc!{"instance_id": &request.instance_id};
+    //     let collection =
+    //         middleware.get_collection_typed::<PresenceInstanceContainerRow>(NOM_COLLECTION_INSTANCE_CONTAINERS)?;
+    //     let mut containers = HashMap::new();
+    //     let mut cursor = collection.find(filtre, None).await?;
+    //     while cursor.advance().await? {
+    //         let row = cursor.deserialize_current()?;
+    //         containers.insert(row.service_name.clone(), row);
+    //     }
+    //     containers
+    // };
+    //
+    // let webapps = {
+    //     let filtre = doc!{"instance_id": &request.instance_id};
+    //     let collection =
+    //         middleware.get_collection_typed::<PresenceInstanceWebApplication>(NOM_COLLECTION_INSTANCE_WEBAPPS)?;
+    //     let mut webapps = Vec::new();
+    //     let mut cursor = collection.find(filtre, None).await?;
+    //     while cursor.advance().await? {
+    //         let row = cursor.deserialize_current()?;
+    //         webapps.push(row);
+    //     }
+    //     webapps
+    // };
+    //
+    // let response = RequestServiceInstanceApplicationsResponse {
+    //     ok: true,
+    //     instance_id: request.instance_id,
+    //     containers,
+    //     services,
+    //     webapps,
+    //     configured_applications,
+    // };
+    // Ok(Some(middleware.build_reponse(response)?.0))
 }
 
 #[derive(Deserialize)]

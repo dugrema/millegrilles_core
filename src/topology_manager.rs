@@ -123,6 +123,7 @@ pub fn preparer_queues(_manager: &TopologyManager) -> Vec<QueueType> {
     let requetes_protegees = vec![
         REQUETE_LISTE_DOMAINES,
         REQUEST_SERVER_INSTANCES,
+        REQUEST_SERVER_INSTANCES_V2,
         REQUEST_SERVER_INSTANCE_APPLICATIONS,
         REQUEST_SERVER_INSTANCE_CONFIGURATION,
         REQUETE_CONFIGURATION_FICHIERS,
