@@ -42,6 +42,7 @@ where
         TRANSACTION_SET_FILEHOST_FOR_INSTANCE => transaction_set_filehost_instance(middleware, transaction, session).await,
         // TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_transaction_supprimer_consignation(middleware, transaction).await,
         TRANSACTION_FILEHOST_ADD => filehost_add(middleware, transaction, session).await,
+        TRANSACTION_FILEHOST_ADD_V2 => filehost_add_v2(middleware, transaction, session).await,
         TRANSACTION_FILEHOST_UPDATE => filehost_update(middleware, transaction, session).await,
         TRANSACTION_FILEHOST_DELETE => filehost_delete(middleware, transaction, session).await,
         TRANSACTION_FILEHOST_RESTORE => filehost_restore(middleware, transaction, session).await,
@@ -375,6 +376,13 @@ pub struct FilehostAddTransaction {
 }
 
 #[derive(Deserialize)]
+pub struct FilehostAddTransactionV2 {
+    pub instance_id: Option<String>,
+    pub tls_external: Option<String>,
+    pub url_external: Option<String>,
+}
+
+#[derive(Deserialize)]
 pub struct FilehostUpdateTransaction {
     pub filehost_id: String,
     pub instance_id: Option<String>,
@@ -444,6 +452,44 @@ where M: GenerateurMessages + MongoDao
         "$currentDate": {"modified": true},
     };
     
+    let filtre = doc! {"filehost_id": &transaction_id};
+    let options = UpdateOptions::builder().upsert(true).build();
+    collection.update_one(filtre, ops, options).await?;
+
+    let response = HostfileAddTransactionResponse {ok: true, filehost_id: transaction_id.clone()};
+    let response = middleware.build_reponse(response)?.0;
+    Ok(Some(response))
+}
+
+
+async fn filehost_add_v2<M>(middleware: &M, transaction: TransactionValide, _session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao
+{
+    let doc_transaction: FilehostAddTransactionV2 = serde_json::from_str(transaction.transaction.contenu.as_str())?;
+    let transaction_id = &transaction.transaction.id;
+
+    let collection = middleware.get_collection(NOM_COLLECTION_FILEHOSTS)?;
+    let now = Utc::now();
+
+    let set_ops = doc! {
+        "instance_id": doc_transaction.instance_id,
+        "url_external": doc_transaction.url_external,
+        "tls_external": doc_transaction.tls_external,
+    };
+    let set_on_insert = doc! {
+        "deleted": false,
+        "sync_active": true,
+        "created": now.clone(),
+        "fuuid": None::<&str>,
+    };
+
+    let ops = doc! {
+        "$set": set_ops,
+        "$setOnInsert": set_on_insert,
+        "$currentDate": {"modified": true},
+    };
+
     let filtre = doc! {"filehost_id": &transaction_id};
     let options = UpdateOptions::builder().upsert(true).build();
     collection.update_one(filtre, ops, options).await?;

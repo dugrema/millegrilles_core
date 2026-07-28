@@ -51,13 +51,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 
     let result = match action.as_str() {
         EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m, gestionnaire).await,
-        // EVENEMENT_PRESENCE_MONITOR | EVENEMENT_PRESENCE_FICHIERS => {
-        //     match domaine.as_str() {
-        //         // DOMAINE_FICHIERS => traiter_presence_fichiers(middleware, m, gestionnaire).await,
-        //         DOMAINE_APPLICATION_INSTANCE => traiter_presence_monitor(middleware, m, gestionnaire).await,
-        //         _ => Err(format!("Mauvais domaine ({}) pour un evenement de presence", domaine))?,
-        //     }
-        // },
         EVENEMENT_PRESENCE_INSTANCE => process_presence_instance(middleware, m, &mut session).await,
         EVENEMENT_PRESENCE_INSTANCE_V2 => process_presence_instance_v2(middleware, m, &mut session).await,
         EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS => process_presence_instance_applications(middleware, m, &mut session).await,

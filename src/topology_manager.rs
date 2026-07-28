@@ -191,6 +191,7 @@ pub fn preparer_queues(_manager: &TopologyManager) -> Vec<QueueType> {
 
     let commandes_publiques: Vec<&str> = vec![
         TRANSACTION_FILEHOST_ADD,
+        TRANSACTION_FILEHOST_ADD_V2,
         TRANSACTION_FILEHOST_UPDATE,
         TRANSACTION_FILEHOST_DELETE,
         COMMANDE_FILE_VISIT,

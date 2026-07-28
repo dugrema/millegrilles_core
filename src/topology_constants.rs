@@ -71,6 +71,7 @@ pub const TRANSACTION_CONFIGURER_CONSIGNATION: &str = "configurerConsignation";
 pub const TRANSACTION_SET_FILEHOST_FOR_INSTANCE: &str = "setFilehostForInstance";
 pub const TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE: &str = "supprimerConsignation";
 pub const TRANSACTION_FILEHOST_ADD: &str = "filehostAdd";
+pub const TRANSACTION_FILEHOST_ADD_V2: &str = "filehostAddV2";
 pub const TRANSACTION_FILEHOST_UPDATE: &str = "filehostUpdate";
 pub const TRANSACTION_FILEHOST_DELETE: &str = "filehostDelete";
 pub const TRANSACTION_FILEHOST_RESTORE: &str = "filehostRestore";

@@ -7,7 +7,7 @@ use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
 use crate::topology_structs::{FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, RowFilehostFuuid, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
 
-use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction, TransactionFilehostSetDefault};
+use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction, TransactionFilehostSetDefault, FilehostAddTransactionV2};
 
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
@@ -55,14 +55,13 @@ where M: Middleware
         TRANSACTION_SUPPRIMER_INSTANCE => traiter_commande_supprimer_instance(middleware, m, gestionnaire, &mut session).await,
         TRANSACTION_CONFIGURER_CONSIGNATION => traiter_commande_configurer_consignation(middleware, m, gestionnaire, &mut session).await,
         TRANSACTION_SET_FICHIERS_PRIMAIRE => traiter_commande_set_fichiers_primaire(middleware, m, gestionnaire, &mut session).await,
-        // TRANSACTION_SET_CONSIGNATION_INSTANCE => traiter_commande_set_consignation_instance(middleware, m, gestionnaire).await,
         TRANSACTION_SET_FILEHOST_FOR_INSTANCE => traiter_commande_set_filehost_for_instance(middleware, m, gestionnaire, &mut session).await,
         TRANSACTION_SUPPRIMER_CONSIGNATION_INSTANCE => traiter_commande_supprimer_consignation_instance(middleware, m, gestionnaire, &mut session).await,
         TRANSACTION_FILEHOST_ADD => command_filehost_add(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_FILEHOST_ADD_V2 => command_filehost_add_v2(middleware, m, gestionnaire, &mut session).await,
         TRANSACTION_FILEHOST_UPDATE => command_filehost_update(middleware, m, gestionnaire, &mut session).await,
         TRANSACTION_FILEHOST_DELETE => command_filehost_delete(middleware, m, gestionnaire, &mut session).await,
         TRANSACTION_FILEHOST_DEFAULT => command_filehost_set_default(middleware, m, gestionnaire, &mut session).await,
-        // COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE => commande_ajouter_consignation_hebergee(middleware, m, gestionnaire).await,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire, &mut session).await,
         COMMANDE_FILE_VISIT => command_file_visit(middleware, m, gestionnaire, &mut session).await,
         COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS => commande_claim_and_filehost_visits(middleware, m, &mut session).await,
@@ -499,6 +498,80 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
             // Ensure that no file host exists for the instance_id of the file controler.
             let certificate = m.certificat.as_ref();
             let instance_id = certificate.get_common_name()?;
+            let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+            let filtre = doc!{"instance_id": instance_id};
+            match collection.find_one_with_session(filtre, None, session).await? {
+                Some(inner) => {
+                    // Exists, check if restore (when deleted) or conflict
+                    return check_restore_existing_filehost(middleware, gestionnaire, &message_id, inner, session).await
+                },
+                None => ()  // Ok, this is a new filehost
+            }
+        } else {
+            return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+        }
+    } else if certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        if let Some(url_external) = commande.url_external.as_ref() {
+            // Admin adding an external file host.
+            // Ensure no file host exists for this url.
+            let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+            let filtre = doc!{"url_external": url_external};
+            match collection.find_one_with_session(filtre, None, session).await? {
+                Some(inner) => {
+                    // Exists, check if restore (when deleted) or conflict
+                    return check_restore_existing_filehost(middleware, gestionnaire, &message_id, inner, session).await
+                }
+                None => ()  // Ok, this is a new filehost
+            }
+        } else {
+            return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+        }
+    } else {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied"))?))
+    }
+
+    let result = sauvegarder_traiter_transaction_v2(middleware, m, gestionnaire, session).await?;
+
+    // Check if we have a default filehost. If not, set this new filehost as default.
+    check_default_filehost(middleware, message_id.as_str(), session).await?;
+
+    // Load the new filehost, emit as event
+    let filtre = doc!{"filehost_id": &message_id};
+    let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+    match collection.find_one_with_session(filtre, None, session).await? {
+        Some(inner) => {
+            let routing = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, "filehostAdd", vec![Securite::L1Public])
+                .build();
+            let filehost_item: RequeteFilehostItem = inner.into();
+            middleware.emettre_evenement(routing, filehost_item).await?;
+            emit_filehost_event(middleware, &message_id, EVENEMENT_FILEHOST_EVENTNEW).await?;  // Simple event
+        }
+        None => {
+            warn!("command_filehost_add Transaction successful but no item in database for {}", message_id);
+        }
+    }
+
+    Ok(result)
+}
+
+async fn command_filehost_add_v2<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    debug!("command_filehost_add_v2 Message : {:?}", &m.type_message);
+    let (commande, message_id) = {
+        let message_ref = m.message.parse()?;
+        let message_contenu = message_ref.contenu()?;
+        let message_id = message_ref.id.to_owned();
+        let transaction: FilehostAddTransactionV2 = message_contenu.deserialize()?;
+        (transaction, message_id)
+    };
+
+    let certificat = m.certificat.as_ref();
+    if certificat.verifier_roles_string(vec!["filecontroler".to_string()])? && certificat.verifier_exchanges(vec![Securite::L1Public])?{
+        if let Some(instance_id) = commande.instance_id.as_ref() {
+            // This is a file controler trying to automatically add a local file host.
+            // Ensure that no file host exists (including deleted ones) for the instance_id that is being used.
             let collection = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
             let filtre = doc!{"instance_id": instance_id};
             match collection.find_one_with_session(filtre, None, session).await? {
