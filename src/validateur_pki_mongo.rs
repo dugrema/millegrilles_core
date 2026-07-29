@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use log::{debug, warn, error, info};
@@ -753,6 +753,10 @@ impl GenerateurMessages for MiddlewareDbPki {
     fn get_securite(&self) -> &Securite {
         self.ressources.generateur_messages.get_securite()
     }
+
+    fn is_dev(&self) -> bool {
+        self.ressources.generateur_messages.is_dev()
+    }
 }
 
 impl IsConfigurationPki for MiddlewareDbPki {
@@ -780,6 +784,10 @@ impl MongoDao for MiddlewareDbPki {
 
     fn get_db_name(&self) -> &str {
         self.mongo.get_db_name()
+    }
+
+    fn get_path_backup(&self) -> &PathBuf {
+        self.mongo.get_path_backup()
     }
 
     async fn get_session(&self) -> Result<ClientSession, CommonError> {

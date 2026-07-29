@@ -8,7 +8,7 @@ use millegrilles_common_rust::async_trait::async_trait;
 use millegrilles_common_rust::backup::BackupStarter;
 use millegrilles_common_rust::certificats::ValidateurX509;
 use millegrilles_common_rust::configuration::ConfigMessages;
-use millegrilles_common_rust::constantes::{Securite, BACKUP_EVENEMENT_MAJ, EVENEMENT_PRESENCE_DOMAINE, REQUETE_GET_FILEHOST_FOR_INSTANCE, TRANSACTION_CHAMP_IDMG};
+use millegrilles_common_rust::constantes::{Securite, BACKUP_EVENEMENT_MAJ, EVENEMENT_PRESENCE_DOMAINE, REQUETE_GET_FILEHOST_FOR_INSTANCE, TRANSACTION_CHAMP_IDMG, REQUETE_FICHE_MILLEGRILLE};
 use millegrilles_common_rust::db_structs::TransactionValide;
 use millegrilles_common_rust::domaines_traits::{AiguillageTransactions, ConsommateurMessagesBus, GestionnaireBusMillegrilles, GestionnaireDomaineV2};
 use millegrilles_common_rust::domaines_v2::{prepare_mongodb_domain_indexes, GestionnaireDomaineSimple};

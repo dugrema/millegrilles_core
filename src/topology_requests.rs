@@ -22,12 +22,13 @@ use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::opti
 use millegrilles_common_rust::mongo_dao::opt_chrono_datetime_as_bson_datetime;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::common_messages::FilehostForInstanceRequest;
+use millegrilles_common_rust::fiche_systeme::{FichePublique, RequeteFicheMillegrille};
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use crate::topology_commands::FuuidVisitResponseItem;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 // use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceWebApplication};
-use crate::topology_structs::{ApplicationPublique, ApplicationStatusV2, FichePublique, FilehostServerRow, FilehostingCongurationRow, ManagerStatusV2, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, WebItem};
+use crate::topology_structs::{ApplicationPublique, ApplicationStatusV2, FilehostServerRow, FilehostingCongurationRow, ManagerStatusV2, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, WebItem};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -135,10 +136,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct RequeteFicheMillegrille {
-    idmg: String,
-}
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// struct RequeteFicheMillegrille {
+//     idmg: String,
+// }
 
 async fn requete_fiche_millegrille<M>(middleware: &M, message: MessageValide)
                                       -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -181,9 +182,6 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
                 .build();
             middleware.build_message_action(
                 millegrilles_cryptographie::messages_structs::MessageKind::Commande, routage, r)?.0
-            // middleware.formatter_message(
-            //     MessageKind::Commande, &r, Some(DOMAINE_TOPOLOGIE), Some("fichePublique"),
-            //     None::<&str>, None::<&str>,Some(1), true)
         }
         None => {
             // middleware.formatter_reponse(json!({"ok": false, "code": 404, "err": "Non trouve"}), None)

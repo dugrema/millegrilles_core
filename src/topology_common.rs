@@ -12,12 +12,13 @@ use millegrilles_common_rust::error::Error;
 use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, DOMAINE_RELAIWEB, SECURITE_2_PRIVE};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::{millegrilles_cryptographie, serde_json};
+use millegrilles_common_rust::fiche_systeme::{ApplicationsV2, FichePublique, InformationApplicationInstance, InformationInstance};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::reqwest::Url;
 use crate::topology_constants::*;
-use crate::topology_structs::{ApplicationsV2, FichePublique, InformationApplicationInstance, InformationInstance, JwtHebergement, ReponseRelaiWeb, ReponseUrlEtag, RequeteRelaiWeb, ManagerStatusV2, ApplicationStatusV2, WebItem};
+use crate::topology_structs::{JwtHebergement, ReponseRelaiWeb, ReponseUrlEtag, RequeteRelaiWeb, ManagerStatusV2, ApplicationStatusV2, WebItem};
 
 pub async fn maj_fiche_publique<M>(middleware: &M, fiche: &FichePublique, etag: Option<ReponseUrlEtag>) -> Result<(), Error>
 where M: MongoDao
