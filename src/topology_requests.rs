@@ -1225,19 +1225,6 @@ async fn request_filehost_for_instance<M>(middleware: &M, message: MessageValide
         }
     };
 
-    // let filehost_id = match filehost_id {
-    //     Some(inner) => Some(inner),  // Alrady got it
-    //     None => {
-    //         // Load the default filehost_id
-    //         let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
-    //         let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
-    //         match collection_configuration.find_one(filtre, None).await? {
-    //             Some(inner) => Some(inner.value),
-    //             None => None
-    //         }
-    //     }
-    // };
-
     let filtre = match filehost_id.as_ref() {
         Some(inner) => doc!{"filehost_id": inner, "deleted": false},
         None => doc!{"deleted": false, "external_url": {"$exists": true}}  // Pick random with external_url if any available
@@ -1263,71 +1250,73 @@ struct RequestFilehostForExternalResponse {
     tls_external: Option<String>,
 }
 
-async fn request_filehost_for_external<M>(middleware: &M, message: MessageValide)
+async fn request_filehost_for_external<M>(middleware: &M, _message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
 where M: ValidateurX509 + GenerateurMessages + MongoDao
 {
-    let message_ref = message.message.parse()?;
-    let message_contenu = message_ref.contenu()?;
-    let requete: FilehostForInstanceRequest = message_contenu.deserialize()?;
+    Ok(Some(middleware.reponse_err(Some(500), None, Some("obsolete"))?))
 
-    // Select the instance_id
-    let instance_id = requete.instance_id;
-
-    let collection_filehosts = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
-
-    // Identify the filehost_id from the instance_id if possible
-    let filehost_id = match requete.filehost_id {
-        Some(inner) => Some(inner),  // Filehost provided
-        None => match instance_id {
-            Some(instance_id) => {
-                // Check if instance configuration overrides with filehost_id
-                let collection_instances =
-                    middleware.get_collection_typed::<ServerInstanceConfigurationRow>(NOM_COLLECTION_INSTANCE_CONFIGURATION)?;
-                let filtre = doc! {"instance_id": &instance_id, "name": "filehost_id"};
-                match collection_instances.find_one(filtre, None).await? {
-                    Some(inner) => Some(inner.value),
-                    None => {
-                        // Check if there is a filehost directly on this instance
-                        let filtre_filehosts = doc! {"instance_id": &instance_id, "deleted": false};
-                        match collection_filehosts.find_one(filtre_filehosts, None).await? {
-                            Some(inner) => Some(inner.filehost_id),
-                            None => None
-                        }
-                    }
-                }
-            },
-            None => None
-        }
-    };
-
-    let filehost_id = match filehost_id {
-        Some(inner) => Some(inner),  // Alrady got it
-        None => {
-            // Load the default filehost_id
-            let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
-            let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
-            match collection_configuration.find_one(filtre, None).await? {
-                Some(inner) => Some(inner.value),
-                None => None
-            }
-        }
-    };
-
-    let filtre = match filehost_id.as_ref() {
-        Some(inner) => doc!{"filehost_id": inner, "external_url": {"$exists": true}, "deleted": false},
-        None => doc!{"deleted": false, "external_url": {"$exists": true}}  // Pick random with external_url if any available
-    };
-
-    match collection_filehosts.find_one(filtre, None).await? {
-        Some(inner) => {
-            let url_external = inner.url_external.expect("url_external");
-            Ok(Some(middleware.build_reponse(RequestFilehostForExternalResponse { ok: true, url_external, tls_external: inner.tls_external })?.0))
-        }
-        None => {
-            Ok(Some(middleware.reponse_err(Some(404), None, Some("no filehost available"))?))
-        }
-    }
+    // let message_ref = message.message.parse()?;
+    // let message_contenu = message_ref.contenu()?;
+    // let requete: FilehostForInstanceRequest = message_contenu.deserialize()?;
+    //
+    // // Select the instance_id
+    // let instance_id = requete.instance_id;
+    //
+    // let collection_filehosts = middleware.get_collection_typed::<FilehostServerRow>(NOM_COLLECTION_FILEHOSTS)?;
+    //
+    // // Identify the filehost_id from the instance_id if possible
+    // let filehost_id = match requete.filehost_id {
+    //     Some(inner) => Some(inner),  // Filehost provided
+    //     None => match instance_id {
+    //         Some(instance_id) => {
+    //             // Check if instance configuration overrides with filehost_id
+    //             let collection_instances =
+    //                 middleware.get_collection_typed::<ServerInstanceConfigurationRow>(NOM_COLLECTION_INSTANCE_CONFIGURATION)?;
+    //             let filtre = doc! {"instance_id": &instance_id, "name": "filehost_id"};
+    //             match collection_instances.find_one(filtre, None).await? {
+    //                 Some(inner) => Some(inner.value),
+    //                 None => {
+    //                     // Check if there is a filehost directly on this instance
+    //                     let filtre_filehosts = doc! {"instance_id": &instance_id, "deleted": false};
+    //                     match collection_filehosts.find_one(filtre_filehosts, None).await? {
+    //                         Some(inner) => Some(inner.filehost_id),
+    //                         None => None
+    //                     }
+    //                 }
+    //             }
+    //         },
+    //         None => None
+    //     }
+    // };
+    //
+    // let filehost_id = match filehost_id {
+    //     Some(inner) => Some(inner),  // Alrady got it
+    //     None => {
+    //         // Load the default filehost_id
+    //         let collection_configuration = middleware.get_collection_typed::<FilehostingCongurationRow>(NOM_COLLECTION_FILEHOSTINGCONFIGURATION)?;
+    //         let filtre = doc!{"name": FIELD_CONFIGURATION_FILEHOST_DEFAULT};
+    //         match collection_configuration.find_one(filtre, None).await? {
+    //             Some(inner) => Some(inner.value),
+    //             None => None
+    //         }
+    //     }
+    // };
+    //
+    // let filtre = match filehost_id.as_ref() {
+    //     Some(inner) => doc!{"filehost_id": inner, "external_url": {"$exists": true}, "deleted": false},
+    //     None => doc!{"deleted": false, "external_url": {"$exists": true}}  // Pick random with external_url if any available
+    // };
+    //
+    // match collection_filehosts.find_one(filtre, None).await? {
+    //     Some(inner) => {
+    //         let url_external = inner.url_external.expect("url_external");
+    //         Ok(Some(middleware.build_reponse(RequestFilehostForExternalResponse { ok: true, url_external, tls_external: inner.tls_external })?.0))
+    //     }
+    //     None => {
+    //         Ok(Some(middleware.reponse_err(Some(404), None, Some("no filehost available"))?))
+    //     }
+    // }
 }
 
 // #[derive(Deserialize)]
