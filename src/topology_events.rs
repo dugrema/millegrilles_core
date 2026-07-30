@@ -51,9 +51,9 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + CleChiffrageHandler
 
     let result = match action.as_str() {
         EVENEMENT_PRESENCE_DOMAINE => traiter_presence_domaine(middleware, m, gestionnaire).await,
-        EVENEMENT_PRESENCE_INSTANCE => process_presence_instance(middleware, m, &mut session).await,
+        // EVENEMENT_PRESENCE_INSTANCE => process_presence_instance(middleware, m, &mut session).await,
         EVENEMENT_PRESENCE_INSTANCE_V2 => process_presence_instance_v2(middleware, m, &mut session).await,
-        EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS => process_presence_instance_applications(middleware, m, &mut session).await,
+        // EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS => process_presence_instance_applications(middleware, m, &mut session).await,
         EVENEMENT_PRESENCE_INSTANCE_APPLICATIONS_V2 => process_presence_instance_applications_v2(middleware, m, &mut session).await,
         EVENEMENT_APPLICATION_DEMARREE | EVENEMENT_APPLICATION_ARRETEE => traiter_evenement_application(middleware, m).await,
         EVENEMENT_FILEHOST_USAGE => traiter_evenement_filehost_usage(middleware, m, &mut session).await,
@@ -349,41 +349,41 @@ struct PresenceInstanceEvent {
     status: PresenceInstanceStatus,
 }
 
-async fn process_presence_instance<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-    where M: MongoDao
-{
-    let message_ref = message.message.parse()?;
-    let event: PresenceInstanceEvent = message_ref.contenu()?.deserialize()?;
-
-    if ! message.certificat.verifier_roles(vec![RolesCertificats::Instance])? {
-        info!("process_presence_instance Rejecting message not from an instance");
-        return Ok(None)
-    }
-
-    let instance_id = message.certificat.get_common_name()?;
-    let timestamp = message_ref.estampille;
-
-    let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS)?;
-
-    let filtre = doc! {"instance_id": instance_id};
-
-    let mut set_ops = convertir_to_bson(event.status)?;
-    set_ops.insert("timestamp", timestamp);
-
-    let ops = doc! {
-        "$set": set_ops,
-        "$setOnInsert": {
-            CHAMP_CREATION: timestamp,
-            "supprime": false,
-        },
-        "$currentDate": {CHAMP_MODIFICATION: true}
-    };
-    let options = UpdateOptions::builder().upsert(true).build();
-    collection.update_one_with_session(filtre, ops, options, session).await?;
-
-    Ok(None)
-}
+// async fn process_presence_instance<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
+//     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+//     where M: MongoDao
+// {
+//     let message_ref = message.message.parse()?;
+//     let event: PresenceInstanceEvent = message_ref.contenu()?.deserialize()?;
+//
+//     if ! message.certificat.verifier_roles(vec![RolesCertificats::Instance])? {
+//         info!("process_presence_instance Rejecting message not from an instance");
+//         return Ok(None)
+//     }
+//
+//     let instance_id = message.certificat.get_common_name()?;
+//     let timestamp = message_ref.estampille;
+//
+//     let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS)?;
+//
+//     let filtre = doc! {"instance_id": instance_id};
+//
+//     let mut set_ops = convertir_to_bson(event.status)?;
+//     set_ops.insert("timestamp", timestamp);
+//
+//     let ops = doc! {
+//         "$set": set_ops,
+//         "$setOnInsert": {
+//             CHAMP_CREATION: timestamp,
+//             "supprime": false,
+//         },
+//         "$currentDate": {CHAMP_MODIFICATION: true}
+//     };
+//     let options = UpdateOptions::builder().upsert(true).build();
+//     collection.update_one_with_session(filtre, ops, options, session).await?;
+//
+//     Ok(None)
+// }
 
 #[derive(Serialize, Deserialize)]
 struct PresenceInstanceEventV2 {
@@ -514,121 +514,121 @@ struct PresenceInstanceApplicationsEvent {
     configured_applications: Vec<PresenceInstanceConfiguredApplications>,
 }
 
-async fn process_presence_instance_applications<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
-    -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
-    where M: MongoDao
-{
-    let message_ref = message.message.parse()?;
-    let event: PresenceInstanceApplicationsEvent = message_ref.contenu()?.deserialize()?;
-
-    if ! message.certificat.verifier_roles(vec![RolesCertificats::Instance])? {
-        info!("process_presence_instance Rejecting message not from an instance");
-        return Ok(None)
-    }
-
-    let instance_id = message.certificat.get_common_name()?;
-    let timestamp = &message_ref.estampille;
-
-    {
-        let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_CONTAINERS)?;
-        let mut names = Vec::new();
-        for (name, status) in event.containers {
-            let service_name = match status.service_name() {
-                Some(inner) => inner,
-                None => name.as_str()
-            };
-            names.push(service_name.to_string());
-            let filtre = doc!{"instance_id": &instance_id, "service_name": &service_name};
-            let mut set_ops = convertir_to_bson(status)?;
-            set_ops.insert("timestamp", timestamp);
-            let ops = doc! {
-                "$set": set_ops,
-                "$setOnInsert": {CHAMP_CREATION: timestamp},
-                "$currentDate": {CHAMP_MODIFICATION: true},
-            };
-            let options = UpdateOptions::builder().upsert(true).build();
-            collection.update_one_with_session(filtre, ops, options, session).await?;
-        }
-
-        if event.complete {
-            let filtre = doc!{"instance_id": &instance_id, "service_name": {"$not": {"$in": names}}};
-            collection.delete_many_with_session(filtre, None, session).await?;
-        }
-    }
-
-    {
-        let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_SERVICES)?;
-        let mut names = Vec::new();
-        for (service_name, status) in event.services {
-            names.push(service_name.clone());
-            let filtre = doc!{"instance_id": &instance_id, "service_name": &service_name};
-            let mut set_ops = convertir_to_bson(status)?;
-            set_ops.insert("timestamp", timestamp);
-            let ops = doc! {
-                "$set": set_ops,
-                "$setOnInsert": {CHAMP_CREATION: timestamp},
-                "$currentDate": {CHAMP_MODIFICATION: true},
-            };
-            let options = UpdateOptions::builder().upsert(true).build();
-            collection.update_one_with_session(filtre, ops, options, session).await?;
-        }
-
-        if event.complete {
-            let filtre = doc!{"instance_id": &instance_id, "service_name": {"$not": {"$in": names}}};
-            collection.delete_many_with_session(filtre, None, session).await?;
-        }
-    }
-
-    {
-        let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_WEBAPPS)?;
-        let mut names = Vec::new();
-        let mut urls = Vec::new();
-        for webapp in event.webapps {
-            names.push(webapp.name.clone());
-            urls.push(webapp.url.clone());
-            let filtre = doc!{"instance_id": &instance_id, "app_name": &webapp.name, "url": &webapp.url};
-            let mut set_ops = convertir_to_bson(webapp)?;
-            set_ops.insert("timestamp", timestamp);
-            let ops = doc! {
-                "$set": set_ops,
-                "$setOnInsert": {CHAMP_CREATION: timestamp},
-                "$currentDate": {CHAMP_MODIFICATION: true},
-            };
-            let options = UpdateOptions::builder().upsert(true).build();
-            collection.update_one_with_session(filtre, ops, options, session).await?;
-        }
-
-        if event.complete {
-            let filtre = doc!{"instance_id": &instance_id, "app_name": {"$not": {"$in": names}}, "url": {"$not": {"$in": urls}}};
-            collection.delete_many_with_session(filtre, None, session).await?;
-        }
-    }
-
-    {
-        let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS)?;
-        let mut names = Vec::new();
-        for webapp in event.configured_applications {
-            names.push(webapp.name.clone());
-            let filtre = doc!{"instance_id": &instance_id, "app_name": &webapp.name};
-            let mut set_ops = convertir_to_bson(webapp)?;
-            set_ops.insert("timestamp", timestamp);
-            let ops = doc! {
-                "$set": set_ops,
-                "$setOnInsert": {CHAMP_CREATION: timestamp},
-                "$currentDate": {CHAMP_MODIFICATION: true},
-            };
-            let options = UpdateOptions::builder().upsert(true).build();
-            collection.update_one_with_session(filtre, ops, options, session).await?;
-        }
-
-        if event.complete {
-            let filtre = doc!{"instance_id": &instance_id, "app_name": {"$not": {"$in": names}}};
-            collection.delete_many_with_session(filtre, None, session).await?;
-        }
-    }
-
-    Ok(None)
-}
+// async fn process_presence_instance_applications<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
+//     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
+//     where M: MongoDao
+// {
+//     let message_ref = message.message.parse()?;
+//     let event: PresenceInstanceApplicationsEvent = message_ref.contenu()?.deserialize()?;
+//
+//     if ! message.certificat.verifier_roles(vec![RolesCertificats::Instance])? {
+//         info!("process_presence_instance Rejecting message not from an instance");
+//         return Ok(None)
+//     }
+//
+//     let instance_id = message.certificat.get_common_name()?;
+//     let timestamp = &message_ref.estampille;
+//
+//     {
+//         let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_CONTAINERS)?;
+//         let mut names = Vec::new();
+//         for (name, status) in event.containers {
+//             let service_name = match status.service_name() {
+//                 Some(inner) => inner,
+//                 None => name.as_str()
+//             };
+//             names.push(service_name.to_string());
+//             let filtre = doc!{"instance_id": &instance_id, "service_name": &service_name};
+//             let mut set_ops = convertir_to_bson(status)?;
+//             set_ops.insert("timestamp", timestamp);
+//             let ops = doc! {
+//                 "$set": set_ops,
+//                 "$setOnInsert": {CHAMP_CREATION: timestamp},
+//                 "$currentDate": {CHAMP_MODIFICATION: true},
+//             };
+//             let options = UpdateOptions::builder().upsert(true).build();
+//             collection.update_one_with_session(filtre, ops, options, session).await?;
+//         }
+//
+//         if event.complete {
+//             let filtre = doc!{"instance_id": &instance_id, "service_name": {"$not": {"$in": names}}};
+//             collection.delete_many_with_session(filtre, None, session).await?;
+//         }
+//     }
+//
+//     {
+//         let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_SERVICES)?;
+//         let mut names = Vec::new();
+//         for (service_name, status) in event.services {
+//             names.push(service_name.clone());
+//             let filtre = doc!{"instance_id": &instance_id, "service_name": &service_name};
+//             let mut set_ops = convertir_to_bson(status)?;
+//             set_ops.insert("timestamp", timestamp);
+//             let ops = doc! {
+//                 "$set": set_ops,
+//                 "$setOnInsert": {CHAMP_CREATION: timestamp},
+//                 "$currentDate": {CHAMP_MODIFICATION: true},
+//             };
+//             let options = UpdateOptions::builder().upsert(true).build();
+//             collection.update_one_with_session(filtre, ops, options, session).await?;
+//         }
+//
+//         if event.complete {
+//             let filtre = doc!{"instance_id": &instance_id, "service_name": {"$not": {"$in": names}}};
+//             collection.delete_many_with_session(filtre, None, session).await?;
+//         }
+//     }
+//
+//     {
+//         let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_WEBAPPS)?;
+//         let mut names = Vec::new();
+//         let mut urls = Vec::new();
+//         for webapp in event.webapps {
+//             names.push(webapp.name.clone());
+//             urls.push(webapp.url.clone());
+//             let filtre = doc!{"instance_id": &instance_id, "app_name": &webapp.name, "url": &webapp.url};
+//             let mut set_ops = convertir_to_bson(webapp)?;
+//             set_ops.insert("timestamp", timestamp);
+//             let ops = doc! {
+//                 "$set": set_ops,
+//                 "$setOnInsert": {CHAMP_CREATION: timestamp},
+//                 "$currentDate": {CHAMP_MODIFICATION: true},
+//             };
+//             let options = UpdateOptions::builder().upsert(true).build();
+//             collection.update_one_with_session(filtre, ops, options, session).await?;
+//         }
+//
+//         if event.complete {
+//             let filtre = doc!{"instance_id": &instance_id, "app_name": {"$not": {"$in": names}}, "url": {"$not": {"$in": urls}}};
+//             collection.delete_many_with_session(filtre, None, session).await?;
+//         }
+//     }
+//
+//     {
+//         let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS)?;
+//         let mut names = Vec::new();
+//         for webapp in event.configured_applications {
+//             names.push(webapp.name.clone());
+//             let filtre = doc!{"instance_id": &instance_id, "app_name": &webapp.name};
+//             let mut set_ops = convertir_to_bson(webapp)?;
+//             set_ops.insert("timestamp", timestamp);
+//             let ops = doc! {
+//                 "$set": set_ops,
+//                 "$setOnInsert": {CHAMP_CREATION: timestamp},
+//                 "$currentDate": {CHAMP_MODIFICATION: true},
+//             };
+//             let options = UpdateOptions::builder().upsert(true).build();
+//             collection.update_one_with_session(filtre, ops, options, session).await?;
+//         }
+//
+//         if event.complete {
+//             let filtre = doc!{"instance_id": &instance_id, "app_name": {"$not": {"$in": names}}};
+//             collection.delete_many_with_session(filtre, None, session).await?;
+//         }
+//     }
+//
+//     Ok(None)
+// }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct InstalledApplicationV2 {

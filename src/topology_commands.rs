@@ -121,11 +121,13 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     let commande: CommandeSupprimerInstance = deser_message_buffer!(message.message);
 
     let filtre = doc! {"instance_id": &commande.instance_id};
-    middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS)?.delete_one(filtre.clone(), None).await?;
-    middleware.get_collection(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS)?.delete_many(filtre.clone(), None).await?;
-    middleware.get_collection(NOM_COLLECTION_INSTANCE_CONTAINERS)?.delete_many(filtre.clone(), None).await?;
-    middleware.get_collection(NOM_COLLECTION_INSTANCE_SERVICES)?.delete_many(filtre.clone(), None).await?;
-    middleware.get_collection(NOM_COLLECTION_INSTANCE_WEBAPPS)?.delete_many(filtre.clone(), None).await?;
+    // middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS)?.delete_one(filtre.clone(), None).await?;
+    middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS_V2)?.delete_one(filtre.clone(), None).await?;
+    // middleware.get_collection(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS)?.delete_many(filtre.clone(), None).await?;
+    middleware.get_collection(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS_V2)?.delete_many(filtre.clone(), None).await?;
+    // middleware.get_collection(NOM_COLLECTION_INSTANCE_CONTAINERS)?.delete_many(filtre.clone(), None).await?;
+    // middleware.get_collection(NOM_COLLECTION_INSTANCE_SERVICES)?.delete_many(filtre.clone(), None).await?;
+    // middleware.get_collection(NOM_COLLECTION_INSTANCE_WEBAPPS)?.delete_many(filtre.clone(), None).await?;
 
     // Emettre evenement d'instance supprimee
     let evenement_supprimee = json!({"instance_id": &commande.instance_id});

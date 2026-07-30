@@ -19,13 +19,13 @@ pub const NOM_COLLECTION_FILEHOSTING_VISITS: &str = "CoreTopologie/filehostingVi
 pub const NOM_COLLECTION_FILEHOSTING_SYNC_STATUS: &str = "CoreTopologie/filehostingSyncStatus";
 pub const NOM_COLLECTION_FILEHOSTING_FUUIDS_WORK: &str = "CoreTopologie/filehostingFuuidsWork";
 
-pub const NOM_COLLECTION_INSTANCE_STATUS: &str = "CoreTopologie/instances/status";
+// pub const NOM_COLLECTION_INSTANCE_STATUS: &str = "CoreTopologie/instances/status";
 pub const NOM_COLLECTION_INSTANCE_STATUS_V2: &str = "CoreTopologie/instances/statusV2";
 pub const NOM_COLLECTION_INSTANCE_CONFIGURATION: &str = "CoreTopologie/instances/configuration";
-pub const NOM_COLLECTION_INSTANCE_CONTAINERS: &str = "CoreTopologie/instances/containers";
-pub const NOM_COLLECTION_INSTANCE_SERVICES: &str = "CoreTopologie/instances/services";
-pub const NOM_COLLECTION_INSTANCE_WEBAPPS: &str = "CoreTopologie/instances/webapps";
-pub const NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS: &str = "CoreTopologie/instances/configuredApplications";
+// pub const NOM_COLLECTION_INSTANCE_CONTAINERS: &str = "CoreTopologie/instances/containers";
+// pub const NOM_COLLECTION_INSTANCE_SERVICES: &str = "CoreTopologie/instances/services";
+// pub const NOM_COLLECTION_INSTANCE_WEBAPPS: &str = "CoreTopologie/instances/webapps";
+// pub const NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS: &str = "CoreTopologie/instances/configuredApplications";
 pub const NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS_V2: &str = "CoreTopologie/instances/configuredApplicationsV2";
 
 
