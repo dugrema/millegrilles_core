@@ -1,24 +1,24 @@
-use std::collections::HashMap;
-use std::str::from_utf8;
-use std::time::Duration;
+use crate::topology_constants::*;
+use crate::topology_structs::{ApplicationStatusV2, JwtHebergement, ManagerStatusV2, ReponseRelaiWeb, ReponseUrlEtag, RequeteRelaiWeb, WebItem};
 use log::{debug, error};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono::Utc;
-use millegrilles_common_rust::mongo_dao::{convertir_to_bson, MongoDao};
-use millegrilles_common_rust::mongodb::options::UpdateOptions;
-use millegrilles_common_rust::serde_json::json;
+use millegrilles_common_rust::constantes::{CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, DOMAINE_RELAIWEB, SECURITE_2_PRIVE, Securite};
 use millegrilles_common_rust::error::Error;
-use millegrilles_common_rust::constantes::{Securite, CHAMP_CREATION, CHAMP_MODIFICATION, COMMANDE_RELAIWEB_GET, DOMAINE_RELAIWEB, SECURITE_2_PRIVE};
-use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
-use millegrilles_common_rust::{millegrilles_cryptographie, serde_json};
 use millegrilles_common_rust::fiche_systeme::{ApplicationsV2, FichePublique, InformationApplicationInstance, InformationInstance};
+use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesBufferDefault, MessageMilleGrillesOwned, MessageValidable};
+use millegrilles_common_rust::mongo_dao::{MongoDao, convertir_to_bson};
+use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::recepteur_messages::TypeMessage;
 use millegrilles_common_rust::reqwest::Url;
-use crate::topology_constants::*;
-use crate::topology_structs::{JwtHebergement, ReponseRelaiWeb, ReponseUrlEtag, RequeteRelaiWeb, ManagerStatusV2, ApplicationStatusV2, WebItem};
+use millegrilles_common_rust::serde_json::json;
+use millegrilles_common_rust::{millegrilles_cryptographie, serde_json};
+use std::collections::HashMap;
+use std::str::from_utf8;
+use std::time::Duration;
 
 pub async fn maj_fiche_publique<M>(middleware: &M, fiche: &FichePublique, etag: Option<ReponseUrlEtag>) -> Result<(), Error>
 where M: MongoDao
@@ -279,9 +279,6 @@ where M: MongoDao + ValidateurX509 + CleChiffrageHandler
         chiffrage.push(chaine_pem)
     }
 
-    let mut instances: HashMap<String, InformationInstance> = HashMap::new();
-    let mut applications_v2: HashMap<String, ApplicationsV2> = HashMap::new();
-
     let default_map_ports = {
         let mut map_ports: HashMap<String, u16> = HashMap::new();
         map_ports.insert("http".to_string(), 80);
@@ -296,38 +293,54 @@ where M: MongoDao + ValidateurX509 + CleChiffrageHandler
 
     // Fetch and Map Instances (ManagerStatusV2)
     let instance_collection = middleware.get_collection_typed::<ManagerStatusV2>(NOM_COLLECTION_INSTANCE_STATUS_V2)?;
-    let mut instance_cursor = instance_collection.find(None, None).await?;
+    let instance_filter = doc!{
+        "securite": {"$ne": Securite::L4Secure.get_str()},
+        CHAMP_MODIFICATION: {"$gte": presence_expiree},
+        "supprime": false,
+    };
+    let mut instance_cursor = instance_collection.find(instance_filter, None).await?;
 
-    while instance_cursor.advance().await? {
-        let status = instance_cursor.deserialize_current()?;
+    let instances = {
+        let mut instances: HashMap<String, InformationInstance> = HashMap::new();
+        while instance_cursor.advance().await? {
+            let status = instance_cursor.deserialize_current()?;
 
-        if status.supprime || status.securite == "4.secure" {
-            continue;
+            // Done in filter
+            // if status.supprime || status.securite == "4.secure" {
+            //     continue;
+            // }
+
+            // In the DB, timestamp is a string so we test here. Also, the CHAMP_MODICIATION may be
+            // recent but the timestamp is about when the manager produced the last update.
+            if status.timestamp < presence_expiree {
+                continue;
+            }
+
+            let (hostname, ports) = match status.system_state.host {
+                Some(host) => (host.hostname.clone(), host.ports.clone()),
+                None => ("hostname".to_string(), default_map_ports.clone()),
+            };
+            let info_instance = InformationInstance {
+                ports,
+                onion: None,
+                securite: status.securite,
+                domaines: Some(vec![hostname]),
+            };
+            instances.insert(status.instance_id, info_instance);
         }
-
-        if status.timestamp < presence_expiree {
-            continue;
-        }
-
-        let (hostname, ports) = match status.system_state.host {
-            Some(host) => (host.hostname.clone(), host.ports.clone()),
-            None => ("hostname".to_string(), default_map_ports.clone()),
-        };
-        let info_instance = InformationInstance {
-            ports,
-            onion: None,
-            securite: status.securite,
-            domaines: Some(vec![hostname]),
-        };
-        instances.insert(status.instance_id.clone(), info_instance);
-    }
+        instances
+    };
 
     // Fetch and Map Applications (ApplicationStatusV2)
     let app_collection = middleware.get_collection_typed::<ApplicationStatusV2>(NOM_COLLECTION_INSTANCE_CONFIGURED_APPLICATIONS_V2)?;
     let mut app_cursor = app_collection.find(None, None).await?;
 
+    let mut applications_v2: HashMap<String, ApplicationsV2> = HashMap::new();
     while app_cursor.advance().await? {
         let app_status = app_cursor.deserialize_current()?;
+        if ! instances.contains_key(&app_status.instance_id) {
+            continue  // Instance is not active, ignore the associated applications
+        }
 
         for (app_name, app_info) in app_status.applications {
             // Web application filtering (remove back-end and admin apps)
