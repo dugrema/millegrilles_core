@@ -388,6 +388,7 @@ struct PresenceInstanceEvent {
 #[derive(Serialize, Deserialize)]
 struct PresenceInstanceEventV2 {
     system_state: SystemState,
+    securite: Option<String>,
 }
 
 async fn process_presence_instance_v2<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
@@ -407,7 +408,7 @@ where M: MongoDao
 
     let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS_V2)?;
 
-    let securite = match message.certificat.extensions() {
+    let mut securite = match message.certificat.extensions() {
         Ok(e) => {
             match e.exchanges {
                 Some(e) => match e.get(0) {
@@ -428,6 +429,14 @@ where M: MongoDao
             return Ok(None);
         }
     };
+
+    if let Some(event_securite) = event.securite {
+        if event_securite.as_str() == Securite::L4Secure.get_str() && securite.as_str() == Securite::L3Protege.get_str() {
+            // Special case for 4.secure type manager, its certificate is still 3.protege.
+            // Bump reported security up to 4.secure
+            securite = event_securite;
+        }
+    }
 
     let filtre = doc! {"instance_id": instance_id.clone()};
 
