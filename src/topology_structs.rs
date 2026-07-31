@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use millegrilles_common_rust::chrono;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::serde_json::Value;
@@ -64,21 +63,21 @@ pub struct TransactionSetCleidBackupDomaine {
     pub reset: Option<bool>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ServerInstanceStatus {
-    pub instance_id: String,
-    pub disk: Option<Vec<Value>>,
-    pub hostname: Option<String>,
-    pub hostnames: Option<Vec<String>>,
-    pub ip: Option<String>,
-    pub load_average: Option<Vec<f32>>,
-    pub security: Option<String>,
-    pub system_battery: Option<Value>,
-    pub system_fans: Option<Value>,
-    pub system_temperature: Option<HashMap<String, Value>>,
-    #[serde(default, serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
-    pub timestamp: Option<chrono::DateTime<Utc>>,
-}
+// #[derive(Clone, Debug, Serialize, Deserialize)]
+// pub struct ServerInstanceStatus {
+//     pub instance_id: String,
+//     pub disk: Option<Vec<Value>>,
+//     pub hostname: Option<String>,
+//     pub hostnames: Option<Vec<String>>,
+//     pub ip: Option<String>,
+//     pub load_average: Option<Vec<f32>>,
+//     pub security: Option<String>,
+//     pub system_battery: Option<Value>,
+//     pub system_fans: Option<Value>,
+//     pub system_temperature: Option<HashMap<String, Value>>,
+//     #[serde(default, serialize_with = "optionepochseconds::serialize", deserialize_with = "opt_chrono_datetime_as_bson_datetime::deserialize")]
+//     pub timestamp: Option<chrono::DateTime<Utc>>,
+// }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresenceDomaine {
@@ -195,14 +194,14 @@ impl Into<FileUsage> for FileUsageMongo {
 
 // New system layout
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostInfo {
     pub hostname: String,
     pub ip_addresses: Vec<String>,
     pub ports: HashMap<String, u16>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PartitionUsageItem {
     pub mountpoint: String,
     pub free: u64,
@@ -210,7 +209,7 @@ pub struct PartitionUsageItem {
     pub total: u64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MemoryInfo {
     pub total: u64,
     pub available: u64,
@@ -219,7 +218,7 @@ pub struct MemoryInfo {
     pub free: u64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwapInfo {
     pub total: u64,
     pub used: u64,
@@ -227,7 +226,7 @@ pub struct SwapInfo {
     pub percent: f64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkInfo {
     pub bytes_sent: u64,
     pub bytes_recv: u64,
@@ -239,7 +238,7 @@ pub struct NetworkInfo {
     pub dropout: u64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiskIOInfo {
     pub read_bytes: u64,
     pub write_bytes: u64,
@@ -250,7 +249,15 @@ pub struct DiskIOInfo {
 }
 
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CertissuerState {
+    #[serde(default, with="optionepochseconds")]
+    pub not_before: Option<DateTime<Utc>>,
+    #[serde(default, with="optionepochseconds")]
+    pub not_after: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SystemState {
     pub host: Option<HostInfo>,
     pub disk: Vec<PartitionUsageItem>,
@@ -268,13 +275,14 @@ pub struct SystemState {
     pub apc: Option<serde_json::Value>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ManagerStatusV2 {
     pub instance_id: String,
     pub system_state: SystemState,
     pub securite: String,
     pub supprime: bool,
     pub timestamp: DateTime<Utc>,
+    pub certissuer: Option<CertissuerState>,
 }
 
 type ApplicationLabels = HashMap<String, String>;

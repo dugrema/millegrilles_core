@@ -28,7 +28,7 @@ use crate::topology_commands::FuuidVisitResponseItem;
 use crate::topology_common::{demander_jwt_hebergement, generer_contenu_fiche_publique, maj_fiche_publique};
 use crate::topology_constants::*;
 // use crate::topology_events::{PresenceInstanceConfiguredApplications, PresenceInstanceWebApplication};
-use crate::topology_structs::{ApplicationPublique, ApplicationStatusV2, FilehostServerRow, FilehostingCongurationRow, ManagerStatusV2, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, ServerInstanceStatus, WebItem};
+use crate::topology_structs::{ApplicationPublique, ApplicationStatusV2, FilehostServerRow, FilehostingCongurationRow, ManagerStatusV2, ReponseRelaiWeb, RowFilehostFuuid, ServerInstanceConfigurationRow, WebItem};
 
 pub async fn consommer_requete_topology<M>(middleware: &M, m: MessageValide)
                               -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -472,42 +472,42 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     Ok(Some(middleware.build_reponse(reponse_liste_domaines)?.0))
 }
 
-#[derive(Serialize)]
-struct ReponseApplicationDeployee {
-    instance_id: String,
-    application: String,
-    securite: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    onion: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    name_property: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    supporte_usagers: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    users: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    labels: Option<HashMap<String, HashMap<String, String>>>,
-}
+// #[derive(Serialize)]
+// struct ReponseApplicationDeployee {
+//     instance_id: String,
+//     application: String,
+//     securite: String,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     url: Option<String>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     onion: Option<String>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     name_property: Option<String>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     supporte_usagers: Option<bool>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     users: Option<bool>,
+//     #[serde(skip_serializing_if = "Option::is_none")]
+//     labels: Option<HashMap<String, HashMap<String, String>>>,
+// }
 
-#[derive(Serialize)]
-struct ReponseListeApplicationsDeployees {
-    ok: bool,
-    resultats: Vec<ReponseApplicationDeployee>,
-}
+// #[derive(Serialize)]
+// struct ReponseListeApplicationsDeployees {
+//     ok: bool,
+//     resultats: Vec<ReponseApplicationDeployee>,
+// }
 
-#[derive(Serialize, Deserialize)]
-pub struct InstanceWebappsRow {
-    pub instance_id: String,
-    pub app_name: String,
-    pub securite: String,
-    pub url: Option<String>,
-    pub onion: Option<String>,
-    pub name_property: Option<String>,
-    pub users: Option<bool>,
-    pub labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
-}
+// #[derive(Serialize, Deserialize)]
+// pub struct InstanceWebappsRow {
+//     pub instance_id: String,
+//     pub app_name: String,
+//     pub securite: String,
+//     pub url: Option<String>,
+//     pub onion: Option<String>,
+//     pub name_property: Option<String>,
+//     pub users: Option<bool>,
+//     pub labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
+// }
 
 // async fn liste_userapps_deployees<M>(middleware: &M, message: MessageValide)
 //                                      -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -945,11 +945,11 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
 struct MessageInstanceId {
     instance_id: Option<String>
 }
-#[derive(Serialize)]
-struct RequestServerInstancesResponse {
-    ok: bool,
-    server_instances: Vec<ServerInstanceStatus>,
-}
+// #[derive(Serialize)]
+// struct RequestServerInstancesResponse {
+//     ok: bool,
+//     server_instances: Vec<ServerInstanceStatus>,
+// }
 
 // async fn request_server_instances<M>(middleware: &M, message: MessageValide)
 //     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -1243,12 +1243,12 @@ async fn request_filehost_for_instance<M>(middleware: &M, message: MessageValide
 
 }
 
-#[derive(Serialize)]
-struct RequestFilehostForExternalResponse {
-    ok: bool,
-    url_external: String,
-    tls_external: Option<String>,
-}
+// #[derive(Serialize)]
+// struct RequestFilehostForExternalResponse {
+//     ok: bool,
+//     url_external: String,
+//     tls_external: Option<String>,
+// }
 
 async fn request_filehost_for_external<M>(middleware: &M, _message: MessageValide)
     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>

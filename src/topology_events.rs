@@ -1,27 +1,27 @@
-use std::collections::{HashMap, HashSet};
 use log::{debug, error, info, warn};
 use millegrilles_common_rust::bson::doc;
-use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
 use millegrilles_common_rust::chrono;
+use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::BackupEvent;
-use millegrilles_common_rust::constantes::{Securite, EVENEMENT_PRESENCE_DOMAINE, CHAMP_CREATION, CHAMP_MODIFICATION, RolesCertificats, BACKUP_EVENEMENT_MAJ};
+use millegrilles_common_rust::constantes::{BACKUP_EVENEMENT_MAJ, CHAMP_CREATION, CHAMP_MODIFICATION, EVENEMENT_PRESENCE_DOMAINE, RolesCertificats, Securite};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_cles::CleChiffrageHandler;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesBufferDefault;
-use millegrilles_common_rust::mongo_dao::{convertir_to_bson, start_transaction_regular, MongoDao};
+use millegrilles_common_rust::mongo_dao::{MongoDao, convertir_to_bson, start_transaction_regular};
 use millegrilles_common_rust::mongodb::options::{FindOneAndUpdateOptions, FindOptions, UpdateOptions};
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::MessageValide;
-use millegrilles_common_rust::serde_json::Value;
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+
 
 use crate::topology_common::generer_contenu_fiche_publique;
-use crate::topology_manager::TopologyManager;
 use crate::topology_constants::*;
-use crate::topology_structs::{ApplicationInfo, ApplicationStatusV2, EventFilehostUsage, EventNewFuuid, ManagerStatusV2, PresenceDomaine, RowFilehostFuuid, RowFilehostId, SystemState};
-use millegrilles_common_rust::mongodb::ClientSession;
 use crate::topology_maintenance::emit_filehost_transfersupdated_event;
+use crate::topology_manager::TopologyManager;
+use crate::topology_structs::{ApplicationInfo, ApplicationStatusV2, CertissuerState, EventFilehostUsage, EventNewFuuid, ManagerStatusV2, PresenceDomaine, RowFilehostFuuid, RowFilehostId, SystemState};
+use millegrilles_common_rust::mongodb::ClientSession;
 
 pub async fn consommer_evenement_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                              -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -323,31 +323,31 @@ async fn traiter_evenement_backup_maj<M>(middleware: &M, m: MessageValide, sessi
     Ok(None)
 }
 
-#[derive(Serialize, Deserialize)]
-struct PresenceInstanceDisk {
-    free: usize,
-    mountpoint: String,
-    total: usize,
-    used: usize
-}
+// #[derive(Serialize, Deserialize)]
+// struct PresenceInstanceDisk {
+//     free: usize,
+//     mountpoint: String,
+//     total: usize,
+//     used: usize
+// }
 
-#[derive(Serialize, Deserialize)]
-struct PresenceInstanceStatus {
-    disk: Option<Vec<PresenceInstanceDisk>>,
-    hostname: String,
-    hostnames: Vec<String>,
-    ip: Option<String>,
-    load_average: Option<Vec<f32>>,
-    security: String,
-    system_battery: Option<Value>,
-    system_fans: Option<HashMap<String, Value>>,
-    system_temperature: Option<HashMap<String, Value>>,
-}
+// #[derive(Serialize, Deserialize)]
+// struct PresenceInstanceStatus {
+//     disk: Option<Vec<PresenceInstanceDisk>>,
+//     hostname: String,
+//     hostnames: Vec<String>,
+//     ip: Option<String>,
+//     load_average: Option<Vec<f32>>,
+//     security: String,
+//     system_battery: Option<Value>,
+//     system_fans: Option<HashMap<String, Value>>,
+//     system_temperature: Option<HashMap<String, Value>>,
+// }
 
-#[derive(Deserialize)]
-struct PresenceInstanceEvent {
-    status: PresenceInstanceStatus,
-}
+// #[derive(Deserialize)]
+// struct PresenceInstanceEvent {
+//     status: PresenceInstanceStatus,
+// }
 
 // async fn process_presence_instance<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
 //     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
@@ -385,10 +385,11 @@ struct PresenceInstanceEvent {
 //     Ok(None)
 // }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct PresenceInstanceEventV2 {
     system_state: SystemState,
     securite: Option<String>,
+    certissuer: Option<CertissuerState>,
 }
 
 async fn process_presence_instance_v2<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
@@ -397,6 +398,7 @@ where M: MongoDao
 {
     let message_ref = message.message.parse()?;
     let event: PresenceInstanceEventV2 = message_ref.contenu()?.deserialize()?;
+    // debug!("process_presence_instance_v2 Received event: {:?}", event);
 
     if ! message.certificat.verifier_roles(vec![RolesCertificats::Instance])? {
         warn!("process_presence_instance_v2 Rejecting message not from an instance");
@@ -405,8 +407,6 @@ where M: MongoDao
 
     let instance_id = message.certificat.get_common_name()?;
     let timestamp = message_ref.estampille;
-
-    let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS_V2)?;
 
     let mut securite = match message.certificat.extensions() {
         Ok(e) => {
@@ -444,6 +444,7 @@ where M: MongoDao
         instance_id,
         system_state: event.system_state,
         securite,
+        certissuer: event.certissuer,
         supprime: false,
         timestamp,
     };
@@ -458,70 +459,72 @@ where M: MongoDao
         },
         "$currentDate": {CHAMP_MODIFICATION: true}
     };
+
+    let collection = middleware.get_collection(NOM_COLLECTION_INSTANCE_STATUS_V2)?;
     let options = UpdateOptions::builder().upsert(true).build();
     collection.update_one_with_session(filtre, ops, options, session).await?;
 
     Ok(None)
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct PresenceInstanceContainer {
-    pub creation: String,
-    pub dead: Option<bool>,
-    pub etat: Option<String>,
-    pub finished_at: Option<String>,
-    pub labels: Option<HashMap<String, String>>,
-    pub restart_count: u32,
-    pub running: bool,
-}
+// #[derive(Serialize, Deserialize)]
+// pub struct PresenceInstanceContainer {
+//     pub creation: String,
+//     pub dead: Option<bool>,
+//     pub etat: Option<String>,
+//     pub finished_at: Option<String>,
+//     pub labels: Option<HashMap<String, String>>,
+//     pub restart_count: u32,
+//     pub running: bool,
+// }
+//
+// impl PresenceInstanceContainer {
+//     fn service_name(&self) -> Option<&str> {
+//         match &self.labels {
+//             Some(inner) => match inner.get("com.docker.swarm.service.name") {
+//                 Some(name) => Some(name.as_str()),
+//                 None => None
+//             },
+//             None => None
+//         }
+//     }
+// }
 
-impl PresenceInstanceContainer {
-    fn service_name(&self) -> Option<&str> {
-        match &self.labels {
-            Some(inner) => match inner.get("com.docker.swarm.service.name") {
-                Some(name) => Some(name.as_str()),
-                None => None
-            },
-            None => None
-        }
-    }
-}
+// #[derive(Serialize, Deserialize)]
+// struct PresenceInstanceService {
+//     creation_service: String,
+//     etat: Option<String>,
+//     image: String,
+//     labels: Option<HashMap<String, String>>,
+//     maj_service: Option<String>,
+//     message_tache: Option<String>,
+//     replicas: Option<u32>,
+//     version: Option<String>
+// }
 
-#[derive(Serialize, Deserialize)]
-struct PresenceInstanceService {
-    creation_service: String,
-    etat: Option<String>,
-    image: String,
-    labels: Option<HashMap<String, String>>,
-    maj_service: Option<String>,
-    message_tache: Option<String>,
-    replicas: Option<u32>,
-    version: Option<String>
-}
+// #[derive(Serialize, Deserialize)]
+// pub struct PresenceInstanceWebApplication {
+//     pub labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
+//     pub name: String,
+//     pub securite: String,
+//     pub url: Option<String>,
+//     pub users: Option<bool>,
+// }
 
-#[derive(Serialize, Deserialize)]
-pub struct PresenceInstanceWebApplication {
-    pub labels: Option<HashMap<String, HashMap<String, String>>>,  // language.label = text
-    pub name: String,
-    pub securite: String,
-    pub url: Option<String>,
-    pub users: Option<bool>,
-}
+// #[derive(Serialize, Deserialize)]
+// pub struct PresenceInstanceConfiguredApplications {
+//     pub name: String,
+//     pub version: Option<String>,
+// }
 
-#[derive(Serialize, Deserialize)]
-pub struct PresenceInstanceConfiguredApplications {
-    pub name: String,
-    pub version: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct PresenceInstanceApplicationsEvent {
-    complete: bool,
-    containers: HashMap<String, PresenceInstanceContainer>,
-    services: HashMap<String, PresenceInstanceService>,
-    webapps: Vec<PresenceInstanceWebApplication>,
-    configured_applications: Vec<PresenceInstanceConfiguredApplications>,
-}
+// #[derive(Deserialize)]
+// struct PresenceInstanceApplicationsEvent {
+//     complete: bool,
+//     containers: HashMap<String, PresenceInstanceContainer>,
+//     services: HashMap<String, PresenceInstanceService>,
+//     webapps: Vec<PresenceInstanceWebApplication>,
+//     configured_applications: Vec<PresenceInstanceConfiguredApplications>,
+// }
 
 // async fn process_presence_instance_applications<M>(middleware: &M, message: MessageValide, session: &mut ClientSession)
 //     -> Result<Option<MessageMilleGrillesBufferDefault>, millegrilles_common_rust::error::Error>
