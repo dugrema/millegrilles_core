@@ -1203,11 +1203,6 @@ where M: GenerateurMessages + MongoDao
     // Reverifie chaque transfert, enleve ceux qui ne s'appliquent plus et cree les nouveaux
     entretien_transfert_fichiers(middleware).await?;
 
-    // Emettre evenement de mise a jour de filehosts. Va declencher une verification des transferts.
-    let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOSTING_UPDATE, vec![Securite::L1Public])
-        .build();
-    middleware.emettre_evenement(routage, doc!{}).await?;
-
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
 

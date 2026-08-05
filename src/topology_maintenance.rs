@@ -308,9 +308,16 @@ pub async fn add_missing_file_transfers<M>(middleware: &M, session: &mut ClientS
 
 pub async fn emit_filehost_transfersupdated_event<M>(middleware: &M) -> Result<(), Error> where M: GenerateurMessages {
     let event = json!({});
+
     let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOST_TRANSFERSUPDATED, vec![Securite::L1Public])
         .build();
     middleware.emettre_evenement(routage, &event).await?;
+
+    // Emettre evenement de mise a jour de filehosts. Va declencher une verification des transferts.
+    let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOSTING_UPDATE, vec![Securite::L1Public])
+        .build();
+    middleware.emettre_evenement(routage, doc!{}).await?;
+
     Ok(())
 }
 
