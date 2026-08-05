@@ -39,7 +39,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
 
     if minutes % 5 == 1
     {
-        debug!("Produire fiche publique");
+        debug!("CoreTopology Produire fiche publique");
         if let Err(e) = produire_fiche_publique(middleware).await {
             error!("core_topoologie.produire_fiche_publique Erreur production fiche publique initiale : {:?}", e);
         }
@@ -48,6 +48,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     // Check every 3 minutes if claims/visits can be processed (low impact if no work).
     if minutes % 3 == 2
     {
+        debug!("CoreTopology regenerate_filehosting_fuuids");
         if let Err(e) = regenerate_filehosting_fuuids(middleware).await {
             error!("core_topoologie.regenerate_filehosting_fuuids Error in maintenance of files claims and visits : {:?}", e);
         }
@@ -56,6 +57,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     // Maintain file transfers between filehosts
     if minutes % 15 == 6
     {
+        debug!("CoreTopology entretien_transfert_fichiers");
         if let Err(e) = entretien_transfert_fichiers(middleware).await {
             error!("core_topologie.entretien_transfert_fichiers Erreur entretien transferts fichiers : {:?}", e);
         }
@@ -64,10 +66,12 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     // if hours % 12 == 0 && minutes == 29
     if minutes == 29
     {
+        debug!("CoreTopology maintain_unclaimed_fuuids");
         if let Err(e) = maintain_unclaimed_fuuids(middleware).await {
             error!("core_topologie.maintain_unclaimed_fuuids Error maintaining unclaimed fuuids : {:?}", e);
         }
 
+        debug!("CoreTopology maintain_expired_filehost_visits");
         if let Err(e) = maintain_expired_filehost_visits(middleware).await {
             error!("core_topologie.maintain_unclaimed_fuuids Error maintaining expired filehost visits : {:?}", e);
         }
