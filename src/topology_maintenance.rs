@@ -30,7 +30,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     debug!("Traiter cedule {}\n{:?}", DOMAIN_NAME, date_epoch);
 
     if middleware.get_mode_regeneration() == true {
-        debug!("traiter_cedule Mode regeneration, skip entretien");
+        info!("traiter_cedule Mode regeneration, skip entretien");
         return Ok(());
     }
 
@@ -183,7 +183,11 @@ pub async fn entretien_transfert_fichiers<M>(middleware: &M) -> Result<(), mille
         let filtre_delete = doc!{"_id": {"$in": batch_to_delete}};
         collection_transfers.delete_many(filtre_delete, None).await?;
     }
-    debug!("Cleanup {} expired active transfers DONE", transfers_expired);
+    if transfers_expired > 0 {
+        warn!("Cleanup {} expired active transfers DONE", transfers_expired);
+    } else {
+        debug!("Cleanup expired active transfers DONE");
+    }
 
     // Create missing file transfers
     if filehosts_active.len() > 0 {
