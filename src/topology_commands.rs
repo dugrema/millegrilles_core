@@ -7,7 +7,7 @@ use crate::topology_constants::*;
 use crate::topology_manager::TopologyManager;
 use crate::topology_structs::{FilehostServerRow, FilehostTransfer, FilehostingCongurationRow, RowFilehostFuuid, TransactionSetCleidBackupDomaine, TransactionSetFichiersPrimaire, TransactionSetFilehostInstance};
 
-use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction, TransactionFilehostSetDefault, FilehostAddTransactionV2};
+use crate::topology_transactions::{FilehostDeleteTransaction, FilehostRestoreTransaction, FilehostUpdateTransaction, FilehostAddTransaction, TransactionFilehostSetDefault, FilehostAddTransactionV2, TransactionDeleteDomain};
 
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
@@ -29,6 +29,7 @@ use millegrilles_common_rust::{get_domaine_action, serde_json};
 use millegrilles_common_rust::millegrilles_cryptographie::deser_message_buffer;
 use millegrilles_common_rust::mongodb::{ClientSession, Cursor};
 use crate::topology_maintenance::{add_missing_file_transfers, entretien_transfert_fichiers};
+use crate::topology_requests::RowCoreTopologieDomaines;
 
 pub async fn consommer_commande_topology<M>(middleware: &M, m: MessageValide, gestionnaire: &TopologyManager)
                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -62,6 +63,7 @@ where M: Middleware
         TRANSACTION_FILEHOST_UPDATE => command_filehost_update(middleware, m, gestionnaire, &mut session).await,
         TRANSACTION_FILEHOST_DELETE => command_filehost_delete(middleware, m, gestionnaire, &mut session).await,
         TRANSACTION_FILEHOST_DEFAULT => command_filehost_set_default(middleware, m, gestionnaire, &mut session).await,
+        TRANSACTION_DELETE_DOMAIN => command_delete_domain(middleware, m, gestionnaire, &mut session).await,
         COMMANDE_SET_CLEID_BACKUP_DOMAINE => commande_set_cleid_backup_domaine(middleware, m, gestionnaire, &mut session).await,
         COMMANDE_FILE_VISIT => command_file_visit(middleware, m, gestionnaire, &mut session).await,
         COMMANDE_CLAIM_AND_FILEHOST_VISITS_FOR_FUUIDS => commande_claim_and_filehost_visits(middleware, m, &mut session).await,
@@ -1287,4 +1289,33 @@ async fn commande_domain_visits_claims<M>(middleware: &M, m: MessageValide, _ses
     }
 
     Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+pub async fn command_delete_domain<M>(middleware: &M, message: MessageValide, gestionnaire: &TopologyManager, session: &mut ClientSession)
+                                             -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+where M: GenerateurMessages + MongoDao + ValidateurX509
+{
+    if ! message.certificat.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        return Ok(Some(middleware.reponse_err(Some(403), None, Some("Access denied")) ? ))
+    }
+
+    let transaction: TransactionDeleteDomain = deser_message_buffer!(message.message);
+
+    // Verifier que la valeur n'est pas la meme
+    let collection_domains =
+        middleware.get_collection_typed::<RowCoreTopologieDomaines>(NOM_COLLECTION_DOMAINES)?;
+    let filtre = doc!{CHAMP_DOMAINE: &transaction.domain_name};
+    if ! collection_domains.find_one(filtre, None).await?.is_some() {
+        return Ok(Some(middleware.reponse_err(Some(404), None, Some(format!("Unknown domain: {}", transaction.domain_name).as_str()))? ))
+    }
+
+    // Sauvegarder la transaction, marquer complete et repondre
+    let reponse = sauvegarder_traiter_transaction_v2(middleware, message, gestionnaire, session).await?;
+
+    // Emettre evenement de mise a jour de filehosts
+    let routage = RoutageMessageAction::builder(DOMAINE_TOPOLOGIE, EVENEMENT_FILEHOSTING_UPDATE, vec![Securite::L1Public])
+        .build();
+    middleware.emettre_evenement(routage, doc!{}).await?;
+
+    Ok(reponse)
 }

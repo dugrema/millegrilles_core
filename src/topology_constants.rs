@@ -76,6 +76,7 @@ pub const TRANSACTION_FILEHOST_UPDATE: &str = "filehostUpdate";
 pub const TRANSACTION_FILEHOST_DELETE: &str = "filehostDelete";
 pub const TRANSACTION_FILEHOST_RESTORE: &str = "filehostRestore";
 pub const TRANSACTION_FILEHOST_DEFAULT: &str = "setDefaultFilehost";
+pub const TRANSACTION_DELETE_DOMAIN: &str = "deleteDomain";
 
 pub const COMMANDE_AJOUTER_CONSIGNATION_HEBERGEE: &str = "ajouterConsignationHebergee";
 pub const COMMANDE_SET_CLEID_BACKUP_DOMAINE: &str = "setCleidBackupDomaine";

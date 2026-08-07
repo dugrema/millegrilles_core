@@ -14,6 +14,7 @@ use millegrilles_common_rust::constantes::{CHAMP_MODIFICATION, CHAMP_CREATION, S
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
+use crate::topology_requests::RowCoreTopologieDomaines;
 
 pub async fn aiguillage_transaction_topology<M, T>(middleware: &M, transaction: T, session: &mut ClientSession) -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
 where
@@ -47,6 +48,7 @@ where
         TRANSACTION_FILEHOST_DELETE => filehost_delete(middleware, transaction, session).await,
         TRANSACTION_FILEHOST_RESTORE => filehost_restore(middleware, transaction, session).await,
         TRANSACTION_FILEHOST_DEFAULT => transaction_set_filehost_default(middleware, transaction, session).await,
+        TRANSACTION_DELETE_DOMAIN => transaction_delete_domain(middleware, transaction, session).await,
         _ => Err(format!("Transaction {} est de type non gere : {}", transaction.transaction.id, action))?,
     }
 }
@@ -619,6 +621,28 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao
     };
     let options = UpdateOptions::builder().upsert(true).build();
     collection_config.update_one_with_session(filtre, ops, options, session).await?;
+
+    Ok(Some(middleware.reponse_ok(None, None)?))
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct TransactionDeleteDomain {
+    pub domain_name: String,
+}
+
+async fn transaction_delete_domain<M>(middleware: &M, transaction: TransactionValide, session: &mut ClientSession)
+    -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
+    where M: ValidateurX509 + GenerateurMessages + MongoDao
+{
+    let transaction = match serde_json::from_str::<TransactionDeleteDomain>(transaction.transaction.contenu.as_str()) {
+        Ok(t) => t,
+        Err(e) => Err(format!("transaction_delete_domain Erreur convertir {:?}", e))?
+    };
+
+    let collection_domains =
+        middleware.get_collection_typed::<RowCoreTopologieDomaines>(NOM_COLLECTION_DOMAINES)?;
+    let filtre = doc!{CHAMP_DOMAINE: &transaction.domain_name};
+    collection_domains.delete_one_with_session(filtre, None, session).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }
