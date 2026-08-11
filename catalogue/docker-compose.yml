@@ -25,15 +25,13 @@ services:
       dns:
         hostnames:
           - core
-      split: true
     environment:
       - MG_MQ_HOST=${MQ_HOSTNAME:-mq}
       - MG_MQ_PORT=${MQ_PORT:-5673}
       - MG_MONGO_HOST=mongo
       - MG_MQ_SSL=on
       - MG_MQ_AUTH_CERT=on
-      - CERTFILE=/run/secrets/cert.pem
-      - KEYFILE=/run/secrets/key.pem
+      - KEYFILE=/run/secrets/key_cert.pem
       - CAFILE=/run/secrets/millegrille.pem
       - MG_REDIS_URL=rediss://client_rust@redis:6379#insecure
       - MG_REDIS_PASSWORD_FILE=/run/secrets/redis.txt
@@ -51,26 +49,22 @@ services:
         condition: any
         delay: 20s
     configs:
-      - source: core
-        target: /run/secrets/cert.pem
       - source: mgca
         target: /run/secrets/millegrille.pem
     secrets:
       - source: core
-        target: key.pem
+        target: key_cert.pem
       - source: passwd_redis
         target: redis.txt
     networks:
       - app_net
 
 configs:
-  core:
-    file: ${MILLEGRILLES_ROOT}/secrets/core.cert.pem
   mgca:
     file: ${MILLEGRILLES_ROOT}/etc/millegrille.pem
 
 secrets:
   core:
-    file: ${MILLEGRILLES_ROOT}/secrets/core.key.pem
+    file: ${MILLEGRILLES_ROOT}/secrets/core.pem
   passwd_redis:
     file: ${MILLEGRILLES_ROOT}/secrets/redis.txt
