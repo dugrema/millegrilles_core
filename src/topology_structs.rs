@@ -299,6 +299,7 @@ pub struct WebItem {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ApplicationInfo {
     pub name: String,
+    pub alias: Option<String>,
     pub version: String,
     pub securite: Option<String>,
     pub labels: ApplicationLabels,

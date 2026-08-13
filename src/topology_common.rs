@@ -343,6 +343,12 @@ where M: MongoDao + ValidateurX509 + CleChiffrageHandler
         }
 
         for (app_name, app_info) in app_status.applications {
+            // Replace the app_name with the alias when present
+            let app_name = match app_info.alias.as_ref() {
+                Some(alias) => alias.to_owned(),
+                None => app_name,
+            };
+
             // Web application filtering (remove back-end and admin apps)
             let web_apps: Vec<WebItem> = match app_info.web {
                 Some(web_apps) => {
@@ -375,8 +381,19 @@ where M: MongoDao + ValidateurX509 + CleChiffrageHandler
                 supporte_usager: Some(!is_api),
             });
 
+            let pathname = match app_info.path.as_ref() {
+                Some(app_path) => app_path.to_owned(),
+                None =>  match web_apps.get(0) {
+                    Some(web) => match web.path.as_ref() {
+                        Some(web_path) => web_path.to_owned(),
+                        None => format!("/{}", app_name),
+                    },
+                    None => format!("/{}", app_name)
+                }
+            };
+
             let appv2_info = InformationApplicationInstance {
-                pathname: app_info.path.unwrap_or_else(|| format!("/{}", app_name)),
+                pathname,
                 // port: app_info.web.and_then(|p| p.first().and_then(|i| i.port)),
                 port: web_apps.first().and_then(|i| i.port),
                 version: app_info.version,
