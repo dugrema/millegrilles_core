@@ -152,7 +152,7 @@ pub fn preparer_queues(_manager: &PkiManager) -> Vec<QueueType> {
             nom_queue: NOM_Q_TRANSACTIONS_VOLATILS.into(),
             routing_keys: rk_volatils,
             ttl: 300000.into(),
-            durable: false,
+            durable: true,
             autodelete: false,
         }
     ));

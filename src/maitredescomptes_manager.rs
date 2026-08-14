@@ -306,34 +306,10 @@ pub fn preparer_queues(_manager: &MaitreDesComptesManager) -> Vec<QueueType> {
             nom_queue: NOM_Q_VOLATILS.into(),
             routing_keys: rk_volatils,
             ttl: 300000.into(),
-            durable: false,
+            durable: true,
             autodelete: false,
         }
     ));
-
-    // let mut rk_transactions = Vec::new();
-    // let transactions: Vec<&str> = vec![
-    //     TRANSACTION_INSCRIRE_USAGER,
-    //     TRANSACTION_AJOUTER_CLE,
-    //     TRANSACTION_AJOUTER_DELEGATION_SIGNEE,
-    //     TRANSACTION_MAJ_USAGER_DELEGATIONS,
-    //     TRANSACTION_SUPPRIMER_CLES,
-    //     TRANSACTION_RESET_WEBAUTHN_USAGER,
-    // ];
-    // for transaction in transactions {
-    //     rk_transactions.push(ConfigRoutingExchange {routing_key: format!("transaction.{}.{}", DOMAIN_NAME, transaction), exchange: Securite::L4Secure});
-    // }
-    //
-    // // Queue de transactions
-    // queues.push(QueueType::ExchangeQueue (
-    //     ConfigQueue {
-    //         nom_queue: NOM_Q_TRANSACTIONS.into(),
-    //         routing_keys: rk_transactions,
-    //         ttl: None,
-    //         durable: true,
-    //         autodelete: false,
-    //     }
-    // ));
 
     // Queue de triggers pour Pki
     queues.push(QueueType::Triggers (DOMAIN_NAME.into(), Securite::L3Protege));

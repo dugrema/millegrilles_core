@@ -1508,9 +1508,9 @@ dependencies = [
 
 [[package]]
 name = "ed25519-compact"
-version = "2.3.1"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5c24599140dc39d7a81e4476e7573d41bbc18e07c803900298e522a5fbcfbfb6"
+checksum = "6ec12dbf5981d43e0419234aa62d12527820602185584b33aff16d4677bfc7f9"
 dependencies = [
  "ct-codecs",
  "getrandom 0.4.2",
@@ -2182,9 +2182,9 @@ dependencies = [
 
 [[package]]
 name = "http-body-util"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9f41fd6a08e4d4ec69df65976da761afd5ad5e58a9d4acb46bd1c953a9e3ff2"
+checksum = "23169fe34a5fbcdd3f3862e78fb9b6fccd5f02a6dc6f732547005d45631ce71c"
 dependencies = [
  "bytes 1.12.1",
  "futures-core",
@@ -2784,8 +2784,8 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 
 [[package]]
 name = "millegrilles_common_rust"
-version = "2026.4.10"
-source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=master#1401355a185f14af45c47663861f44f24047c5a7"
+version = "2026.4.11"
+source = "git+https://github.com/dugrema/millegrilles_common_rust.git?branch=master#8be61f6444a43ca668e520eb9f14ae85ab5ab913"
 dependencies = [
  "async-compression",
  "async-std",

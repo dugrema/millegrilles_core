@@ -240,7 +240,7 @@ pub fn preparer_queues(_manager: &TopologyManager) -> Vec<QueueType> {
             nom_queue: NOM_Q_VOLATILS.into(),
             routing_keys: rk_volatils,
             ttl: 300000.into(),
-            durable: false,
+            durable: true,
             autodelete: false,
         }
     ));
