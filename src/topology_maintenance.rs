@@ -370,8 +370,8 @@ async fn merge_filehosting_fuuids_claims<M>(middleware: &M)
                 claimer_domains.push(row.claimer);
                 count += 1;
             } else {
-                // info!("merge_filehosting_fuuids_claims At least one previous claimer is not ready, cancel regeneration of claims");
-                // return Ok(())
+                info!("merge_filehosting_fuuids_claims At least one previous claimer is not ready, cancel regeneration of claims");
+                return Ok(())
             }
         }
 
