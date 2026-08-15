@@ -467,5 +467,21 @@ where M: MongoDao + ConfigMessages
         Some(options_unique_transferts_filehostfuuid),
     ).await?;
 
+
+    let options_unique_filehosting_sync = IndexOptions {
+        nom_index: Some(String::from("claimers")),
+        unique: true,
+    };
+    let champs_index_filehosting_sync = vec!(
+        ChampIndex { nom_champ: String::from("claimer_type"), direction: 1 },
+        ChampIndex { nom_champ: String::from("claimer"), direction: 1 },
+    );
+    middleware.create_index(
+        middleware,
+        NOM_COLLECTION_FILEHOSTING_SYNC_STATUS,
+        champs_index_filehosting_sync,
+        Some(options_unique_filehosting_sync),
+    ).await?;
+
     Ok(())
 }
