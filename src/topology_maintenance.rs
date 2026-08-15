@@ -35,7 +35,7 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
     }
 
     let minutes = date_epoch.minute();
-    // let hours = date_epoch.hour();
+    let hours = date_epoch.hour();
 
     if minutes % 5 == 1
     {
@@ -63,8 +63,8 @@ where M: ConfigMessages + ValidateurX509 + GenerateurMessages + MongoDao + CleCh
         }
     }
 
-    // if hours % 12 == 0 && minutes == 29
-    if minutes == 29
+    if hours % 8 == 0 && minutes == 29
+    // if minutes == 29
     {
         debug!("CoreTopology maintain_unclaimed_fuuids");
         if let Err(e) = maintain_unclaimed_fuuids(middleware).await {
