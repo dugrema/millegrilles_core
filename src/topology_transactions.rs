@@ -14,6 +14,7 @@ use millegrilles_common_rust::constantes::{CHAMP_MODIFICATION, CHAMP_CREATION, S
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
+use crate::topology_maintenance::SyncStatusRow;
 use crate::topology_requests::RowCoreTopologieDomaines;
 
 pub async fn aiguillage_transaction_topology<M, T>(middleware: &M, transaction: T, session: &mut ClientSession) -> Result<Option<MessageMilleGrillesBufferDefault>, Error>
@@ -643,6 +644,12 @@ async fn transaction_delete_domain<M>(middleware: &M, transaction: TransactionVa
         middleware.get_collection_typed::<RowCoreTopologieDomaines>(NOM_COLLECTION_DOMAINES)?;
     let filtre = doc!{CHAMP_DOMAINE: &transaction.domain_name};
     collection_domains.delete_one_with_session(filtre, None, session).await?;
+
+    // Remove the domain as a fuuid claimer (when applicable)
+    let collection_filhosting_sync =
+        middleware.get_collection_typed::<SyncStatusRow>(NOM_COLLECTION_FILEHOSTING_SYNC_STATUS)?;
+    let filtre = doc!{"claimer_type": "domain", "claimer": &transaction.domain_name};
+    collection_filhosting_sync.delete_one_with_session(filtre, None, session).await?;
 
     Ok(Some(middleware.reponse_ok(None, None)?))
 }

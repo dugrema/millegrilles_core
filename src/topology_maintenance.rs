@@ -324,7 +324,7 @@ pub async fn emit_filehost_transfersupdated_event<M>(middleware: &M) -> Result<(
 
 #[derive(Deserialize)]
 #[allow(dead_code)]
-struct SyncStatusRow {
+pub struct SyncStatusRow {
     claimer: String,
     claimer_type: String,
     #[serde(default, with = "opt_chrono_datetime_as_bson_datetime")]
