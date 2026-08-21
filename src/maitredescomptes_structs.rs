@@ -34,12 +34,10 @@ pub struct DocChallenge {
     #[serde(rename="_mg-creation")]
     pub date_creation: DateTimeBson,
 
-    // Les elements suivants sont exlusifs (max 1 a la fois)
-
     /// Pour une registration webauthn
     pub webauthn_registration: Option<ChallengeRegistrationWebauthn>,
 
-    /// Pour une authentification webauthn
+    /// Pour une authentification webauthn (private)
     pub webauthn_authentication: Option<ChallengeAuthenticationWebauthn>,
 
     /// TOTP configuration

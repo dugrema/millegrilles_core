@@ -1,7 +1,7 @@
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, RequestChallengeResponse};
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, RequestChallengeResponse};
 
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions};
@@ -107,7 +107,7 @@ struct ReponseChargerUsager {
     generic_challenge: Option<String>,
     registration_challenge: Option<CreationChallengeResponse>,
     authentication_challenge: Option<RequestChallengeResponse>,
-    passkey_authentication: Option<PasskeyAuthentication>,
+    // passkey_authentication: Option<PasskeyAuthentication>,
     webauth_credentials_count: Option<usize>,
 }
 
@@ -121,7 +121,7 @@ impl From<CompteUsager> for ReponseChargerUsager {
             generic_challenge: None,
             registration_challenge: None,
             authentication_challenge: None,
-            passkey_authentication: None,
+            // passkey_authentication: None,
             webauth_credentials_count: None,
         }
     }
@@ -139,7 +139,7 @@ impl ReponseChargerUsager {
             generic_challenge: None,
             registration_challenge: None,
             authentication_challenge: None,
-            passkey_authentication: None,
+            // passkey_authentication: None,
             webauth_credentials_count: None,
         }
     }
@@ -165,7 +165,7 @@ impl ReponseChargerUsager {
             generic_challenge: None,
             registration_challenge: None,
             authentication_challenge: None,
-            passkey_authentication: None,
+            // passkey_authentication: None,
             webauth_credentials_count: None,
         }
     }
@@ -257,22 +257,22 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao,
                 None => Err(format!("core_maitredescomptes.charger_usager Mauvais format de challenge (registration_challenge=None"))?
             };
 
-            let (generic, challenge, passkey_authentication) =
+            let (generic, challenge) =
                 match preparer_authentification_webauthn(middleware, compte, hostname).await?
                 {
                     Some(doc_challenge) => {
                         match doc_challenge.webauthn_authentication {
                             Some(inner) => {
-                                (None, Some(inner.authentication_challenge), Some(inner.passkey_authentication))
+                                // Dropping the passkey_authentication, it must not be sent as a response (private)
+                                (None, Some(inner.authentication_challenge))
                             },
-                            None => (Some(doc_challenge.challenge), None, None)
+                            None => (Some(doc_challenge.challenge), None)
                         }
                     },
-                    None => (None, None, None)
+                    None => (None, None)
                 };
             reponse_charger_usager.generic_challenge = generic;
             reponse_charger_usager.authentication_challenge = challenge;
-            reponse_charger_usager.passkey_authentication = passkey_authentication;
 
             let collection_creds = middleware.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
             let filtre = doc!{ CHAMP_USER_ID: &user_id };
