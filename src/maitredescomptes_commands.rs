@@ -1522,6 +1522,7 @@ struct CommandeGenererOtp {
 struct ResponseGenerateOtp {
     correlation: String,
     qr_base64: String,
+    secret_base32: String,
 }
 
 async fn command_generate_otp<M>(middleware: &M, gestionnaire: &MaitreDesComptesManager, message: MessageValide, session: &mut ClientSession)
@@ -1590,8 +1591,9 @@ where M: ValidateurX509 + GenerateurMessages + CleChiffrageHandler + MongoDao + 
 
     // let token = totp.generate_current().unwrap();
     let qr_base64 = totp.get_qr_base64().expect("totp.get_qr_base64");
-    debug!("New TOTP base 64 QR: {}", qr_base64);
-    let reponse = ResponseGenerateOtp {correlation: challenge_hashvalue, qr_base64};
+    let secret_base32 = totp.get_secret_base32();
+    debug!("New TOTP base32 secret: {}, base 64 QR: {}", secret_base32, qr_base64);
+    let reponse = ResponseGenerateOtp {correlation: challenge_hashvalue, qr_base64, secret_base32};
 
     Ok(Some(middleware.build_reponse_chiffree(reponse, message.certificat.as_ref())?.0))
 }
