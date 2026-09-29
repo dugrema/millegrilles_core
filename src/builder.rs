@@ -10,7 +10,6 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::middleware::Middleware;
-use crate::pki_manager::{preparer_index_mongodb_pki, PkiManager};
 use crate::topology_manager::{preparer_index_mongodb_topologie, TopologyManager};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
 
