@@ -20,7 +20,6 @@ services:
         - CoreBackup
         - CoreCatalogues
         - CoreMaitreDesComptes
-        - CorePki
         - CoreTopologie
       dns:
         hostnames:
