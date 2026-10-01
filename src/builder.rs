@@ -10,12 +10,11 @@ use millegrilles_common_rust::tokio::task::JoinHandle;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::middleware::Middleware;
-use crate::topology_manager::{preparer_index_mongodb_topologie, TopologyManager};
 use crate::validateur_pki_mongo::preparer_middleware_pki;
 
 pub struct Managers {
     pub maitredescomptes: MaitreDesComptesManager,
-    pub topology: TopologyManager,
+    // pub topology: TopologyManager,
     // pub pki: PkiManager,
 }
 
@@ -68,7 +67,7 @@ where M: Middleware + IsConfigNoeud
 {
     let managers = Managers {
         maitredescomptes: MaitreDesComptesManager {key_handler: Mutex::new(None), key_cache: Mutex::new(HashMap::new()),},
-        topology: TopologyManager {},
+        // topology: TopologyManager {},
         // pki: PkiManager {},
     };
 
@@ -79,16 +78,16 @@ where M: Middleware + IsConfigNoeud
     let mut futures = FuturesUnordered::new();
     futures.extend(managers.maitredescomptes.initialiser(middleware).await
         .expect("maitredescomptes_manager initialiser"));
-    futures.extend(managers.topology.initialiser(middleware).await
-        .expect("topology_manager initialiser"));
+    // futures.extend(managers.topology.initialiser(middleware).await
+    //     .expect("topology_manager initialiser"));
     // futures.extend(managers.pki.initialiser(middleware).await
     //     .expect("pki_manager initialiser"));
 
     // Preparer des ressources additionnelles
     preparer_index_mongodb_maitredescomptes(middleware).await
         .expect("preparer_index_maitredescomptes_mongodb");
-    preparer_index_mongodb_topologie(middleware).await
-        .expect("preparer_index_mongodb_topologie");
+    // preparer_index_mongodb_topologie(middleware).await
+    //     .expect("preparer_index_mongodb_topologie");
     // preparer_index_mongodb_pki(middleware).await
     //     .expect("preparer_index_mongodb_pki");
 
