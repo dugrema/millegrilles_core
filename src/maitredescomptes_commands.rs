@@ -6,7 +6,7 @@ use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
-use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE, DOMAINE_NOM_MAITREDESCOMPTES};
+use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE, DOMAINE_NOM_MAITREDESCOMPTES, DOMAINE_PKI};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, Middleware};
@@ -208,18 +208,18 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud,
     let csr_str = csr.as_ref();
     debug!("signer_certificat_usager {} (id: {})", nom_usager_str, user_id_str);
 
-    let config = middleware.get_configuration_noeud();
-    let certissuer_url = match config.certissuer_url.as_ref() {
-        Some(inner) => inner,
-        None => Err(format!("core_maitredescomptes.signer_certificat_usager Certissuer URL manquant"))?
-    };
-
-    let client = reqwest::Client::builder()
-        .timeout(core::time::Duration::new(7, 0))
-        .build()?;
-
-    let mut url_post = certissuer_url.clone();
-    url_post.set_path("certissuerInterne/signerUsager");
+    // let config = middleware.get_configuration_noeud();
+    // let certissuer_url = match config.certissuer_url.as_ref() {
+    //     Some(inner) => inner,
+    //     None => Err(format!("core_maitredescomptes.signer_certificat_usager Certissuer URL manquant"))?
+    // };
+    //
+    // let client = reqwest::Client::builder()
+    //     .timeout(core::time::Duration::new(7, 0))
+    //     .build()?;
+    //
+    // let mut url_post = certissuer_url.clone();
+    // url_post.set_path("certissuerInterne/signerUsager");
 
     // let mut commande_signature = json!({
     //     "nom_usager": nom_usager_str,
@@ -237,33 +237,32 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud,
     //     None::<&str>, None::<&str>, None::<&str>, None::<&str>,
     //     None, false)?;
 
-    // On retransmet le message recu tel quel
-    match client.post(url_post).body(commande_signee.buffer).send().await {
-        Ok(response) => {
-            match response.status().is_success() {
-                true => {
-                    let reponse_json: ReponseCertificatSigne = response.json().await?;
-                    debug!("signer_certificat_usager Reponse certificat : {:?}", reponse_json);
-                    // Charger le certificat - le valide et sauvegarde dans PKI
-                    let enveloppe = middleware.charger_enveloppe(
-                        &reponse_json.certificat, None, None).await?;
-                    debug!("signer_certificat_usager Nouveau certificat valide, fingerprint : {}", enveloppe.fingerprint()?);
-                    return Ok(middleware.build_reponse(reponse_json)?.0)
-                },
-                false => {
-                    debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : status {}", response.status());
-                }
-            }
-        },
-        Err(e) => {
-            debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e);
-        }
-    };
+    // // On retransmet le message recu tel quel
+    // match client.post(url_post).body(commande_signee.buffer).send().await {
+    //     Ok(response) => {
+    //         match response.status().is_success() {
+    //             true => {
+    //                 let reponse_json: ReponseCertificatSigne = response.json().await?;
+    //                 debug!("signer_certificat_usager Reponse certificat : {:?}", reponse_json);
+    //                 // Charger le certificat - le valide et sauvegarde dans PKI
+    //                 let enveloppe = middleware.charger_enveloppe(
+    //                     &reponse_json.certificat, None, None).await?;
+    //                 debug!("signer_certificat_usager Nouveau certificat valide, fingerprint : {}", enveloppe.fingerprint()?);
+    //                 return Ok(middleware.build_reponse(reponse_json)?.0)
+    //             },
+    //             false => {
+    //                 debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : status {}", response.status());
+    //             }
+    //         }
+    //     },
+    //     Err(e) => {
+    //         debug!("core_maitredescomptes.signer_certificat_usager Erreur reqwest : {:?}", e);
+    //     }
+    // };
 
     // Une erreur est survenue dans le post, fallback vers noeuds 4.secure (si presents)
-    debug!("Echec connexion a certissuer local, relai vers instances 4.secure");
     let routage = RoutageMessageAction::builder(
-        DOMAINE_APPLICATION_INSTANCE, COMMANDE_SIGNER_COMPTEUSAGER, vec![Securite::L4Secure])
+        DOMAINE_PKI, COMMAND_ACTION_SIGN_USER_CSR, vec![Securite::L3Protege])
         .build();
 
     match middleware.transmettre_commande(routage, &commande_signature).await? {

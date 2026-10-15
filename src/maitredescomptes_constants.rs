@@ -25,6 +25,7 @@ pub const REQUETE_PASSKEYS_USAGER: &str = "getPasskeysUsager";
 
 // const COMMANDE_CHALLENGE_COMPTEUSAGER: &str = "challengeCompteUsager";
 pub const COMMANDE_SIGNER_COMPTEUSAGER: &str = "signerCompteUsager";
+pub const COMMAND_ACTION_SIGN_CSR: &str = "signerCsr";
 pub const COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE: &str = "signerCompteParProprietaire";
 // const COMMANDE_ACTIVATION_TIERCE: &str = "activationTierce";
 pub const COMMANDE_AJOUTER_CSR_RECOVERY: &str = "ajouterCsrRecovery";
@@ -33,6 +34,7 @@ pub const COMMAND_AUTHENTICATE_TOTP: &str = "authenticateTotp";
 pub const COMMANDE_GENERER_CHALLENGE: &str = "genererChallenge";
 pub const COMMAND_GENERATE_OTP: &str = "generateOtp";
 pub const COMMANDE_SUPPRIMER_COOKIE: &str = "supprimerCookieSession";
+pub const COMMAND_ACTION_SIGN_USER_CSR: &str = "signUserCsr";
 
 pub const TRANSACTION_INSCRIRE_USAGER: &str = "inscrireUsager";
 pub const TRANSACTION_AJOUTER_CLE: &str = "ajouterCle";
