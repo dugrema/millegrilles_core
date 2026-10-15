@@ -6,7 +6,7 @@ use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::certificats::{ValidateurX509, VerificateurPermissions, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::configuration::IsConfigNoeud;
-use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_APPLICATION_INSTANCE, DOMAINE_NOM_MAITREDESCOMPTES, DOMAINE_PKI};
+use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, CHAMP_CREATION, CHAMP_MODIFICATION, DOMAINE_NOM_MAITREDESCOMPTES, DOMAINE_PKI};
 use millegrilles_common_rust::generateur_messages::{GenerateurMessages, RoutageMessageAction};
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::middleware::{sauvegarder_traiter_transaction_serializable_v2, sauvegarder_traiter_transaction_v2, Middleware};
@@ -15,7 +15,7 @@ use millegrilles_common_rust::mongo_dao::{convertir_bson_deserializable, convert
 use millegrilles_common_rust::mongodb::options::UpdateOptions;
 use millegrilles_common_rust::rabbitmq_dao::TypeMessageOut;
 use millegrilles_common_rust::recepteur_messages::{MessageValide, TypeMessage};
-use millegrilles_common_rust::{base64_url, chrono, hex, millegrilles_cryptographie, openssl, reqwest, serde_json, uuid};
+use millegrilles_common_rust::{base64_url, chrono, hex, openssl, serde_json, uuid};
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
@@ -228,10 +228,10 @@ where M: ValidateurX509 + GenerateurMessages + MongoDao + IsConfigNoeud,
     // });
 
     let commande_signature = CommandeSignatureUsager::new(nom_usager_str, user_id_str, csr_str, compte);
-    let routage = RoutageMessageAction::builder(DOMAIN_NAME, "signer", vec![])
-        .build();
-    let commande_signee = middleware.build_message_action(
-        millegrilles_cryptographie::messages_structs::MessageKind::Commande, routage, &commande_signature)?.0;
+    // let routage = RoutageMessageAction::builder(DOMAIN_NAME, "signer", vec![])
+    //     .build();
+    // let commande_signee = middleware.build_message_action(
+    //     millegrilles_cryptographie::messages_structs::MessageKind::Commande, routage, &commande_signature)?.0;
     // let commande_signee = middleware.build_message_action(
     //     MessageKind::Document, &commande_signature,
     //     None::<&str>, None::<&str>, None::<&str>, None::<&str>,
